@@ -4,7 +4,8 @@ import sys
 from tkinter import Tk, filedialog, messagebox
 
 def log(message, level="INFO"):
-    with open("install_log.txt", "a") as log_file:
+    log_path = "install_log.txt"
+    with open(log_path, "a") as log_file:
         log_file.write(f"[{level}] {message}\n")
 
 def create_directory_structure(base_dir):
@@ -53,8 +54,10 @@ def main():
         create_directory_structure(installation_dir)
         install_dependencies()
 
-        with open(os.path.join(installation_dir, "install_complete.txt"), "w") as f:
+        install_file_path = os.path.join(installation_dir, "install_complete.txt")
+        with open(install_file_path, "w") as f:
             f.write("Installation abgeschlossen.")
+        log(f"Installationsdatei erstellt: {install_file_path}")
 
         log("Installation abgeschlossen.")
         messagebox.showinfo("Erfolg", "Installation abgeschlossen. Anwendung kann gestartet werden.")
