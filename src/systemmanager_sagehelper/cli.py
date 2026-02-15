@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .analyzer import analysiere_server
+from .analyzer import analysiere_mehrere_server, entdecke_server_kandidaten
 from .folder_structure import ermittle_fehlende_ordner, lege_ordner_an
 from .models import ServerZiel
 from .report import render_markdown
@@ -23,6 +23,20 @@ def _parse_liste(wert: str, *, to_upper: bool = False) -> list[str]:
     return eintraege
 
 
+def _parse_deklarationen(wert: str) -> dict[str, list[str]]:
+    """Parst Deklarationen im Format 'srv1=SQL,APP;srv2=CTX'."""
+    deklarationen: dict[str, list[str]] = {}
+    for block in wert.split(";"):
+        if "=" not in block:
+            continue
+        server, rollen = block.split("=", 1)
+        server_name = server.strip()
+        if not server_name:
+            continue
+        deklarationen[server_name] = _parse_liste(rollen, to_upper=True)
+    return deklarationen
+
+
 def baue_parser() -> argparse.ArgumentParser:
     """Erstellt den CLI-Parser mit klaren Unterbefehlen."""
     parser = argparse.ArgumentParser(
@@ -32,8 +46,20 @@ def baue_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="kommando", required=True)
 
     scan = sub.add_parser("scan", help="Server analysieren und Markdown erzeugen")
-    scan.add_argument("--server", required=True, help="Kommagetrennte Serverliste, z. B. srv1,srv2")
-    scan.add_argument("--rollen", default="APP", help="Kommagetrennte Rollen, z. B. SQL,APP,CTX")
+    scan.add_argument("--server", default="", help="Kommagetrennte Serverliste, z. B. srv1,srv2")
+    scan.add_argument("--rollen", default="APP", help="Standardrollen, z. B. SQL,APP,CTX")
+    scan.add_argument(
+        "--deklaration",
+        default="",
+        help="Rollendeklaration je Server, z. B. 'srv1=SQL,APP;srv2=CTX'",
+    )
+    scan.add_argument(
+        "--discover-base",
+        default="",
+        help="IPv4-Basis für Discovery, z. B. 192.168.10",
+    )
+    scan.add_argument("--discover-start", type=int, default=1, help="Start-Hostnummer für Discovery")
+    scan.add_argument("--discover-end", type=int, default=20, help="End-Hostnummer für Discovery")
     scan.add_argument("--out", default="dokumentation.md", help="Zieldatei für Markdown-Export")
 
     ordner = sub.add_parser("ordner-check", help="SystemAG-Struktur prüfen oder anlegen")
@@ -50,12 +76,29 @@ def main() -> int:
 
     if args.kommando == "scan":
         server_liste = _parse_liste(args.server)
+
+        if args.discover_base:
+            gefundene_server = entdecke_server_kandidaten(
+                basis=args.discover_base,
+                start=args.discover_start,
+                ende=args.discover_end,
+            )
+            for server in gefundene_server:
+                if server not in server_liste:
+                    server_liste.append(server)
+
         if not server_liste:
-            parser.error("Mindestens ein gültiger Servername muss angegeben werden.")
+            parser.error("Mindestens ein gültiger Servername oder Discovery-Parameter muss angegeben werden.")
 
-        rollen = _parse_liste(args.rollen, to_upper=True)
-        ergebnisse = [analysiere_server(ServerZiel(name=server, rollen=rollen)) for server in server_liste]
+        standard_rollen = _parse_liste(args.rollen, to_upper=True)
+        deklarationen = _parse_deklarationen(args.deklaration)
 
+        ziele = [
+            ServerZiel(name=server, rollen=deklarationen.get(server, standard_rollen))
+            for server in server_liste
+        ]
+
+        ergebnisse = analysiere_mehrere_server(ziele)
         markdown = render_markdown(ergebnisse)
         Path(args.out).write_text(markdown, encoding="utf-8")
         print(f"Markdown-Dokumentation erstellt: {args.out}")

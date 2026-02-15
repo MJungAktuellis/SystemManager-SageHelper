@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 ### Hinzugefügt
+- Erweiterte Multi-Server-Analyse mit paralleler Verarbeitung, optionaler Netzwerkerkennung (Discovery) und serverindividueller Rollendeklaration.
+- Strukturierter Serverbericht um CPU-Daten, erkannte Sage-/Partneranwendungen und Management-Studio-Hinweise ergänzt.
 - One-Click-Windows-Installer (`Install-SystemManager-SageHelper.cmd` + `scripts/install_assistant.ps1`) für ZIP-basierte Server-Installation.
 - Neues Installations-Kernmodul mit automatischer Prüfung/Installation von Git und Python unter Windows.
 - Unit-Tests für den Installationskern.

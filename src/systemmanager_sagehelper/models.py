@@ -31,4 +31,10 @@ class AnalyseErgebnis:
     os_version: str | None = None
     rollen: list[str] = field(default_factory=list)
     ports: list[PortStatus] = field(default_factory=list)
+    cpu_logische_kerne: int | None = None
+    cpu_modell: str | None = None
+    installierte_anwendungen: list[str] = field(default_factory=list)
+    sage_version: str | None = None
+    partner_anwendungen: list[str] = field(default_factory=list)
+    management_studio_version: str | None = None
     hinweise: list[str] = field(default_factory=list)

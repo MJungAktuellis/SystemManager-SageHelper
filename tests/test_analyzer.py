@@ -5,7 +5,11 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from systemmanager_sagehelper.analyzer import _normalisiere_rollen, analysiere_server
+from systemmanager_sagehelper.analyzer import (
+    _klassifiziere_anwendungen,
+    _normalisiere_rollen,
+    analysiere_server,
+)
 from systemmanager_sagehelper.models import ServerZiel
 
 
@@ -15,6 +19,18 @@ class TestAnalyzer(unittest.TestCase):
     def test_rollen_werden_normalisiert_und_duplikate_entfernt(self) -> None:
         rollen = _normalisiere_rollen([" app ", "SQL", "sql", "", " ctx "])
         self.assertEqual(["APP", "SQL", "CTX"], rollen)
+
+    def test_klassifizierung_von_sage_partner_und_ssms(self) -> None:
+        sage, partner, ssms = _klassifiziere_anwendungen(
+            [
+                "Sage 100 9.0",
+                "Contoso CRM Connector 2.1",
+                "SQL Server Management Studio 19",
+            ]
+        )
+        self.assertEqual("Sage 100 9.0", sage)
+        self.assertIn("Contoso CRM Connector 2.1", partner)
+        self.assertEqual("SQL Server Management Studio 19", ssms)
 
     @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=[])
     @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=False)

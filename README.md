@@ -58,19 +58,34 @@ python scripts/install.py
 
 ## Verwendung
 
-### 1) Server-Scan und Markdown-Export
+### 1) Multi-Server-Scan und Markdown-Export
 
 ```bash
-PYTHONPATH=src python -m systemmanager_sagehelper scan --server localhost --rollen APP,SQL --out docs/serverbericht.md
+PYTHONPATH=src python -m systemmanager_sagehelper scan \
+  --server srv-app-01,srv-sql-01 \
+  --rollen APP \
+  --deklaration 'srv-app-01=APP;srv-sql-01=SQL' \
+  --out docs/serverbericht.md
 ```
 
-### 2) Ordnerstruktur prüfen
+### 2) Server im Subnetz automatisch finden und analysieren
+
+```bash
+PYTHONPATH=src python -m systemmanager_sagehelper scan \
+  --discover-base 192.168.10 \
+  --discover-start 1 \
+  --discover-end 50 \
+  --rollen APP,SQL,CTX \
+  --out docs/serverbericht-auto.md
+```
+
+### 3) Ordnerstruktur prüfen
 
 ```bash
 PYTHONPATH=src python -m systemmanager_sagehelper ordner-check --basis /tmp/SystemAG
 ```
 
-### 3) Fehlende Ordner direkt anlegen
+### 4) Fehlende Ordner direkt anlegen
 
 ```bash
 PYTHONPATH=src python -m systemmanager_sagehelper ordner-check --basis /tmp/SystemAG --anlegen
