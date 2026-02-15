@@ -21,6 +21,9 @@ def entpacke_zip(quelle: str, ziel: str):
     except zipfile.BadZipFile:
         logging.error("Ungültige ZIP-Datei.")
         raise ValueError("❌ Fehler: Ungültige ZIP-Datei.")
+    except PermissionError:
+        logging.error("Zugriff verweigert beim Entpacken in das Zielverzeichnis.")
+        raise PermissionError("❌ Fehler: Keine Berechtigung für das Zielverzeichnis.")
 
 def installiere_modul(modul_pfad: str):
     """Installiert ein Python-Modul aus einem Verzeichnis und loggt mögliche Fehler."""
@@ -42,26 +45,30 @@ def bereinige_verzeichnis(verzeichnis: str):
 def verarbeite_installation(zip_pfad: str, ziel_verzeichnis: str):
     """Hauptprozess: Entpacken, Installieren und Aufräumen. Logs werden erzeugt."""
     staging_dir = Path(ziel_verzeichnis)
-    staging_dir.mkdir(parents=True, exist_ok=True)
-
     try:
+        # Zielverzeichnis sicherstellen
+        if not staging_dir.exists():
+            staging_dir.mkdir(parents=True)
+            logging.info(f"Zielverzeichnis '{ziel_verzeichnis}' erstellt.")
+
         # Entpacken
         entpacke_zip(zip_pfad, ziel_verzeichnis)
 
         # Modul installieren
         installiere_modul(str(staging_dir))
     
+    except PermissionError as pe:
+        print(f"❌ Berechtigungsfehler: {pe}")
+        logging.error("Abbruch aufgrund fehlender Berechtigungen.")
     except Exception as e:
         print(f"❌ Fehler während der Installation: {e}")
         logging.error("Installation fehlgeschlagen.", exc_info=True)
     
     finally:
-        # Bereinigung
-        bereinige_verzeichnis(ziel_verzeichnis)
         print("Drücken Sie eine beliebige Taste, um das Programm zu beenden...")
         input()  # Warte auf Benutzereingabe, um Konsole offen zu halten
 
 if __name__ == "__main__":
     zip_datei = "upload/modul.zip"  # Beispielpfad zur ZIP-Datei
-    ziel = "staging_area"
+    ziel = "C:\\Program Files\\SystemManager-SageHelper"
     verarbeite_installation(zip_datei, ziel)
