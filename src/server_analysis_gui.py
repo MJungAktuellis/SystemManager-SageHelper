@@ -14,6 +14,7 @@ from tkinter import messagebox, simpledialog, ttk
 from systemmanager_sagehelper.analyzer import analysiere_mehrere_server, entdecke_server_kandidaten
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, hole_lauf_id, konfiguriere_logger, setze_lauf_id
 from systemmanager_sagehelper.models import AnalyseErgebnis, ServerZiel
+from systemmanager_sagehelper.targeting import normalisiere_servernamen, rollen_aus_bool_flags
 
 
 @dataclass
@@ -29,14 +30,7 @@ class ServerTabellenZeile:
 
     def rollen(self) -> list[str]:
         """Leitet die Rollenliste aus den gesetzten Checkboxen ab."""
-        rollen: list[str] = []
-        if self.sql:
-            rollen.append("SQL")
-        if self.app:
-            rollen.append("APP")
-        if self.ctx:
-            rollen.append("CTX")
-        return rollen
+        return rollen_aus_bool_flags(sql=self.sql, app=self.app, ctx=self.ctx)
 
 
 _SPALTE_SERVERNAME = "servername"
@@ -52,11 +46,6 @@ _CHECK_AUS = "☐"
 
 
 logger = konfiguriere_logger(__name__, dateiname="server_analysis_gui.log")
-
-
-def _normalisiere_servernamen(servername: str) -> str:
-    """Normalisiert einen Servernamen für konsistente Duplikatprüfung."""
-    return servername.strip().lower()
 
 
 def _checkbox_wert(aktiv: bool) -> str:
@@ -77,11 +66,11 @@ def _baue_serverziele(zeilen: list[ServerTabellenZeile]) -> list[ServerZiel]:
 
 def _deklarationszusammenfassung(ziele: list[ServerZiel], zeilen: list[ServerTabellenZeile]) -> str:
     """Erzeugt eine lesbare Zusammenfassung vor Ausführung der Analyse."""
-    quelle_pro_server = {_normalisiere_servernamen(zeile.servername): zeile.quelle for zeile in zeilen}
+    quelle_pro_server = {normalisiere_servernamen(zeile.servername): zeile.quelle for zeile in zeilen}
     zusammenfassung = ["So wurden die Server deklariert:"]
     for index, ziel in enumerate(ziele, start=1):
         rollen = ", ".join(ziel.rollen) if ziel.rollen else "keine Rolle gesetzt"
-        quelle = quelle_pro_server.get(_normalisiere_servernamen(ziel.name), "unbekannt")
+        quelle = quelle_pro_server.get(normalisiere_servernamen(ziel.name), "unbekannt")
         zusammenfassung.append(f"{index}. {ziel.name} | Rollen: {rollen} | Quelle: {quelle}")
     return "\n".join(zusammenfassung)
 
@@ -243,8 +232,8 @@ class MehrserverAnalyseGUI:
         self.tree_ergebnisse.configure(yscrollcommand=scrollbar.set)
 
     def _exists_server(self, servername: str) -> bool:
-        suchwert = _normalisiere_servernamen(servername)
-        return any(_normalisiere_servernamen(zeile.servername) == suchwert for zeile in self._zeilen_nach_id.values())
+        suchwert = normalisiere_servernamen(servername)
+        return any(normalisiere_servernamen(zeile.servername) == suchwert for zeile in self._zeilen_nach_id.values())
 
     def _fuege_zeile_ein(self, zeile: ServerTabellenZeile) -> None:
         if self._exists_server(zeile.servername):
@@ -399,7 +388,7 @@ class MehrserverAnalyseGUI:
 
         status_nach_server = {ergebnis.server.lower(): "analysiert" for ergebnis in ergebnisse}
         for item_id, zeile in self._zeilen_nach_id.items():
-            zeile.status = status_nach_server.get(_normalisiere_servernamen(zeile.servername), "unbekannt")
+            zeile.status = status_nach_server.get(normalisiere_servernamen(zeile.servername), "unbekannt")
             self.tree.set(item_id, _SPALTE_STATUS, zeile.status)
 
         self._zeige_ergebnisse_aufklappbar(ergebnisse)

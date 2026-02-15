@@ -1,4 +1,4 @@
-"""Kommandozeilen-Einstieg für Analyse, Strukturcheck und Markdown-Export."""
+"""Kommandozeilen-Einstieg für Analyse, Strukturcheck und orchestrierten Gesamtablauf."""
 
 from __future__ import annotations
 
@@ -8,36 +8,16 @@ from pathlib import Path
 from .analyzer import analysiere_mehrere_server, entdecke_server_kandidaten
 from .folder_structure import ermittle_fehlende_ordner, lege_ordner_an
 from .logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
-from .models import ServerZiel
 from .report import render_markdown
+from .targeting import baue_serverziele, parse_deklarationen, parse_liste
+from .workflow import WorkflowSchritt, fuehre_standard_workflow_aus
 
 logger = konfiguriere_logger(__name__, dateiname="cli.log")
 
 
-def _parse_liste(wert: str, *, to_upper: bool = False) -> list[str]:
-    """Parst kommaseparierte Werte, entfernt Leerwerte/Duplikate und behält Reihenfolge."""
-    eintraege: list[str] = []
-    for rohwert in wert.split(","):
-        kandidat = rohwert.strip()
-        if to_upper:
-            kandidat = kandidat.upper()
-        if kandidat and kandidat not in eintraege:
-            eintraege.append(kandidat)
-    return eintraege
-
-
-def _parse_deklarationen(wert: str) -> dict[str, list[str]]:
-    """Parst Deklarationen im Format 'srv1=SQL,APP;srv2=CTX'."""
-    deklarationen: dict[str, list[str]] = {}
-    for block in wert.split(";"):
-        if "=" not in block:
-            continue
-        server, rollen = block.split("=", 1)
-        server_name = server.strip()
-        if not server_name:
-            continue
-        deklarationen[server_name] = _parse_liste(rollen, to_upper=True)
-    return deklarationen
+# Rückwärtskompatible Exporte für bestehende Tests/Integrationen.
+_parse_liste = parse_liste
+_parse_deklarationen = parse_deklarationen
 
 
 def baue_parser() -> argparse.ArgumentParser:
@@ -56,20 +36,40 @@ def baue_parser() -> argparse.ArgumentParser:
         default="",
         help="Rollendeklaration je Server, z. B. 'srv1=SQL,APP;srv2=CTX'",
     )
-    scan.add_argument(
-        "--discover-base",
-        default="",
-        help="IPv4-Basis für Discovery, z. B. 192.168.10",
-    )
+    scan.add_argument("--discover-base", default="", help="IPv4-Basis für Discovery, z. B. 192.168.10")
     scan.add_argument("--discover-start", type=int, default=1, help="Start-Hostnummer für Discovery")
     scan.add_argument("--discover-end", type=int, default=20, help="End-Hostnummer für Discovery")
     scan.add_argument("--out", default="dokumentation.md", help="Zieldatei für Markdown-Export")
+
+    workflow = sub.add_parser("workflow", help="Standardprozess Installation->Analyse->Freigaben->Doku")
+    workflow.add_argument("--server", default="", help="Kommagetrennte Serverliste")
+    workflow.add_argument("--rollen", default="APP", help="Standardrollen")
+    workflow.add_argument("--deklaration", default="", help="Rollendeklaration pro Server")
+    workflow.add_argument("--basis", required=True, help="SystemAG-Basispfad für Ordner/Freigaben")
+    workflow.add_argument("--out", default="docs/serverbericht.md", help="Markdown-Bericht der Analyse")
+    workflow.add_argument("--logs", default="logs", help="Log-Verzeichnis für Doku-Konsolidierung")
+    workflow.add_argument("--docs", default="docs", help="Zielordner für Log-Dokumentation")
 
     ordner = sub.add_parser("ordner-check", help="SystemAG-Struktur prüfen oder anlegen")
     ordner.add_argument("--basis", required=True, help="Basisordner, z. B. D:/SystemAG")
     ordner.add_argument("--anlegen", action="store_true", help="Fehlende Ordner direkt anlegen")
 
     return parser
+
+
+def _ermittle_serverliste(args: argparse.Namespace) -> list[str]:
+    """Baut die effektive Serverliste aus manuellen Angaben und optionaler Discovery."""
+    server_liste = parse_liste(args.server)
+    if args.discover_base:
+        gefundene_server = entdecke_server_kandidaten(
+            basis=args.discover_base,
+            start=args.discover_start,
+            ende=args.discover_end,
+        )
+        for server in gefundene_server:
+            if server not in server_liste:
+                server_liste.append(server)
+    return server_liste
 
 
 def main() -> int:
@@ -81,36 +81,45 @@ def main() -> int:
     logger.info("CLI gestartet mit Kommando: %s", args.kommando)
 
     if args.kommando == "scan":
-        server_liste = _parse_liste(args.server)
-
-        if args.discover_base:
-            gefundene_server = entdecke_server_kandidaten(
-                basis=args.discover_base,
-                start=args.discover_start,
-                ende=args.discover_end,
-            )
-            for server in gefundene_server:
-                if server not in server_liste:
-                    server_liste.append(server)
-
+        server_liste = _ermittle_serverliste(args)
         if not server_liste:
             parser.error("Mindestens ein gültiger Servername oder Discovery-Parameter muss angegeben werden.")
 
-        standard_rollen = _parse_liste(args.rollen, to_upper=True)
-        deklarationen = _parse_deklarationen(args.deklaration)
-
-        ziele = [
-            ServerZiel(name=server, rollen=deklarationen.get(server, standard_rollen))
-            for server in server_liste
-        ]
-
+        standard_rollen = parse_liste(args.rollen, to_upper=True)
+        ziele = baue_serverziele(server_liste, parse_deklarationen(args.deklaration), standard_rollen)
         ergebnisse = analysiere_mehrere_server(ziele, lauf_id=lauf_id)
-        markdown = render_markdown(ergebnisse)
-        Path(args.out).write_text(markdown, encoding="utf-8")
+
+        Path(args.out).write_text(render_markdown(ergebnisse), encoding="utf-8")
         logger.info("Markdown-Dokumentation erstellt: %s", args.out)
         print(f"Markdown-Dokumentation erstellt: {args.out}")
         print(f"Lauf-ID: {lauf_id}")
         return 0
+
+    if args.kommando == "workflow":
+        server_liste = parse_liste(args.server)
+        if not server_liste:
+            parser.error("Für den Workflow muss mindestens ein Server angegeben werden (--server).")
+
+        ziele = baue_serverziele(
+            server_liste,
+            parse_deklarationen(args.deklaration),
+            parse_liste(args.rollen, to_upper=True),
+        )
+
+        def _progress(schritt: WorkflowSchritt, prozent: int, text: str) -> None:
+            print(f"[{prozent:>3}%] {schritt.value}: {text}")
+
+        ergebnis = fuehre_standard_workflow_aus(
+            ziele=ziele,
+            basis_pfad=Path(args.basis),
+            report_pfad=Path(args.out),
+            logs_verzeichnis=Path(args.logs),
+            docs_verzeichnis=Path(args.docs),
+            lauf_id=lauf_id,
+            progress=_progress,
+        )
+        print(f"Workflow abgeschlossen: {'erfolgreich' if ergebnis.erfolgreich else 'mit Fehlern'}")
+        return 0 if ergebnis.erfolgreich else 2
 
     if args.kommando == "ordner-check":
         basis = Path(args.basis)
