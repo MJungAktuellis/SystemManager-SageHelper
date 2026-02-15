@@ -8,7 +8,8 @@ from server_analysis_gui import (
     ServerTabellenZeile,
     _baue_serverziele,
     _deklarationszusammenfassung,
-    _formatiere_ergebnisliste,
+    _detailzeilen,
+    _kurzstatus,
 )
 from systemmanager_sagehelper.models import AnalyseErgebnis, PortStatus
 
@@ -43,29 +44,20 @@ def test_deklarationszusammenfassung_enthaelt_quelle_und_rollen() -> None:
     assert "srv-sql-01 | Rollen: SQL | Quelle: Discovery" in zusammenfassung
 
 
-def test_formatiere_ergebnisliste_rendert_serverbloecke() -> None:
-    """Die Ergebnisansicht soll pro Server einen eigenen Block erzeugen."""
-    ergebnisse = [
-        AnalyseErgebnis(
-            server="srv-app-01",
-            zeitpunkt=datetime.now(),
-            rollen=["APP"],
-            ports=[PortStatus(port=1433, offen=False, bezeichnung="MSSQL")],
-            hinweise=["Remote-Ziel erkannt"],
-        ),
-        AnalyseErgebnis(
-            server="srv-sql-01",
-            zeitpunkt=datetime.now(),
-            rollen=["SQL"],
-            ports=[PortStatus(port=1433, offen=True, bezeichnung="MSSQL")],
-            hinweise=[],
-        ),
-    ]
+def test_kurzstatus_und_detailzeilen_rendert_serverbloecke() -> None:
+    """Die neue Ergebnisansicht soll Kurzstatus und detailierte Unterpunkte bereitstellen."""
+    ergebnis = AnalyseErgebnis(
+        server="srv-sql-01",
+        zeitpunkt=datetime.now(),
+        rollen=["SQL"],
+        ports=[PortStatus(port=1433, offen=True, bezeichnung="MSSQL")],
+        hinweise=["Remote-Ziel erkannt"],
+    )
 
-    text = _formatiere_ergebnisliste(ergebnisse)
+    kurz = _kurzstatus(ergebnis)
+    details = _detailzeilen(ergebnis)
 
-    assert "Server: srv-app-01" in text
-    assert "Offene Ports: keine" in text
-    assert "Remote-Ziel erkannt" in text
-    assert "Server: srv-sql-01" in text
-    assert "Offene Ports: 1433" in text
+    assert "Rollen: SQL" in kurz
+    assert "Offene Ports: 1433" in kurz
+    assert any("SQL-Prüfung" in detail for detail in details)
+    assert any("Remote-Ziel erkannt" in detail for detail in details)
