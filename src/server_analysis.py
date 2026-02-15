@@ -1,93 +1,92 @@
-import os
-import sys
+"""Einfache Tkinter-Oberfläche für eine manuell gestartete Serveranalyse.
+
+Dieses Modul dient als Legacy-Einstieg aus der GUI (`src/gui_manager.py`) und nutzt
+intern die moderne Analyse-Logik aus `systemmanager_sagehelper.analyzer`.
+"""
+
+from __future__ import annotations
+
 import logging
-from tkinter import Tk, Label, Button
+from pathlib import Path
+from tkinter import Button, Entry, Label, Tk
 
-# Konfiguration fürs Logging
-logging.basicConfig(
-    filename=os.path.join(os.getcwd(), "logs/server_analysis_log.txt"),
-    level=logging.DEBUG,
-    format='[%(asctime)s] %(message)s'
-)
+from systemmanager_sagehelper.analyzer import analysiere_server
+from systemmanager_sagehelper.models import ServerZiel
 
-def get_installation_path():
-    """
-    Sucht das Installationsverzeichnis automatisch.
-    """
-    installation_dir = os.path.dirname(os.path.abspath(__file__))
-    return installation_dir
 
-def check_installation(installation_dir):
-    install_file_path = os.path.join(installation_dir, "install_complete.txt")
-    logging.info(f"Prüfe den Pfad zur Installationsdatei: {install_file_path}")
-    if os.path.exists(install_file_path):
-        logging.info(f"Installationsdatei gefunden: {install_file_path}")
-        return True
+def _konfiguriere_logging() -> None:
+    """Initialisiert Datei-Logging mit robustem Pfad-Handling."""
+    log_verzeichnis = Path.cwd() / "logs"
+    log_verzeichnis.mkdir(parents=True, exist_ok=True)
 
-    logging.error("Installationsdatei nicht gefunden. Serveranalyse abgebrochen.")
-    return False
+    logging.basicConfig(
+        filename=log_verzeichnis / "server_analysis_log.txt",
+        level=logging.INFO,
+        format="[%(asctime)s] %(levelname)s: %(message)s",
+    )
 
-def server_analysis(installation_dir):
-    """
-    Führt die Serveranalyse durch.
-    """
-    logging.info("Serveranalyse gestartet...")
-    if not check_installation(installation_dir):
-        logging.error("Die Installation wurde nicht abgeschlossen. Serveranalyse abgebrochen.")
-        return "Fehler bei der Installation."
 
-    # Beispiel: Führe eine simulierte Analyse durch
-    try:
-        logging.info("Prüfe Systemressourcen...")
-        memory_ok = True  # Simulationswert
-        cpu_ok = True     # Simulationswert
+def _starte_analyse(servername: str, rollen_text: str) -> str:
+    """Führt eine echte Analyse aus und liefert eine kurze Statusmeldung für die GUI."""
+    rollen = [rolle.strip().upper() for rolle in rollen_text.split(",") if rolle.strip()]
+    ergebnis = analysiere_server(ServerZiel(name=servername.strip(), rollen=rollen))
 
-        if not (memory_ok and cpu_ok):
-            logging.error("Systemressourcen nicht ausreichend.")
-            return "Systemressourcen unzureichend."
+    offene_ports = [str(p.port) for p in ergebnis.ports if p.offen]
+    status = "Keine relevanten Ports offen" if not offene_ports else f"Offene Ports: {', '.join(offene_ports)}"
 
-        logging.info("Systemressourcen geprüft und erfolgreich.")
+    logging.info("Analyse für %s abgeschlossen. %s", ergebnis.server, status)
+    if ergebnis.hinweise:
+        logging.info("Hinweise: %s", " | ".join(ergebnis.hinweise))
 
-        # Weitere Schritte, die in einer Analyse auftreten sollten
-        logging.info("Prüfe Serververfügbarkeit...")
+    return status
 
-        server_available = True
-        if not server_available:
-            logging.error("Server nicht erreichbar.")
-            return "Server nicht erreichbar."
 
-    except Exception as e:
-        logging.error(f"Fehler bei der Serveranalyse: {str(e)}")
-        return str(e)
+def start_gui() -> None:
+    """Startet die GUI für die lokale oder remote Serveranalyse."""
+    _konfiguriere_logging()
 
-    logging.info("Serveranalyse erfolgreich abgeschlossen.")
-    return "Serveranalyse erfolgreich abgeschlossen."
-
-def start_gui():
-    """
-    Startet die GUI für die Serververwaltung.
-    """
     root = Tk()
-    root.title("Server Doku Helper")
-
-    def run_analysis():
-        installation_dir = get_installation_path()
-        result = server_analysis(installation_dir)
-        label_result.config(text=result, fg="green" if "erfolgreich" in result else "red")
+    root.title("SystemManager-SageHelper – Serveranalyse")
 
     Label(root, text="Server Doku Helper", font=("Arial", 20), fg="black").pack(pady=10)
 
-    Button(root, text="Serveranalyse starten", command=run_analysis, width=30, height=2).pack(pady=10)
+    Label(root, text="Servername (z. B. localhost oder srv-app-01):").pack(pady=2)
+    entry_server = Entry(root, width=40)
+    entry_server.insert(0, "localhost")
+    entry_server.pack(pady=2)
 
-    label_result = Label(root, text="Warte auf Beginn der Analyse...", font=("Arial", 14), fg="blue")
-    label_result.pack(pady=20)
+    Label(root, text="Rollen (kommagetrennt, z. B. APP,SQL,CTX):").pack(pady=2)
+    entry_rollen = Entry(root, width=40)
+    entry_rollen.insert(0, "APP")
+    entry_rollen.pack(pady=2)
+
+    label_result = Label(root, text="Warte auf Beginn der Analyse...", font=("Arial", 12), fg="blue")
+    label_result.pack(pady=15)
+
+    def run_analysis() -> None:
+        servername = entry_server.get().strip()
+        if not servername:
+            label_result.config(text="Bitte einen Servernamen eingeben.", fg="red")
+            return
+
+        try:
+            ergebnis_text = _starte_analyse(servername, entry_rollen.get())
+            label_result.config(text=ergebnis_text, fg="green")
+        except Exception as exc:  # noqa: BLE001 - GUI soll Fehler robust anzeigen.
+            logging.exception("Fehler bei der Serveranalyse")
+            label_result.config(text=f"Analyse fehlgeschlagen: {exc}", fg="red")
+
+    Button(root, text="Serveranalyse starten", command=run_analysis, width=30, height=2).pack(pady=10)
 
     root.mainloop()
 
-def main():
+
+def main() -> None:
+    """Programmstart mit Logging."""
     logging.info("=== Programm gestartet ===")
     start_gui()
     logging.info("=== Programm beendet ===")
+
 
 if __name__ == "__main__":
     main()
