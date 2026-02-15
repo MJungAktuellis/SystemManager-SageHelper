@@ -5,22 +5,28 @@ from tkinter import Tk, Label
 
 # Logging Funktion zur Verwendung im gesamten Skript
 def log(message, level="INFO"):
-    log_file_path = "server_analysis_log.txt"
+    log_file_path = os.path.join("logs", "server_analysis_log.txt")
     with open(log_file_path, "a") as file:
         file.write(f"[{level}] {message}\n")
 
 # Installation prüfen
 def check_installation():
-    base_dir = os.path.expanduser("~")
-    install_file_path = os.path.join(base_dir, "SystemManager-SageHelper-main", "install_complete.txt")
-    
-    log("Prüfe Installationsdatei...")
-    if os.path.exists(install_file_path):
-        log(f"Installationsdatei gefunden: {install_file_path}")
-        return True
+    try:
+        base_dir = os.path.dirname(__file__)
+        install_file_path = os.path.join(base_dir, "install_complete.txt")
 
-    log("Installationsdatei nicht gefunden. Serveranalyse abgebrochen.", level="ERROR")
-    return False
+        log(f"Prüfe den Pfad zur Installationsdatei: {install_file_path}")
+
+        if os.path.exists(install_file_path):
+            log(f"Installationsdatei gefunden: {install_file_path}")
+            return True
+
+        log("Installationsdatei nicht gefunden. Serveranalyse abgebrochen.", level="ERROR")
+        return False
+
+    except Exception as e:
+        log(f"Fehler bei der Prüfung der Installationsdatei: {str(e)}", level="ERROR")
+        return False
 
 # GUI zur Anzeige von Erfolg oder Fehler starten
 def start_gui():
