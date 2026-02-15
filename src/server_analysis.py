@@ -16,26 +16,46 @@ log("== Serveranalyse gestartet ==")
 
 # Prüfung auf installierte Module vor Serveranalyse
 required_modules = ["ping3"]
-missing_modules = []
 for module in required_modules:
     try:
         __import__(module)
     except ImportError:
-        log(f"Fehlendes Modul: {module}. Prüfe Installation.", level="ERROR")
+        log(f"Fehlendes Modul: {module}. Bitte installieren.", level="ERROR")
         sys.exit(1)
 
-log("Alle benötigten Module sind vorhanden.")
+log("Alle Module erfolgreich geprüft.")
 
-# Funktion: Host erreichbarkeit prüfen
-
+# Funktion: Host-Erreichbarkeit prüfen
 def is_host_reachable(host):
     try:
         response = ping(host, timeout=2)
         if response is not None:
-            log(f"Host {host} erreichbar: Antwortzeit: {response:.2f} ms")
+            log(f"Host {host} erreichbar. Antwortzeit: {response:.2f} ms")
             return True
-        else:
-            log(f"Host {host} nicht erreichbar. Keine Antwort.")
-    except Exception as ex:
-           log="#OUTOS``POINT EX INT."APP`` etc...  
- --- Ordners auff트를. Testen. EX vurder.''--  Fixed validated \ Runnable.---.  EndRewrite Knots fixed Verified: Would reN. pls confirm,.,. FixptDone restructuring. Plzz. `` ContextFull resolutions tream approaches runAVEL">
+        log(f"Host {host} nicht erreichbar. Keine Antwort.")
+        return False
+
+    except Exception as e:
+        log(f"Fehler bei Ping {host}: {str(e)}", level="ERROR")
+        return False
+
+# GUI für die Serveranalyse starten
+def start_gui():
+    app = Tk()
+    app.title("Server Doku Helper - Python")
+    Label(app, text="Server-Rollen Auswahl & Netzwerkscan", font=("Arial", 16)).grid(row=0, columnspan=2, pady=10)
+    progress_label = Label(app, text="Bereit", fg="green")
+    progress_label.grid(row=2, pady=10)
+    app.mainloop()
+
+# Main
+if __name__ == "__main__":
+    log("Installation wird vor Serveranalyse geprüft.")
+    installation_file = os.path.join(os.path.expanduser("~"), "SystemManager-SageHelper", "install_complete.txt")
+
+    if not os.path.exists(installation_file):
+        log("Installationsdatei nicht gefunden. Serveranalyse abgebrochen.", level="ERROR")
+        sys.exit("Die Installation wurde nicht abgeschlossen. Bitte führen Sie das Installationsskript aus.")
+
+    log("Serveranalyse gestartet.")
+    start_gui()
