@@ -1,52 +1,72 @@
 import os
 import sys
-from ping3 import ping
-from tkinter import Tk, Label
+import logging
+from tkinter import Tk, Label, filedialog
 
-# Logging Funktion zur Verwendung im gesamten Skript
-def log(message, level="INFO"):
-    log_file_path = os.path.join("logs", "server_analysis_log.txt")
-    with open(log_file_path, "a") as file:
-        file.write(f"[{level}] {message}\n")
+# Konfiguration fürs Logging
+logging.basicConfig(
+    filename=os.path.join(os.getcwd(), "logs/server_analysis_log.txt"),
+    level=logging.DEBUG,
+    format='[%(asctime)s] %(message)s',
+)
 
-# Installation prüfen
-def check_installation():
+def choose_installation_path():
+    root = Tk()
+    root.withdraw()  # Verstecke Hauptrahmen
+    installation_dir = filedialog.askdirectory(title="Installationsverzeichnis wählen")
+    return installation_dir if installation_dir else os.getcwd()
+
+def check_installation(installation_dir):
+    install_file_path = os.path.join(installation_dir, "install_complete.txt")
+    logging.info(f"Prüfe den Pfad zur Installationsdatei: {install_file_path}")
+    if os.path.exists(install_file_path):
+        logging.info(f"Installationsdatei gefunden: {install_file_path}")
+        return True
+    logging.error("Installationsdatei nicht gefunden. Serveranalyse abgebrochen.")
+    return False
+
+def server_analysis(installation_dir):
+    if not check_installation(installation_dir):
+        sys.exit("Fehler: Installationsprüfung fehlgeschlagen.")
+
+    logging.info("Serveranalyse begonnen...")
+    # Simulation weiterer Analyse-Schritte
     try:
-        base_dir = os.path.dirname(__file__)
-        install_file_path = os.path.join(base_dir, "install_complete.txt")
+        logging.info("Prüfe Systemressourcen...")
+        # Beispielausgabe
+        memory_ok = True
+        cpu_ok = True
 
-        log(f"Prüfe den Pfad zur Installationsdatei: {install_file_path}")
+        if not (memory_ok and cpu_ok):
+            logging.error("Systemanalyse fehlgeschlagen: Nicht genügend Ressourcen.")
+            sys.exit("Systemressourcen unzureichend.")
 
-        if os.path.exists(install_file_path):
-            log(f"Installationsdatei gefunden: {install_file_path}")
-            return True
-
-        log("Installationsdatei nicht gefunden. Serveranalyse abgebrochen.", level="ERROR")
-        return False
+        logging.info("Systemressourcen okay.")
 
     except Exception as e:
-        log(f"Fehler bei der Prüfung der Installationsdatei: {str(e)}", level="ERROR")
-        return False
+        logging.error(f"Fehler während der Serveranalyse: {str(e)}")
+        sys.exit(f"Serveranalyse abgebrochen: {str(e)}")
 
-# GUI zur Anzeige von Erfolg oder Fehler starten
-def start_gui():
+    logging.info("Serveranalyse erfolgreich abgeschlossen.")
+
+def start_gui(status_text, status_color):
     root = Tk()
-    root.title("Server Doku Helper")
-
-    status = "Installation OK" if check_installation() else "Installation fehlt"
-    color = "green" if status == "Installation OK" else "red"
-
-    Label(root, text=status, font=("Arial", 16), fg=color).pack(pady=20)
+    root.title("Serverstatus")
+    Label(root, text=status_text, font=("Arial", 16), fg=status_color).pack(pady=20)
     root.mainloop()
 
-# Hauptprogramm
 def main():
-    log("== Serveranalyse gestartet ==")
-    if not check_installation():
-        sys.exit("Fehler bei der Installation. Bitte führen Sie das Installationsskript aus.")
+    logging.info("== Serveranalyse gestartet ==")
+    installation_dir = choose_installation_path()
+    if check_installation(installation_dir):
+        server_analysis(installation_dir)
+        status_text = "Analyse erfolgreich"
+        status_color = "green"
+    else:
+        status_text = "Installation fehlt"
+        status_color = "red"
 
-    log("Serveranalyse abgeschlossen.")
-    start_gui()
+    start_gui(status_text, status_color)
 
 if __name__ == "__main__":
     main()
