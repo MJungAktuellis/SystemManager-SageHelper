@@ -3,6 +3,7 @@ import concurrent.futures
 from tkinter import Tk, Label, Button, Entry, Checkbutton, BooleanVar, StringVar, Frame
 import subprocess
 import os
+import platform
 
 # Logging Setup
 def log(message, level="INFO"):
@@ -10,6 +11,11 @@ def log(message, level="INFO"):
         log_file.write(f"[{level}] {message}\n")
 
 log("SystemManager-SageHelper gestartet.")
+
+# Funktion für Ping-Test mit DNS- und IP-Unterstützung
+def is_host_reachable(host):
+    response = os.system(f"ping -n 1 {host} >nul 2>&1")
+    return response == 0
 
 # Funktionen zur Rollenprüfung
 
@@ -61,13 +67,13 @@ def start_gui():
     app.title("Server Doku Helper - Python")
 
     # Header
-    Label(app, text="Server-Rollen Auswahl & Netzwerkscan", font=("Arial", 16)).grid(row=0, columnspan=2, pady=10)
+    Label(app, text="Server-Rollen Auswahl & erweiterter Netzwerkscan", font=("Arial", 16)).grid(row=0, columnspan=2, pady=10)
 
     # Server-Rollen Container
     roles_frame = Frame(app)
     roles_frame.grid(row=1, padx=10, pady=10)
 
-    Label(roles_frame, text="Servername:").grid(row=0, column=0, sticky="w")
+    Label(roles_frame, text="Bitte Servernamen eingeben:").grid(row=0, column=0, sticky="w")
     server_name_var = StringVar()
     Entry(roles_frame, textvariable=server_name_var).grid(row=1, column=0)
 
@@ -85,26 +91,28 @@ def start_gui():
 
     def scan_network():
         progress_label["text"] = "Scanning... Bitte Warten."
+        entered_host = server_name_var.get().strip()
+        reachable_hosts = []
 
-        def is_reachable(ip):
-            try:
-                socket.create_connection((ip, 135), timeout=0.5)
-                return ip
-            except:
-                return None
+        if entered_host:
+            log(f"Manuell eingegebener Server: {entered_host}")
+            if is_host_reachable(entered_host):
+                reachable_hosts.append(entered_host)
+            else:
+                log(f"Server {entered_host} nicht erreichbar.", level="WARNING")
 
+        # Define subnet for automatic scan
         subnet = "192.168.1."
-        reachable_ips = []
-
         with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-            tasks = [executor.submit(is_reachable, f"{subnet}{i}") for i in range(1, 255)]
-            reachable_ips = [ip.result() for ip in tasks if ip.result()]
+            tasks = [executor.submit(is_host_reachable, f"{subnet}{i}") for i in range(1, 255)]
+            results = [f"{subnet}{i}" for i, task in enumerate(tasks, 1) if task.result()]
+            reachable_hosts.extend(results)
 
-        progress_label["text"] = f"Scan abgeschlossen. Erreichbare Hosts: {len(reachable_ips)}"
-        log(f"Hosts gefunden: {reachable_ips}")
+        progress_label["text"] = f"Scan abgeschlossen. {len(reachable_hosts)} Hosts erreichbar."
+        log(f"Gefundene Hosts: {reachable_hosts}")
 
-        # Überprüfen der Rollen
-        for server in reachable_ips:
+        # Rollen prüfen und anzeigen
+        for server in reachable_hosts:
             if sql_var.get():
                 check_sql_roles(server)
             if app_var.get():
