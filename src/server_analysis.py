@@ -1,124 +1,67 @@
-"""
-server_analysis.py
-
-Modul zur Analyse von Serverrollen und relevanten Informationen.
-
-Funktionen enthalten:
-1. Erkennung der Serverrollen (SQL, APP, CTX).
-2. Überprüfung der relevanten Ports für Anwendungen wie Sage100.
-3. Auslesen relevanter Treiberversionen.
-4. Logging aller Ergebnisse für Dokumentationszwecke.
-"""
-
-import os
 import socket
-import logging
-import subprocess
-from typing import List, Dict
+import concurrent.futures
+from tkinter import Tk, Label, Button, Entry, Checkbutton, BooleanVar, StringVar, Frame
 
-# Logging-Konfiguration
-logging.basicConfig(
-    filename="logs/server_analysis.log",
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+# Logging Setup
+def log(message, level="INFO"):
+    with open("server_analysis_log.txt", "a") as log_file:
+        log_file.write(f"[{level}] {message}\n")
 
-def pruefe_ports(ip_address: str, ports: List[int]) -> Dict[int, str]:
-    """
-    Prüft, ob die angegebenen Ports auf einem Server offen sind.
+log("SystemManager-SageHelper gestartet.")
 
-    Args:
-        ip_address (str): Die Adresse des Servers.
-        ports (List[int]): Eine Liste relevanter Ports.
+# GUI-Setup
+def start_gui():
+    app = Tk()
+    app.title("Server Doku Helper - Python")
 
-    Returns:
-        Dict[int, str]: Ein Dictionary mit Portnummern und Status ('offen' oder 'geschlossen').
-    """
-    ergebnisse = {}
-    for port in ports:
-        try:
-            with socket.create_connection((ip_address, port), timeout=2):
-                ergebnisse[port] = "offen"
-        except (socket.timeout, ConnectionRefusedError):
-            ergebnisse[port] = "geschlossen"
-    return ergebnisse
+    # Header
+    Label(app, text="Server-Rollen Auswahl & Netzwerkscan", font=("Arial", 16)).grid(row=0, columnspan=2, pady=10)
 
-def serverrolle_erkennen() -> str:
-    """
-    Ermittelt die Rolle des aktuellen Servers basierend auf installierten Komponenten.
+    # Server-Rollen Container
+    roles_frame = Frame(app)
+    roles_frame.grid(row=1, padx=10, pady=10)
 
-    Returns:
-        str: Beschreibung der Serverrolle (z. B. 'SQL', 'APP', 'CTX', 'MIXED', oder 'UNKNOWN').
-    """
-    rollen = []
-    try:
-        # SQL-Serverprüfung
-        sql_dienste = subprocess.getoutput("sc query | findstr /I MSSQL")
-        if sql_dienste:
-            rollen.append("SQL")
+    Label(roles_frame, text="Servername:").grid(row=0, column=0, sticky="w")
+    server_name_var = StringVar()
+    Entry(roles_frame, textvariable=server_name_var).grid(row=1, column=0)
 
-        # Prüfen auf Applikationsserver
-        app_pfade = [
-            "C:\\Program Files\\Sage",
-            "C:\\Program Files (x86)\\Sage",
-            "C:\\Sage"
-        ]
-        if any(os.path.exists(pfad) for pfad in app_pfade):
-            rollen.append("APP")
+    sql_var = BooleanVar()
+    app_var = BooleanVar()
+    ctx_var = BooleanVar()
 
-        # Terminalserver/RDS-Prüfung
-        ctx_dienst = subprocess.getoutput("qwinsta")
-        if "RDP-Tcp" in ctx_dienst:
-            rollen.append("CTX")
+    Checkbutton(roles_frame, text="SQL", variable=sql_var).grid(row=1, column=1)
+    Checkbutton(roles_frame, text="APP", variable=app_var).grid(row=1, column=2)
+    Checkbutton(roles_frame, text="CTX", variable=ctx_var).grid(row=1, column=3)
 
-        if not rollen:
-            return "UNKNOWN"
-        return ",".join(rollen)
+    # Progress label
+    progress_label = Label(app, text="Bereit", fg="green")
+    progress_label.grid(row=2, pady=10)
 
-    except Exception as e:
-        logging.error(f"Fehler beim Erkennen der Serverrolle: {e}")
-        return "ERROR"
+    def scan_network():
+        progress_label["text"] = "Scanning... Bitte Warten."
 
-def treiber_versionen_auslesen() -> List[str]:
-    """
-    Liest die Versionen relevanter Treiber aus (z. B. Netzwerk- und Speichertreiber).
+        def is_reachable(ip):
+            try:
+                socket.create_connection((ip, 135), timeout=0.5)
+                return True
+            except:
+                return False
 
-    Returns:
-        List[str]: Liste der Treiberinformationen.
-    """
-    treiber_info = []
-    try:
-        ergebnis = subprocess.check_output(["driverquery"], shell=True, text=True)
-        for line in ergebnis.split("\n"):
-            if "Net" in line or "Storage" in line:
-                treiber_info.append(line.strip())
-    except Exception as e:
-        logging.error(f"Fehler beim Auslesen der Treiberversionen: {e}")
-    return treiber_info
+        subnet = "192.168.1."
+        reachable_ips = []
 
-def analysiere_server():
-    """
-    Führt eine vollständige Analyse des aktuellen Servers durch: prüft Ports, Serverrolle und Treiberversionen.
-    Die Ergebnisse werden geloggt.
-    """
-    logging.info("Starte Serveranalyse...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+            tasks = [executor.submit(is_reachable, f"{subnet}{i}") for i in range(1, 255)]
+            reachable_ips = [ip.result() for ip in tasks if ip.result()]
 
-    # Serverrolle erkennen
-    rolle = serverrolle_erkennen()
-    logging.info(f"Erkannte Serverrolle: {rolle}")
+        progress_label["text"] = f"Scan abgeschlossen. Erreichbare Hosts: {len(reachable_ips)}"
+        log(f"Hosts gefunden: {reachable_ips}")
 
-    # Ports prüfen
-    relevante_ports = [80, 443, 3389, 1433, 8443]
-    ip_address = socket.gethostbyname(socket.gethostname())
-    port_ergebnisse = pruefe_ports(ip_address, relevante_ports)
-    logging.info(f"Port-Status: {port_ergebnisse}")
+    Button(app, text="Netzwerkscan starten", command=scan_network).grid(row=3, pady=10)
+    Button(app, text="Beenden", command=app.quit).grid(row=4, pady=10)
 
-    # Treiberversionen auslesen
-    treiber = treiber_versionen_auslesen()
-    for zeile in treiber:
-        logging.info(f"Treiber: {zeile}")
+    app.mainloop()
 
-    logging.info("Serveranalyse abgeschlossen.")
-
+# Main
 if __name__ == "__main__":
-    analysiere_server()
+    start_gui()
