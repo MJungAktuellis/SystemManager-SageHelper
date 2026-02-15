@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from systemmanager_sagehelper.cli import _parse_liste
+from systemmanager_sagehelper.cli import _parse_deklarationen, _parse_liste
 
 
 class TestCli(unittest.TestCase):
@@ -17,6 +17,10 @@ class TestCli(unittest.TestCase):
     def test_parse_liste_mit_uppercase(self) -> None:
         ergebnis = _parse_liste("app, SQL, app", to_upper=True)
         self.assertEqual(["APP", "SQL"], ergebnis)
+
+    def test_parse_deklarationen_parst_rollen_je_server(self) -> None:
+        ergebnis = _parse_deklarationen("srv1=sql,app;srv2=ctx")
+        self.assertEqual({"srv1": ["SQL", "APP"], "srv2": ["CTX"]}, ergebnis)
 
 
 if __name__ == "__main__":
