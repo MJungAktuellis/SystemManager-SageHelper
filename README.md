@@ -47,7 +47,7 @@ SystemManager-SageHelper/
 1. Repository als ZIP auf den Zielserver kopieren und entpacken.
 2. `Install-SystemManager-SageHelper.cmd` per Doppelklick ausführen.
 3. Der Assistent installiert bei Bedarf Python/Git und richtet anschließend alle Abhängigkeiten ein.
-4. Das Fenster bleibt nach Abschluss sichtbar; bei Fehlern bitte die Logdateien unter `logs/install_assistant.log` und `logs/install_assistant_ps.log` teilen.
+4. Das Fenster bleibt nach Abschluss sichtbar; bei Fehlern bitte die Logdateien unter `logs/install_launcher.log`, `logs/install_assistant_ps.log` und `logs/install_assistant.log` teilen.
 
 ### Option B: CLI-Installation (plattformübergreifend)
 
