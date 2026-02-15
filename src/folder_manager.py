@@ -12,17 +12,12 @@ Funktionen enthalten:
 
 from pathlib import Path
 import subprocess
-import logging
 import re
 from dataclasses import dataclass, asdict
 
-# Logging-Konfiguration
-logging.basicConfig(
-    filename="logs/folder_manager.log",
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 
+logger = konfiguriere_logger(__name__, dateiname="folder_manager.log")
 
 @dataclass
 class FreigabeErgebnis:
@@ -40,7 +35,7 @@ class FreigabeErgebnis:
 
 def _logge_prozessdetails(aktion: str, befehl: list[str], ergebnis: subprocess.CompletedProcess[str]) -> None:
     """Schreibt strukturierte Prozessdetails in das Log für bessere Fehleranalyse."""
-    logging.info(
+    logger.info(
         "%s | cmd=%s | rc=%s | stdout=%s | stderr=%s",
         aktion,
         " ".join(befehl),
@@ -126,9 +121,9 @@ def erstelle_ordnerstruktur(basis_pfad: str):
         try:
             ziel_pfad = Path(basis_pfad) / rel_path
             ziel_pfad.mkdir(parents=True, exist_ok=True)
-            logging.info(f"Ordner erstellt oder vorhanden: {ziel_pfad}")
+            logger.info(f"Ordner erstellt oder vorhanden: {ziel_pfad}")
         except Exception as e:
-            logging.error(f"Fehler beim Erstellen von {ziel_pfad}: {e}")
+            logger.error(f"Fehler beim Erstellen von {ziel_pfad}: {e}")
 
 
 def setze_freigaben(basis_pfad: str) -> list[FreigabeErgebnis]:
@@ -171,7 +166,7 @@ def setze_freigaben(basis_pfad: str) -> list[FreigabeErgebnis]:
                         stderr=loesch_ergebnis.stderr,
                     )
                 )
-                logging.error(meldung)
+                logger.error(meldung)
                 continue
 
         erstellt = False
@@ -203,7 +198,7 @@ def setze_freigaben(basis_pfad: str) -> list[FreigabeErgebnis]:
                         stderr=neu_ergebnis.stderr,
                     )
                 )
-                logging.info(meldung)
+                logger.info(meldung)
                 erstellt = True
                 break
 
@@ -215,7 +210,7 @@ def setze_freigaben(basis_pfad: str) -> list[FreigabeErgebnis]:
 
             # 1332 = Konto konnte nicht aufgelöst werden -> kontrollierter Fallback.
             if fehlercode == 1332:
-                logging.warning("%s Fallback wird versucht.", letzte_meldung)
+                logger.warning("%s Fallback wird versucht.", letzte_meldung)
                 continue
 
             # Für andere Fehlercode ist kein weiterer Fallback sinnvoll.
@@ -234,9 +229,9 @@ def setze_freigaben(basis_pfad: str) -> list[FreigabeErgebnis]:
                     stderr=letztes_ergebnis.stderr if letztes_ergebnis else "",
                 )
             )
-            logging.error(ergebnisse[-1].meldung)
+            logger.error(ergebnisse[-1].meldung)
 
-    logging.info("Freigabe-Ergebnisse: %s", [asdict(e) for e in ergebnisse])
+    logger.info("Freigabe-Ergebnisse: %s", [asdict(e) for e in ergebnisse])
     return ergebnisse
 
 
@@ -248,15 +243,16 @@ def pruefe_und_erstelle_struktur(basis_pfad: str):
         basis_pfad (str): Der Hauptpfad, an dem die Ordnerstruktur erstellt wird.
     """
     if not Path(basis_pfad).exists():
-        logging.info(f"Basisstruktur nicht vorhanden, wird erstellt: {basis_pfad}")
+        logger.info(f"Basisstruktur nicht vorhanden, wird erstellt: {basis_pfad}")
         erstelle_ordnerstruktur(basis_pfad)
     else:
-        logging.info(f"Basisstruktur ist bereits vorhanden: {basis_pfad}")
+        logger.info(f"Basisstruktur ist bereits vorhanden: {basis_pfad}")
     
     # Freigaben setzen
     setze_freigaben(basis_pfad)
 
 if __name__ == "__main__":
     # Beispielaufruf für Tests
+    setze_lauf_id(erstelle_lauf_id())
     standard_path = "C:/SystemAG"
     pruefe_und_erstelle_struktur(standard_path)

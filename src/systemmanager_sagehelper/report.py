@@ -17,9 +17,17 @@ def _render_liste_tabelle(eintraege: list[str], limit: int = 15) -> list[str]:
     return zeilen
 
 
+def _ermittle_lauf_id(ergebnisse: list[AnalyseErgebnis]) -> str:
+    """Liest die Lauf-ID aus dem ersten Ergebnis oder liefert einen Platzhalter."""
+    for ergebnis in ergebnisse:
+        if ergebnis.lauf_id:
+            return ergebnis.lauf_id
+    return "nicht gesetzt"
+
+
 def render_markdown(ergebnisse: list[AnalyseErgebnis]) -> str:
     """Formatiert Analyseergebnisse in ein gut lesbares Markdown-Dokument."""
-    zeilen: list[str] = ["# Serverdokumentation", ""]
+    zeilen: list[str] = ["# Serverdokumentation", "", f"- Lauf-ID: {_ermittle_lauf_id(ergebnisse)}", ""]
 
     for ergebnis in ergebnisse:
         os_details = ergebnis.betriebssystem_details
@@ -28,6 +36,7 @@ def render_markdown(ergebnisse: list[AnalyseErgebnis]) -> str:
             [
                 f"## Server: {ergebnis.server}",
                 f"- Zeitpunkt: {ergebnis.zeitpunkt.isoformat(timespec='seconds')}",
+                f"- Lauf-ID: {ergebnis.lauf_id or 'nicht gesetzt'}",
                 f"- Rollen: {', '.join(ergebnis.rollen) if ergebnis.rollen else 'nicht gesetzt'}",
                 f"- Betriebssystem: {ergebnis.betriebssystem or 'unbekannt'}",
                 f"- OS-Version: {ergebnis.os_version or 'unbekannt'}",

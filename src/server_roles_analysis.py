@@ -3,7 +3,7 @@ import logging
 from tkinter import Tk, Label, Button, Listbox
 
 logging.basicConfig(
-    filename=os.path.join(os.getcwd(), "logs/server_roles_analysis_log.txt"),
+    filename=os.path.join(os.getcwd(), "logs/server_roles_analysis.log"),
     level=logging.DEBUG,
     format='[%(asctime)s] %(message)s'
 )

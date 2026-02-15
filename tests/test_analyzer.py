@@ -9,6 +9,7 @@ from systemmanager_sagehelper.analyzer import (
     _klassifiziere_anwendungen,
     _normalisiere_rollen,
     analysiere_server,
+    analysiere_mehrere_server,
 )
 from systemmanager_sagehelper.models import ServerZiel
 
@@ -55,6 +56,25 @@ class TestAnalyzer(unittest.TestCase):
         self.assertTrue(
             any("nicht bestätigt" in hinweis and "APP" in hinweis for hinweis in ergebnis.hinweise)
         )
+
+
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.0.1"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=False)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[])
+    def test_mehrserveranalyse_uebernimmt_eine_gemeinsame_lauf_id(
+        self,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+    ) -> None:
+        ziele = [
+            ServerZiel(name="srv-01", rollen=["APP"]),
+            ServerZiel(name="srv-02", rollen=["SQL"]),
+        ]
+        ergebnisse = analysiere_mehrere_server(ziele, lauf_id="lauf-test-001")
+
+        self.assertEqual(2, len(ergebnisse))
+        self.assertTrue(all(ergebnis.lauf_id == "lauf-test-001" for ergebnis in ergebnisse))
 
 
 if __name__ == "__main__":

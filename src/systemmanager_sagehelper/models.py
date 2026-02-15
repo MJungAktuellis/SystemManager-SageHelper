@@ -101,6 +101,7 @@ class AnalyseErgebnis:
 
     server: str
     zeitpunkt: datetime
+    lauf_id: str | None = None
     betriebssystem: str | None = None
     os_version: str | None = None
     rollen: list[str] = field(default_factory=list)

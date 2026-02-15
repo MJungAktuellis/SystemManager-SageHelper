@@ -91,6 +91,26 @@ PYTHONPATH=src python -m systemmanager_sagehelper ordner-check --basis /tmp/Syst
 PYTHONPATH=src python -m systemmanager_sagehelper ordner-check --basis /tmp/SystemAG --anlegen
 ```
 
+
+## Logging, Berichte und Lauf-ID-Korrelation
+
+- **Zentrales Analyse-Log:** `logs/server_analysis.log`
+- **GUI-Log:** `logs/server_analysis_gui.log`
+- **CLI-Log:** `logs/cli.log`
+- **Ordnerverwaltung:** `logs/folder_manager.log`
+- **Dokumentationslauf:** `logs/doc_generator.log`
+- **Ergebnisbericht (CLI):** über `--out`, z. B. `docs/serverbericht.md`
+- **Ergebnisbericht (Dokumentationsmodul):** `docs/ServerDokumentation.md`
+
+Alle Logs verwenden ein einheitliches Format mit `run_id=...`. Diese Lauf-ID wird auch im Markdown-Bericht ausgegeben.
+So kann ein Analyse-Lauf eindeutig korreliert werden:
+
+1. Lauf-ID im Bericht ablesen (`- Lauf-ID: ...`).
+2. In den Logdateien nach derselben ID suchen (`run_id=<lauf-id>`).
+3. Damit alle zugehörigen Einträge aus Analyse, GUI und CLI zusammenführen.
+
+Das Modul `src/doc_generator.py` liest standardmäßig `*.log` und optional Legacy-Dateien `*.txt`, damit bestehende Umgebungen ohne harte Migration weiter funktionieren.
+
 ## Nächste sinnvolle Erweiterungen
 
 1. WinRM-/PowerShell-Remoting für echte Remote-Systeminfos (OS, Dienste, Treiber, Freigaben).
