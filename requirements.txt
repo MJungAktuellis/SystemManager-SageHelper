@@ -1,1 +1,5 @@
-# Aktuell keine Drittanbieter-Abhängigkeiten erforderlich.
+# Diese Datei enthält alle externen Abhängigkeiten für SystemManager-SageHelper
+# Beispielsweise:
+# flask>=2.0.0
+# requests>=2.27.1
+# Falls keine zusätzlichen Abhängigkeiten nötig sind, bleibt diese Datei leer.
