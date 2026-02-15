@@ -8,6 +8,7 @@
 - Installer-Logging für CMD/PowerShell/Python ergänzt, damit Fehlerberichte reproduzierbar geteilt werden können.
 - `Install-SystemManager-SageHelper.cmd` pausiert jetzt nach Abschluss, damit Fehlermeldungen nicht sofort verschwinden.
 - Windows-Launcher schreibt nun immer ein eigenes Log (`logs/install_launcher.log`) und verwendet explizit `powershell.exe`, damit Startfehler aus ZIP-Installationen nachvollziehbar bleiben.
+- Windows-Launcher erkennt Doppelklick-Starts (`cmd /c`) und startet sich in einem persistierenden CMD-Fenster neu, damit die Ausgabe nicht sofort verschwindet.
 
 ## [0.1.0] - 2026-02-15
 ### Hinzugefügt
