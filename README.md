@@ -15,12 +15,14 @@ SystemManager-SageHelper ist ein Python-Werkzeug für Consulting- und Support-Te
 SystemManager-SageHelper/
 ├── AGENTS.md
 ├── CHANGELOG.md
+├── Install-SystemManager-SageHelper.cmd
 ├── README.md
 ├── requirements.txt
 ├── logs/
 │   └── assistant_log.md
 ├── scripts/
-│   └── install.py
+│   ├── install.py
+│   └── install_assistant.ps1
 ├── src/
 │   └── systemmanager_sagehelper/
 │       ├── __init__.py
@@ -29,14 +31,24 @@ SystemManager-SageHelper/
 │       ├── cli.py
 │       ├── config.py
 │       ├── folder_structure.py
+│       ├── installer.py
 │       ├── models.py
 │       └── report.py
 └── tests/
     ├── test_folder_structure.py
+    ├── test_installer.py
     └── test_report.py
 ```
 
 ## Installation
+
+### Option A: One-Click-Installer unter Windows (empfohlen)
+
+1. Repository als ZIP auf den Zielserver kopieren und entpacken.
+2. `Install-SystemManager-SageHelper.cmd` per Doppelklick ausführen.
+3. Der Assistent installiert bei Bedarf Python/Git und richtet anschließend alle Abhängigkeiten ein.
+
+### Option B: CLI-Installation (plattformübergreifend)
 
 ```bash
 python scripts/install.py
