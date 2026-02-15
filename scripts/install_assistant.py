@@ -7,6 +7,22 @@ def log(message, level="INFO"):
     with open("install_log.txt", "a") as log_file:
         log_file.write(f"[{level}] {message}\n")
 
+def create_directory_structure(base_dir):
+    try:
+        os.makedirs(base_dir, exist_ok=True)
+        log(f"Überordner erstellt: {base_dir}")
+
+        subfolders = ["src", "tests", "logs", "docs"]
+        for folder in subfolders:
+            path = os.path.join(base_dir, folder)
+            os.makedirs(path, exist_ok=True)
+            log(f"Unterordner erstellt: {path}")
+
+    except Exception as e:
+        log(f"Fehler beim Erstellen der Ordnerstruktur: {str(e)}", level="ERROR")
+        messagebox.showerror("Fehler", f"Ordnerstruktur konnte nicht erstellt werden: {str(e)}")
+        sys.exit(1)
+
 def check_python_version():
     if sys.version_info < (3, 7):
         raise EnvironmentError("Python 3.7 oder höher ist erforderlich.")
@@ -34,8 +50,11 @@ def main():
         log("Starte die Installation...")
         check_python_version()
         installation_dir = select_installation_directory()
-        os.makedirs(installation_dir, exist_ok=True)
+        create_directory_structure(installation_dir)
         install_dependencies()
+
+        with open(os.path.join(installation_dir, "install_complete.txt"), "w") as f:
+            f.write("Installation abgeschlossen.")
 
         log("Installation abgeschlossen.")
         messagebox.showinfo("Erfolg", "Installation abgeschlossen. Anwendung kann gestartet werden.")
