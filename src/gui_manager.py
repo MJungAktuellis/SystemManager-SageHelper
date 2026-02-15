@@ -75,7 +75,7 @@ class SystemManagerGUI:
 
     def serveranalyse(self) -> None:
         """Startet die Serveranalyse-GUI."""
-        self.execute_command("Serveranalyse", [sys.executable, "src/server_analysis.py"])
+        self.execute_command("Serveranalyse", [sys.executable, "src/server_analysis_gui.py"])
 
     def ordner_verwalten(self) -> None:
         """Startet die Ordnerverwaltung."""
