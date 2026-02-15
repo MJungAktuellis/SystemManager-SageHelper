@@ -1,9 +1,8 @@
-import socket
 import concurrent.futures
-from tkinter import Tk, Label, Button, Entry, Checkbutton, BooleanVar, StringVar, Frame
 import subprocess
 import os
-import platform
+from ping3 import ping, PingError
+from tkinter import Tk, Label, Button, Entry, Checkbutton, BooleanVar, StringVar, Frame
 
 # Logging Setup
 def log(message, level="INFO"):
@@ -12,18 +11,22 @@ def log(message, level="INFO"):
 
 log("SystemManager-SageHelper gestartet.")
 
-# Funktion für Ping-Test mit DNS- und IP-Unterstützung
+# Funktion für Netzwerkscan mit `ping3`
 def is_host_reachable(host):
-    response = os.system(f"ping -n 1 {host} >nul 2>&1")
-    return response == 0
+    try:
+        response = ping(host, timeout=1)
+        return response is not None
+    except PingError as e:
+        log(f"Ping-Fehler bei {host}: {str(e)}", level="ERROR")
+        return False
 
-# Funktionen zur Rollenprüfung
+# Rollenprüfungs-Funktionen
 
 def check_sql_roles(server):
     log(f"Überprüfe SQL-Rollen auf {server}...")
     try:
         result = subprocess.run(
-            ["sc", "\\\\" + server, "query", "type= service", "state= all"],
+            ["sc", f"\\\\{server}", "query", "type= service", "state= all"],
             capture_output=True,
             text=True,
         )
@@ -73,9 +76,9 @@ def start_gui():
     roles_frame = Frame(app)
     roles_frame.grid(row=1, padx=10, pady=10)
 
-    Label(roles_frame, text="Bitte Servernamen eingeben:").grid(row=0, column=0, sticky="w")
-    server_name_var = StringVar()
-    Entry(roles_frame, textvariable=server_name_var).grid(row=1, column=0)
+    Label(roles_frame, text="Bitte Servernamen/Subnetz eingeben:").grid(row=0, column=0, sticky="w")
+    subnet_var = StringVar(value="192.168.1.")
+    Entry(roles_frame, textvariable=subnet_var).grid(row=1, column=0)
 
     sql_var = BooleanVar()
     app_var = BooleanVar()
@@ -91,27 +94,20 @@ def start_gui():
 
     def scan_network():
         progress_label["text"] = "Scanning... Bitte Warten."
-        entered_host = server_name_var.get().strip()
+        subnet = subnet_var.get().strip()
         reachable_hosts = []
 
-        if entered_host:
-            log(f"Manuell eingegebener Server: {entered_host}")
-            if is_host_reachable(entered_host):
-                reachable_hosts.append(entered_host)
-            else:
-                log(f"Server {entered_host} nicht erreichbar.", level="WARNING")
-
-        # Define subnet for automatic scan
-        subnet = "192.168.1."
+        # Automatischer Netzwerkscan
         with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
             tasks = [executor.submit(is_host_reachable, f"{subnet}{i}") for i in range(1, 255)]
-            results = [f"{subnet}{i}" for i, task in enumerate(tasks, 1) if task.result()]
-            reachable_hosts.extend(results)
+            for i, task in enumerate(tasks, 1):
+                if task.result():
+                    reachable_hosts.append(f"{subnet}{i}")
 
         progress_label["text"] = f"Scan abgeschlossen. {len(reachable_hosts)} Hosts erreichbar."
         log(f"Gefundene Hosts: {reachable_hosts}")
 
-        # Rollen prüfen und anzeigen
+        # Rollenprüfungen
         for server in reachable_hosts:
             if sql_var.get():
                 check_sql_roles(server)
