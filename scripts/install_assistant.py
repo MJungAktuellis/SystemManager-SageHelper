@@ -1,84 +1,50 @@
-"""
-install_assistant.py
-
-Automatische Einrichtung und Konfiguration des SystemManager-SageHelper.
-Funktionen enthalten:
-1. Überprüfung der Python-Installation.
-2. Installation von Abhängigkeiten.
-3. Erstellung der notwendigen Verzeichnisse.
-4. Kurzer Test aller Module nach der Installation.
-"""
-
+import os
 import subprocess
 import sys
-import os
-from pathlib import Path
+from tkinter import Tk, filedialog, messagebox
 
-def python_version_pruefen():
-    """
-    Prüft, ob Python in der richtigen Version installiert ist.
-    """
-    print("\n=== Überprüfung der Python-Version ===")
-    if sys.version_info < (3, 11):
-        print("Python 3.11 oder höher ist erforderlich. Bitte aktualisieren.")
-        sys.exit(1)
-    print("✓ Python-Version ist kompatibel: ", sys.version)
+def log(message, level="INFO"):
+    with open("install_log.txt", "a") as log_file:
+        log_file.write(f"[{level}] {message}\n")
 
-def abhaengigkeiten_installieren():
-    """
-    Installiert Packages aus der requirements.txt.
-    """
-    print("\n=== Installation von Abhängigkeiten ===")
+def check_python_version():
+    if sys.version_info < (3, 7):
+        raise EnvironmentError("Python 3.7 oder höher ist erforderlich.")
+
+def install_dependencies():
     try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
-        print("✓ Alle Abhängigkeiten erfolgreich installiert.")
-    except Exception as e:
-        print("Fehler bei der Installation von Abhängigkeiten:", e)
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "ping3"])
+        log("ping3 erfolgreich installiert.")
+    except subprocess.CalledProcessError as e:
+        log(f"Fehler bei der Installation einer Abhängigkeit: {str(e)}", level="ERROR")
+        messagebox.showinfo("Fehler", "Fehler bei der Installation von Abhängigkeiten: ping3")
         sys.exit(1)
 
-def initiale_verzeichnisse_erstellen(verzeichnis_pfade: list):
-    """
-    Erstellt notwendige Verzeichnisse, falls diese nicht existieren.
-    """
-    print("\n=== Erstellung notwendiger Verzeichnisse ===")
-    for pfad in verzeichnis_pfade:
-        Path(pfad).mkdir(parents=True, exist_ok=True)
-        print(f"✓ Verzeichnis erstellt oder vorhanden: {pfad}")
-
-def module_testen():
-    """
-    Führt einfache Tests für jedes Modul aus, um Funktionalität zu verifizieren.
-    """
-    print("\n=== Test aller Module ===")
-    try:
-        subprocess.check_call([sys.executable, "src/server_analysis.py"])
-        subprocess.check_call([sys.executable, "src/folder_manager.py"])
-        subprocess.check_call([sys.executable, "src/doc_generator.py"])
-        print("✓ Alle Module erfolgreich getestet.")
-    except Exception as e:
-        print("Fehler beim Testen der Module:", e)
-        sys.exit(1)
+def select_installation_directory():
+    root = Tk()
+    root.withdraw()
+    installation_dir = filedialog.askdirectory(title="Installationsverzeichnis auswählen")
+    if not installation_dir:
+        installation_dir = os.path.join(os.environ["ProgramFiles"], "SystemManager-SageHelper")
+    log(f"Ausgewähltes Installationsverzeichnis: {installation_dir}")
+    return installation_dir
 
 def main():
-    print("======== SystemManager-SageHelper Installation-Assistent ========")
-    python_version_pruefen()
+    try:
+        log("Starte die Installation...")
+        check_python_version()
+        installation_dir = select_installation_directory()
+        os.makedirs(installation_dir, exist_ok=True)
+        install_dependencies()
 
-    # Installiere Abhängigkeiten
-    abhaengigkeiten_installieren()
-
-    # Basispfade anlegen
-    initiale_verzeichnisse_erstellen([
-        "logs",
-        "docs",
-        "output"
-    ])
-
-    # Module testen
-    module_testen()
-
-    print("\nInstallation abgeschlossen! Sie können das Programm jetzt verwenden.")
-    print("Starten Sie die Serveranalyse mit: python src/server_analysis.py")
+        log("Installation abgeschlossen.")
+        messagebox.showinfo("Erfolg", "Installation abgeschlossen. Anwendung kann gestartet werden.")
+    except EnvironmentError as e:
+        log(f"Fehler: {str(e)}", level="ERROR")
+        messagebox.showerror("Fehler", f"Installationsfehler: {str(e)}")
+    except Exception as e:
+        log(f"Unbekannter Fehler: {str(e)}", level="ERROR")
+        messagebox.showerror("Fehler", f"Unbekannt: {str(e)}")
 
 if __name__ == "__main__":
     main()
