@@ -1,24 +1,37 @@
-# Installationsassistent – Automatische Python-Installation
-Write-Host "=== SystemManager-SageHelper: One-Click-Installer ==="
+# Installationsassistent – Erzwinge Administratorrechte
+[CmdletBinding()]
+Param()
 
-# Pfad zur Python-Installation prüfen
+function Test-Admin {
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
+    $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if (-Not (Test-Admin)) {
+    Write-Host "[INFO] Skript läuft nicht mit Administratorrechten. Starte neu als Admin..."
+    Start-Process -FilePath PowerShell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    Exit
+}
+
+Write-Host "[INFO] Skript läuft mit Administratorrechten. Fortfahren..."
+
+# Python prüfen und ggf. installieren
+Write-Host "=== SystemManager-SageHelper: One-Click-Installer ==="
 Write-Host "[INFO] Prüfe, ob Python installiert ist..."
 python --version
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[INFO] Python ist nicht installiert. Starte automatische Installation..."
 
-    # Python-Installer herunterladen
     $PythonInstallerUrl = "https://www.python.org/ftp/python/3.11.5/python-3.11.5-amd64.exe"
     $InstallerPath = "$PSScriptRoot\\python-installer.exe"
 
     Write-Host "[INFO] Lade Python-Installer herunter..."
     Invoke-WebRequest -Uri $PythonInstallerUrl -OutFile $InstallerPath
 
-    # Installer ausführen
     Write-Host "[INFO] Installiere Python..."
     Start-Process -FilePath $InstallerPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -NoNewWindow -Wait
 
-    # Überprüfung nach der Installation
     python --version
     if ($LASTEXITCODE -ne 0) {
         Write-Host "❌ Fehler: Python konnte nicht installiert werden."
@@ -29,9 +42,8 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "✅ Python gefunden."
 }
 
-# Starte die eigentliche Installation
+# Starte den Haupt-Installationsprozess
 Write-Host "[INFO] Starte Installationsprozess für SystemManager-SageHelper..."
 python $PSScriptRoot/../src/visual_installer.py
 
-# Abschließende Meldung
 Write-Host "✅ Installationsprozess abgeschlossen. Sie können das Programm jetzt verwenden."
