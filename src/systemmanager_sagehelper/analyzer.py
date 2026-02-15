@@ -5,12 +5,24 @@ from __future__ import annotations
 import platform
 import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Iterable
+from typing import Iterable, Protocol
 
 from .config import STANDARD_PORTS
-from .models import AnalyseErgebnis, PortStatus, ServerZiel
+from .models import (
+    APPRollenDetails,
+    AnalyseErgebnis,
+    BetriebssystemDetails,
+    CTXRollenDetails,
+    DienstInfo,
+    HardwareDetails,
+    PortStatus,
+    RollenDetails,
+    SQLRollenDetails,
+    ServerZiel,
+    SoftwareInfo,
+)
 
 # Fachliche Zuordnung geöffneter Ports zu typischen Serverrollen.
 _PORT_ROLLEN_MAPPING: dict[int, str] = {
@@ -22,6 +34,8 @@ _PORT_ROLLEN_MAPPING: dict[int, str] = {
 _SAGE_KEYWORDS = ["sage", "sage100"]
 _PARTNER_KEYWORDS = ["dms", "crm", "edi", "shop", "bi", "isv"]
 _MANAGEMENT_STUDIO_KEYWORDS = ["sql server management studio", "ssms"]
+_SQL_SERVICE_KEYWORDS = ("mssql", "sql server", "sqlserveragent")
+_CTX_SERVICE_KEYWORDS = ("termservice", "sessionenv", "umrdpservice", "rdp")
 
 
 @dataclass(frozen=True)
@@ -35,12 +49,70 @@ class SocketKandidat:
 
 
 @dataclass(frozen=True)
-class Systeminventar:
-    """Hält lokal auslesbare Systemdaten für eine strukturierte Ergebnisanzeige."""
+class RemoteSystemdaten:
+    """Einheitliche Struktur für Daten aus einem Remote-Provider (WMI/WinRM)."""
 
-    cpu_logische_kerne: int | None
-    cpu_modell: str | None
-    installierte_anwendungen: list[str]
+    betriebssystem: BetriebssystemDetails = field(default_factory=BetriebssystemDetails)
+    hardware: HardwareDetails = field(default_factory=HardwareDetails)
+    dienste: list[DienstInfo] = field(default_factory=list)
+    software: list[SoftwareInfo] = field(default_factory=list)
+
+
+class RemoteDatenProvider(Protocol):
+    """Interface für austauschbare Remote-Adapter (z. B. WinRM oder WMI)."""
+
+    def ist_verfuegbar(self) -> bool:
+        """Liefert `True`, wenn der Adapter einsatzbereit ist."""
+
+    def lese_systemdaten(self, server: str) -> RemoteSystemdaten | None:
+        """Liest strukturierte Systemdaten für einen Zielserver."""
+
+
+class WinRMAdapter:
+    """Basisadapter für WinRM.
+
+    Die produktive Implementierung kann hier später angebunden werden,
+    ohne die fachliche Analysepipeline zu verändern.
+    """
+
+    def ist_verfuegbar(self) -> bool:
+        return False
+
+    def lese_systemdaten(self, server: str) -> RemoteSystemdaten | None:  # noqa: ARG002
+        return None
+
+
+class WMIAdapter:
+    """Basisadapter für WMI.
+
+    Der Adapter liefert aktuell noch keine Daten, stellt jedoch die
+    saubere Integrationsstelle für spätere Erweiterungen bereit.
+    """
+
+    def ist_verfuegbar(self) -> bool:
+        return False
+
+    def lese_systemdaten(self, server: str) -> RemoteSystemdaten | None:  # noqa: ARG002
+        return None
+
+
+class KombinierterRemoteProvider:
+    """Probiert mehrere Adapter in Reihenfolge aus und nutzt den ersten Treffer."""
+
+    def __init__(self, adapter: Iterable[RemoteDatenProvider] | None = None) -> None:
+        self._adapter = list(adapter) if adapter is not None else [WinRMAdapter(), WMIAdapter()]
+
+    def ist_verfuegbar(self) -> bool:
+        return any(a.ist_verfuegbar() for a in self._adapter)
+
+    def lese_systemdaten(self, server: str) -> RemoteSystemdaten | None:
+        for adapter in self._adapter:
+            if not adapter.ist_verfuegbar():
+                continue
+            daten = adapter.lese_systemdaten(server)
+            if daten is not None:
+                return daten
+        return None
 
 
 def _normalisiere_rollen(rollen: list[str]) -> list[str]:
@@ -111,21 +183,23 @@ def _ermittle_systeminformationen(zielname: str) -> tuple[str | None, str | None
     return None, None
 
 
-def _ermittle_lokale_systeminventar() -> Systeminventar:
+def _ermittle_lokale_systeminventar() -> RemoteSystemdaten:
     """Liest lokal verfügbare Inventardaten ohne zusätzliche Abhängigkeiten aus."""
-    # Best-Practice: zuverlässige Kernanzahl über os.cpu_count.
     import os
 
-    cpu_logische_kerne = os.cpu_count()
-    cpu_modell = platform.processor() or None
-
-    # Ohne Windows-WMI-Abhängigkeiten erfassen wir nur lokal installierte Python-Pakete als Basis.
-    # Dadurch bleibt das Tool portabel und stabil, bis ein optionales WMI-Plugin ergänzt wird.
-    anwendungen = _normalisiere_liste_ohne_duplikate(_ermittle_python_paketnamen())
-    return Systeminventar(
-        cpu_logische_kerne=cpu_logische_kerne,
-        cpu_modell=cpu_modell,
-        installierte_anwendungen=anwendungen,
+    software = [SoftwareInfo(name=paket) for paket in _normalisiere_liste_ohne_duplikate(_ermittle_python_paketnamen())]
+    return RemoteSystemdaten(
+        betriebssystem=BetriebssystemDetails(
+            name=platform.system() or None,
+            version=platform.version() or None,
+            build=platform.release() or None,
+            architektur=platform.machine() or None,
+        ),
+        hardware=HardwareDetails(
+            cpu_logische_kerne=os.cpu_count(),
+            cpu_modell=platform.processor() or None,
+        ),
+        software=software,
     )
 
 
@@ -176,7 +250,73 @@ def _analysiere_port(port: int, server: str) -> PortStatus:
     return PortStatus(port=port, offen=offen, bezeichnung=port_info.bezeichnung)
 
 
-def analysiere_server(ziel: ServerZiel) -> AnalyseErgebnis:
+def _uebernehme_inventardaten(ergebnis: AnalyseErgebnis, inventar: RemoteSystemdaten) -> None:
+    """Schreibt Inventardaten in das Ergebnis inkl. Rückwärtskompatibilität."""
+    ergebnis.betriebssystem_details = inventar.betriebssystem
+    ergebnis.hardware_details = inventar.hardware
+    ergebnis.dienste = inventar.dienste
+    ergebnis.software = inventar.software
+
+    # Kompatibilitätsfelder für bestehende Reports/CLI.
+    ergebnis.betriebssystem = inventar.betriebssystem.name or ergebnis.betriebssystem
+    ergebnis.os_version = inventar.betriebssystem.version or ergebnis.os_version
+    ergebnis.cpu_logische_kerne = inventar.hardware.cpu_logische_kerne
+    ergebnis.cpu_modell = inventar.hardware.cpu_modell
+
+    installierte = [
+        f"{eintrag.name} {eintrag.version}".strip() if eintrag.version else eintrag.name
+        for eintrag in inventar.software
+        if eintrag.name
+    ]
+    ergebnis.installierte_anwendungen = _normalisiere_liste_ohne_duplikate(installierte)
+
+
+def _pruefe_rollen(ergebnis: AnalyseErgebnis) -> None:
+    """Ermittelt strukturierte Rollenindikatoren aus Ports, Diensten und Software."""
+    dienstnamen = [dienst.name.lower() for dienst in ergebnis.dienste]
+    software_namen = [
+        f"{eintrag.name} {eintrag.version}".strip() if eintrag.version else eintrag.name
+        for eintrag in ergebnis.software
+    ]
+
+    sql_dienste = [dienst.name for dienst in ergebnis.dienste if any(k in dienst.name.lower() for k in _SQL_SERVICE_KEYWORDS)]
+    sql_instanzen = [name for name in software_namen if "sql server" in name.lower()]
+    sql_erkannt = bool(sql_dienste or sql_instanzen or any(p.offen and p.port == 1433 for p in ergebnis.ports))
+
+    sage_eintraege = [eintrag for eintrag in ergebnis.software if any(k in eintrag.name.lower() for k in _SAGE_KEYWORDS)]
+    sage_pfade = _normalisiere_liste_ohne_duplikate(
+        eintrag.installationspfad or "" for eintrag in sage_eintraege
+    )
+    sage_versionen = _normalisiere_liste_ohne_duplikate(
+        f"{eintrag.name} {eintrag.version}".strip() if eintrag.version else eintrag.name for eintrag in sage_eintraege
+    )
+    app_erkannt = bool(sage_pfade or sage_versionen)
+
+    ctx_dienste = [dienst.name for dienst in ergebnis.dienste if any(k in dienst.name.lower() for k in _CTX_SERVICE_KEYWORDS)]
+    ctx_indikatoren: list[str] = []
+    if any(port.offen and port.port == 3389 for port in ergebnis.ports):
+        ctx_indikatoren.append("RDP-Port 3389 erreichbar")
+    if any("termservice" in name for name in dienstnamen):
+        ctx_indikatoren.append("TermService erkannt")
+    if any("sessionenv" in name for name in dienstnamen):
+        ctx_indikatoren.append("SessionEnv erkannt")
+    ctx_erkannt = bool(ctx_dienste or ctx_indikatoren)
+
+    ergebnis.rollen_details = RollenDetails(
+        sql=SQLRollenDetails(erkannt=sql_erkannt, instanzen=sql_instanzen, dienste=sql_dienste),
+        app=APPRollenDetails(erkannt=app_erkannt, sage_pfade=sage_pfade, sage_versionen=sage_versionen),
+        ctx=CTXRollenDetails(erkannt=ctx_erkannt, terminaldienste=ctx_dienste, session_indikatoren=ctx_indikatoren),
+    )
+
+    ergebnis.sage_version, ergebnis.partner_anwendungen, ergebnis.management_studio_version = _klassifiziere_anwendungen(
+        software_namen
+    )
+
+
+def analysiere_server(
+    ziel: ServerZiel,
+    remote_provider: RemoteDatenProvider | None = None,
+) -> AnalyseErgebnis:
     """Erstellt ein belastbares Analyseergebnis mit Portstatus und Hinweisen."""
     ziel_rollen = _normalisiere_rollen(ziel.rollen)
     os_name, os_version = _ermittle_systeminformationen(ziel.name)
@@ -219,21 +359,28 @@ def analysiere_server(ziel: ServerZiel) -> AnalyseErgebnis:
     elif erkannte_rollen and not ziel_rollen:
         ergebnis.rollen = sorted(erkannte_rollen)
 
-    # Lokale Detailanalyse (CPU + installierte Anwendungen) nur für lokale Ziele.
+    provider = remote_provider or KombinierterRemoteProvider()
     if os_name is not None:
-        inventar = _ermittle_lokale_systeminventar()
-        ergebnis.cpu_logische_kerne = inventar.cpu_logische_kerne
-        ergebnis.cpu_modell = inventar.cpu_modell
-        ergebnis.installierte_anwendungen = inventar.installierte_anwendungen
-        (
-            ergebnis.sage_version,
-            ergebnis.partner_anwendungen,
-            ergebnis.management_studio_version,
-        ) = _klassifiziere_anwendungen(ergebnis.installierte_anwendungen)
+        _uebernehme_inventardaten(ergebnis, _ermittle_lokale_systeminventar())
     else:
-        ergebnis.hinweise.append(
-            "Remote-Ziel erkannt: CPU- und Softwaredetails benötigen ein Windows-Remote-Plugin (WMI/WinRM)."
-        )
+        remote_daten = provider.lese_systemdaten(ergebnis.server) if provider.ist_verfuegbar() else None
+        if remote_daten is None:
+            ergebnis.hinweise.append(
+                "Remote-Ziel erkannt: CPU-, Dienst- und Softwaredetails benötigen einen aktiven WinRM/WMI-Adapter."
+            )
+        else:
+            _uebernehme_inventardaten(ergebnis, remote_daten)
+
+    _pruefe_rollen(ergebnis)
+
+    if ergebnis.rollen_details.sql.erkannt:
+        erkannte_rollen.add("SQL")
+    if ergebnis.rollen_details.app.erkannt:
+        erkannte_rollen.add("APP")
+    if ergebnis.rollen_details.ctx.erkannt:
+        erkannte_rollen.add("CTX")
+    if not ergebnis.rollen and erkannte_rollen:
+        ergebnis.rollen = sorted(erkannte_rollen)
 
     if platform.system().lower() != "windows":
         ergebnis.hinweise.append(
@@ -243,18 +390,21 @@ def analysiere_server(ziel: ServerZiel) -> AnalyseErgebnis:
     return ergebnis
 
 
-def analysiere_mehrere_server(ziele: list[ServerZiel], max_worker: int = 6) -> list[AnalyseErgebnis]:
+def analysiere_mehrere_server(
+    ziele: list[ServerZiel],
+    max_worker: int = 6,
+    remote_provider: RemoteDatenProvider | None = None,
+) -> list[AnalyseErgebnis]:
     """Analysiert mehrere Server parallel für bessere Performance in größeren Umgebungen."""
     if not ziele:
         return []
 
     ergebnisse: list[AnalyseErgebnis] = []
     with ThreadPoolExecutor(max_workers=min(max_worker, len(ziele))) as executor:
-        futures = [executor.submit(analysiere_server, ziel) for ziel in ziele]
+        futures = [executor.submit(analysiere_server, ziel, remote_provider) for ziel in ziele]
         for future in as_completed(futures):
             ergebnisse.append(future.result())
 
-    # Ergebnisliste stabil nach Servername sortieren.
     return sorted(ergebnisse, key=lambda item: item.server.lower())
 
 

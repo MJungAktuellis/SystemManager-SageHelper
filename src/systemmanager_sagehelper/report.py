@@ -22,6 +22,8 @@ def render_markdown(ergebnisse: list[AnalyseErgebnis]) -> str:
     zeilen: list[str] = ["# Serverdokumentation", ""]
 
     for ergebnis in ergebnisse:
+        os_details = ergebnis.betriebssystem_details
+        hw_details = ergebnis.hardware_details
         zeilen.extend(
             [
                 f"## Server: {ergebnis.server}",
@@ -32,9 +34,43 @@ def render_markdown(ergebnisse: list[AnalyseErgebnis]) -> str:
                 f"- CPU (logische Kerne): {ergebnis.cpu_logische_kerne if ergebnis.cpu_logische_kerne is not None else 'unbekannt'}",
                 f"- CPU-Modell: {ergebnis.cpu_modell or 'unbekannt'}",
                 f"- Sage-Version: {ergebnis.sage_version or 'nicht erkannt'}",
+                "- SQL Management Studio: " + (ergebnis.management_studio_version or "nicht erkannt"),
+                "",
+                "### Betriebssystem-Details",
+                f"- Name: {os_details.name or 'unbekannt'}",
+                f"- Version: {os_details.version or 'unbekannt'}",
+                f"- Build: {os_details.build or 'unbekannt'}",
+                f"- Architektur: {os_details.architektur or 'unbekannt'}",
+                "",
+                "### Hardware-Details",
+                f"- CPU: {hw_details.cpu_modell or 'unbekannt'}",
                 (
-                    "- SQL Management Studio: "
-                    + (ergebnis.management_studio_version or "nicht erkannt")
+                    "- Logische Kerne: "
+                    + (str(hw_details.cpu_logische_kerne) if hw_details.cpu_logische_kerne is not None else "unbekannt")
+                ),
+                (
+                    "- Arbeitsspeicher (GB): "
+                    + (str(hw_details.arbeitsspeicher_gb) if hw_details.arbeitsspeicher_gb is not None else "unbekannt")
+                ),
+                "",
+                "### Rollenprüfung",
+                (
+                    "- SQL: "
+                    + ("erkannt" if ergebnis.rollen_details.sql.erkannt else "nicht erkannt")
+                    + f" | Instanzen: {', '.join(ergebnis.rollen_details.sql.instanzen) or 'keine'}"
+                    + f" | Dienste: {', '.join(ergebnis.rollen_details.sql.dienste) or 'keine'}"
+                ),
+                (
+                    "- APP: "
+                    + ("erkannt" if ergebnis.rollen_details.app.erkannt else "nicht erkannt")
+                    + f" | Sage-Pfade: {', '.join(ergebnis.rollen_details.app.sage_pfade) or 'keine'}"
+                    + f" | Sage-Versionen: {', '.join(ergebnis.rollen_details.app.sage_versionen) or 'keine'}"
+                ),
+                (
+                    "- CTX: "
+                    + ("erkannt" if ergebnis.rollen_details.ctx.erkannt else "nicht erkannt")
+                    + f" | Terminaldienste: {', '.join(ergebnis.rollen_details.ctx.terminaldienste) or 'keine'}"
+                    + f" | Session-Indikatoren: {', '.join(ergebnis.rollen_details.ctx.session_indikatoren) or 'keine'}"
                 ),
                 "",
                 "### Portprüfung",
@@ -44,6 +80,21 @@ def render_markdown(ergebnisse: list[AnalyseErgebnis]) -> str:
         for port in ergebnis.ports:
             status = "✅ offen" if port.offen else "⚠️ blockiert/unerreichbar"
             zeilen.append(f"- {port.port} ({port.bezeichnung}): {status}")
+
+        zeilen.append("")
+        zeilen.append("### Dienste (Auszug)")
+        zeilen.extend(_render_liste_tabelle([f"{dienst.name} ({dienst.status or 'unbekannt'})" for dienst in ergebnis.dienste]))
+
+        zeilen.append("")
+        zeilen.append("### Software (Auszug)")
+        zeilen.extend(
+            _render_liste_tabelle(
+                [
+                    f"{eintrag.name} {eintrag.version}".strip() if eintrag.version else eintrag.name
+                    for eintrag in ergebnis.software
+                ]
+            )
+        )
 
         zeilen.append("")
         zeilen.append("### Partneranwendungen")

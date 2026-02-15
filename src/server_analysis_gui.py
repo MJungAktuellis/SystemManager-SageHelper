@@ -95,31 +95,41 @@ def _deklarationszusammenfassung(ziele: list[ServerZiel], zeilen: list[ServerTab
     return "\n".join(zusammenfassung)
 
 
-def _formatiere_ergebnisliste(ergebnisse: list[AnalyseErgebnis]) -> str:
-    """Render-Text für die Ergebnisliste pro analysiertem Server."""
-    if not ergebnisse:
-        return "Keine Ergebnisse verfügbar."
+def _kurzstatus(ergebnis: AnalyseErgebnis) -> str:
+    """Erzeugt einen kompakten Statussatz je Server für die aufklappbare Liste."""
+    offene_ports = [str(port.port) for port in ergebnis.ports if port.offen]
+    rollen = ", ".join(ergebnis.rollen) if ergebnis.rollen else "nicht gesetzt/ermittelt"
+    return f"Rollen: {rollen} | Offene Ports: {', '.join(offene_ports) if offene_ports else 'keine'}"
 
-    bloecke: list[str] = []
-    for ergebnis in ergebnisse:
-        offene_ports = [str(port.port) for port in ergebnis.ports if port.offen]
-        bloecke.extend(
-            [
-                f"Server: {ergebnis.server}",
-                f"  Rollen: {', '.join(ergebnis.rollen) if ergebnis.rollen else 'nicht gesetzt/ermittelt'}",
-                f"  Offene Ports: {', '.join(offene_ports) if offene_ports else 'keine'}",
-                "  Hinweise:",
-            ]
-        )
 
-        if ergebnis.hinweise:
-            for hinweis in ergebnis.hinweise:
-                bloecke.append(f"    - {hinweis}")
-        else:
-            bloecke.append("    - Keine Hinweise")
-        bloecke.append("")
+def _detailzeilen(ergebnis: AnalyseErgebnis) -> list[str]:
+    """Liefert strukturierte Detailzeilen je Server für die aufklappbare Ansicht."""
+    details: list[str] = [
+        f"Betriebssystem: {ergebnis.betriebssystem or 'unbekannt'} ({ergebnis.os_version or 'unbekannt'})",
+        (
+            "SQL-Prüfung: "
+            + ("erkannt" if ergebnis.rollen_details.sql.erkannt else "nicht erkannt")
+            + f" | Instanzen: {', '.join(ergebnis.rollen_details.sql.instanzen) or 'keine'}"
+        ),
+        (
+            "APP-Prüfung: "
+            + ("erkannt" if ergebnis.rollen_details.app.erkannt else "nicht erkannt")
+            + f" | Sage-Versionen: {', '.join(ergebnis.rollen_details.app.sage_versionen) or 'keine'}"
+        ),
+        (
+            "CTX-Prüfung: "
+            + ("erkannt" if ergebnis.rollen_details.ctx.erkannt else "nicht erkannt")
+            + f" | Indikatoren: {', '.join(ergebnis.rollen_details.ctx.session_indikatoren) or 'keine'}"
+        ),
+    ]
 
-    return "\n".join(bloecke).strip()
+    if ergebnis.hinweise:
+        details.append("Hinweise:")
+        details.extend(f"- {hinweis}" for hinweis in ergebnis.hinweise)
+    else:
+        details.append("Hinweise: keine")
+
+    return details
 
 
 class MehrserverAnalyseGUI:
@@ -128,7 +138,7 @@ class MehrserverAnalyseGUI:
     def __init__(self, master: tk.Tk) -> None:
         self.master = master
         self.master.title("SystemManager-SageHelper – Mehrserveranalyse")
-        self.master.geometry("980x700")
+        self.master.geometry("980x760")
 
         self._zeilen_nach_id: dict[str, ServerTabellenZeile] = {}
 
@@ -219,9 +229,23 @@ class MehrserverAnalyseGUI:
         ).pack(side="right", padx=4)
 
     def _baue_ergebnisbereich(self) -> None:
-        tk.Label(self.master, text="Ergebnisliste pro Server:", font=("Arial", 12, "bold")).pack(anchor="w", padx=12)
-        self.text_ergebnisse = tk.Text(self.master, height=14, wrap="word")
-        self.text_ergebnisse.pack(fill="both", expand=True, padx=12, pady=(4, 12))
+        tk.Label(self.master, text="Analyseergebnis je Server (aufklappbar):", font=("Arial", 12, "bold")).pack(
+            anchor="w", padx=12
+        )
+
+        frame = tk.Frame(self.master)
+        frame.pack(fill="both", expand=True, padx=12, pady=(4, 12))
+
+        self.tree_ergebnisse = ttk.Treeview(frame, columns=("details",), show="tree headings", height=11)
+        self.tree_ergebnisse.heading("#0", text="Server / Kurzstatus")
+        self.tree_ergebnisse.heading("details", text="Detailansicht")
+        self.tree_ergebnisse.column("#0", width=320)
+        self.tree_ergebnisse.column("details", width=620)
+        self.tree_ergebnisse.pack(side="left", fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.tree_ergebnisse.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.tree_ergebnisse.configure(yscrollcommand=scrollbar.set)
 
     def _exists_server(self, servername: str) -> bool:
         suchwert = _normalisiere_servernamen(servername)
@@ -336,6 +360,22 @@ class MehrserverAnalyseGUI:
             self._zeilen_nach_id.pop(item_id, None)
             self.tree.delete(item_id)
 
+    def _zeige_ergebnisse_aufklappbar(self, ergebnisse: list[AnalyseErgebnis]) -> None:
+        """Baut Kurzstatus + Detailansicht als aufklappbaren Ergebnisbaum auf."""
+        for item_id in self.tree_ergebnisse.get_children(""):
+            self.tree_ergebnisse.delete(item_id)
+
+        for ergebnis in ergebnisse:
+            server_knoten = self.tree_ergebnisse.insert(
+                "",
+                "end",
+                text=ergebnis.server,
+                values=(_kurzstatus(ergebnis),),
+                open=False,
+            )
+            for detail in _detailzeilen(ergebnis):
+                self.tree_ergebnisse.insert(server_knoten, "end", text="", values=(detail,))
+
     def analyse_starten(self) -> None:
         zeilen = list(self._zeilen_nach_id.values())
         ziele = _baue_serverziele(zeilen)
@@ -364,8 +404,7 @@ class MehrserverAnalyseGUI:
             zeile.status = status_nach_server.get(_normalisiere_servernamen(zeile.servername), "unbekannt")
             self.tree.set(item_id, _SPALTE_STATUS, zeile.status)
 
-        self.text_ergebnisse.delete("1.0", tk.END)
-        self.text_ergebnisse.insert(tk.END, _formatiere_ergebnisliste(ergebnisse))
+        self._zeige_ergebnisse_aufklappbar(ergebnisse)
 
 
 def start_gui() -> None:

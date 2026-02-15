@@ -22,6 +22,80 @@ class PortStatus:
 
 
 @dataclass
+class BetriebssystemDetails:
+    """Strukturierte Betriebssystemdaten aus lokaler oder Remote-Analyse."""
+
+    name: str | None = None
+    version: str | None = None
+    build: str | None = None
+    architektur: str | None = None
+
+
+@dataclass
+class HardwareDetails:
+    """Hardwarebezogene Kerndaten für Kapazitäts- und Plausibilitätsprüfungen."""
+
+    cpu_modell: str | None = None
+    cpu_logische_kerne: int | None = None
+    arbeitsspeicher_gb: float | None = None
+
+
+@dataclass
+class DienstInfo:
+    """Abbild eines Dienstes (lokal oder remote) für Rollenindikatoren."""
+
+    name: str
+    status: str | None = None
+    starttyp: str | None = None
+
+
+@dataclass
+class SoftwareInfo:
+    """Abbild eines installierten Softwarepakets inkl. optionalem Installationspfad."""
+
+    name: str
+    version: str | None = None
+    hersteller: str | None = None
+    installationspfad: str | None = None
+
+
+@dataclass
+class SQLRollenDetails:
+    """Auswertung der SQL-Rolle auf Basis von Diensten und Instanzhinweisen."""
+
+    erkannt: bool = False
+    instanzen: list[str] = field(default_factory=list)
+    dienste: list[str] = field(default_factory=list)
+
+
+@dataclass
+class APPRollenDetails:
+    """Auswertung der APP-Rolle auf Basis von Sage-Pfaden und Versionen."""
+
+    erkannt: bool = False
+    sage_pfade: list[str] = field(default_factory=list)
+    sage_versionen: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CTXRollenDetails:
+    """Auswertung der CTX-Rolle mit Session-/Terminaldienst-Indikatoren."""
+
+    erkannt: bool = False
+    terminaldienste: list[str] = field(default_factory=list)
+    session_indikatoren: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RollenDetails:
+    """Gruppiert alle strukturierten Rollenauswertungen."""
+
+    sql: SQLRollenDetails = field(default_factory=SQLRollenDetails)
+    app: APPRollenDetails = field(default_factory=APPRollenDetails)
+    ctx: CTXRollenDetails = field(default_factory=CTXRollenDetails)
+
+
+@dataclass
 class AnalyseErgebnis:
     """Sammelt alle Informationen zu einem Serverlauf."""
 
@@ -38,3 +112,8 @@ class AnalyseErgebnis:
     partner_anwendungen: list[str] = field(default_factory=list)
     management_studio_version: str | None = None
     hinweise: list[str] = field(default_factory=list)
+    betriebssystem_details: BetriebssystemDetails = field(default_factory=BetriebssystemDetails)
+    hardware_details: HardwareDetails = field(default_factory=HardwareDetails)
+    dienste: list[DienstInfo] = field(default_factory=list)
+    software: list[SoftwareInfo] = field(default_factory=list)
+    rollen_details: RollenDetails = field(default_factory=RollenDetails)
