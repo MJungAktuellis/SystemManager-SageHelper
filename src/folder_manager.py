@@ -10,10 +10,11 @@ Funktionen enthalten:
 4. Logging zur Nachvollziehbarkeit aller Änderungen.
 """
 
-import os
 from pathlib import Path
 import subprocess
 import logging
+import re
+from dataclasses import dataclass, asdict
 
 # Logging-Konfiguration
 logging.basicConfig(
@@ -21,6 +22,83 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+
+@dataclass
+class FreigabeErgebnis:
+    """Ergebnisobjekt für die Verarbeitung einer einzelnen Freigabe."""
+
+    name: str
+    ordner: str
+    erfolg: bool
+    meldung: str
+    principal: str = ""
+    returncode: int | None = None
+    stdout: str = ""
+    stderr: str = ""
+
+
+def _logge_prozessdetails(aktion: str, befehl: list[str], ergebnis: subprocess.CompletedProcess[str]) -> None:
+    """Schreibt strukturierte Prozessdetails in das Log für bessere Fehleranalyse."""
+    logging.info(
+        "%s | cmd=%s | rc=%s | stdout=%s | stderr=%s",
+        aktion,
+        " ".join(befehl),
+        ergebnis.returncode,
+        ergebnis.stdout.strip(),
+        ergebnis.stderr.strip(),
+    )
+
+
+def _ermittle_systemfehlercode(stdout: str, stderr: str) -> int | None:
+    """Liest bekannte Windows-Systemfehlercodes aus stdout/stderr aus."""
+    kombiniert = f"{stdout}\n{stderr}"
+    treffer = re.search(r"Systemfehler\s+(\d+)", kombiniert, re.IGNORECASE)
+    return int(treffer.group(1)) if treffer else None
+
+
+def _freigabe_existiert(freigabename: str) -> bool:
+    """Prüft defensiv, ob eine SMB-Freigabe bereits existiert."""
+    befehl = ["net", "share", freigabename]
+    ergebnis = subprocess.run(befehl, capture_output=True, text=True, check=False)
+    _logge_prozessdetails(f"Freigabe-Prüfung {freigabename}", befehl, ergebnis)
+    if ergebnis.returncode == 0:
+        return True
+
+    # Systemfehler 2310 bedeutet: Freigabe nicht gefunden.
+    return _ermittle_systemfehlercode(ergebnis.stdout, ergebnis.stderr) != 2310
+
+
+def _ermittle_principal_kandidaten() -> list[str]:
+    """Ermittelt robuste Principal-Kandidaten mit SID-basiertem Primärweg."""
+    kandidaten: list[str] = []
+    sid_befehl = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        "([System.Security.Principal.SecurityIdentifier]'S-1-1-0')."
+        "Translate([System.Security.Principal.NTAccount]).Value",
+    ]
+    sid_ergebnis = subprocess.run(sid_befehl, capture_output=True, text=True, check=False)
+    _logge_prozessdetails("Principal-Auflösung via SID", sid_befehl, sid_ergebnis)
+
+    if sid_ergebnis.returncode == 0 and sid_ergebnis.stdout.strip():
+        kandidaten.append(sid_ergebnis.stdout.strip())
+
+    # Bewusst lokalisierte Fallbacks, falls SID-Übersetzung nicht verfügbar ist.
+    kandidaten.extend(["Everyone", "Jeder", "Authenticated Users"])
+
+    # Reihenfolge behalten, Duplikate entfernen.
+    return list(dict.fromkeys(kandidaten))
+
+
+def _run_share_befehl(befehl: list[str], aktion: str) -> subprocess.CompletedProcess[str]:
+    """Zentrale Ausführung mit capture_output für konsistente Auswertung."""
+    ergebnis = subprocess.run(befehl, capture_output=True, text=True, check=False)
+    _logge_prozessdetails(aktion, befehl, ergebnis)
+    return ergebnis
+
+
 
 def erstelle_ordnerstruktur(basis_pfad: str):
     """
@@ -53,12 +131,15 @@ def erstelle_ordnerstruktur(basis_pfad: str):
             logging.error(f"Fehler beim Erstellen von {ziel_pfad}: {e}")
 
 
-def setze_freigaben(basis_pfad: str):
+def setze_freigaben(basis_pfad: str) -> list[FreigabeErgebnis]:
     """
     Setzt Freigaben für spezifische Ordner innerhalb der Ordnerstruktur.
 
     Args:
         basis_pfad (str): Hauptpfad der Ordnerstruktur.
+
+    Returns:
+        list[FreigabeErgebnis]: Ergebnisliste je Freigabe für GUI/Reporting.
     """
     freigaben = [
         {"ordner": basis_pfad,               "name": "SystemAG$",     "rechte": "READ"},
@@ -66,21 +147,97 @@ def setze_freigaben(basis_pfad: str):
         {"ordner": f"{basis_pfad}/LiveupdateOL", "name": "LiveupdateOL$", "rechte": "CHANGE"}
     ]
 
-    for freigabe in freigaben:
-        try:
-            # Vorherige Freigabe löschen (wenn vorhanden)
-            subprocess.run(["net", "share", freigabe["name"], "/DELETE"], check=False)
+    principal_kandidaten = _ermittle_principal_kandidaten()
+    ergebnisse: list[FreigabeErgebnis] = []
 
-            # Neue Freigabe setzen
-            subprocess.run([
-                "net", "share",
-                f"{freigabe['name']}={freigabe['ordner']}",
-                f"/GRANT:Jeder,{freigabe['rechte']}",
-                "/REMARK:Automatisch erstellt"
-            ], check=True)
-            logging.info(f"Freigabe gesetzt: {freigabe['name']} -> {freigabe['rechte']}")
-        except Exception as e:
-            logging.error(f"Fehler beim Setzen der Freigabe {freigabe['name']}: {e}")
+    for freigabe in freigaben:
+        name = freigabe["name"]
+        ordner = freigabe["ordner"]
+        rechte = freigabe["rechte"]
+
+        if _freigabe_existiert(name):
+            loesch_befehl = ["net", "share", name, "/DELETE"]
+            loesch_ergebnis = _run_share_befehl(loesch_befehl, f"Freigabe löschen {name}")
+            if loesch_ergebnis.returncode != 0:
+                meldung = f"Vorhandene Freigabe konnte nicht gelöscht werden ({name})."
+                ergebnisse.append(
+                    FreigabeErgebnis(
+                        name=name,
+                        ordner=ordner,
+                        erfolg=False,
+                        meldung=meldung,
+                        returncode=loesch_ergebnis.returncode,
+                        stdout=loesch_ergebnis.stdout,
+                        stderr=loesch_ergebnis.stderr,
+                    )
+                )
+                logging.error(meldung)
+                continue
+
+        erstellt = False
+        letztes_ergebnis: subprocess.CompletedProcess[str] | None = None
+        letzte_meldung = ""
+
+        for principal in principal_kandidaten:
+            neu_befehl = [
+                "net",
+                "share",
+                f"{name}={ordner}",
+                f"/GRANT:{principal},{rechte}",
+                "/REMARK:Automatisch erstellt",
+            ]
+            neu_ergebnis = _run_share_befehl(neu_befehl, f"Freigabe erstellen {name}")
+            letztes_ergebnis = neu_ergebnis
+
+            if neu_ergebnis.returncode == 0:
+                meldung = f"Freigabe erfolgreich gesetzt: {name} -> {principal} ({rechte})"
+                ergebnisse.append(
+                    FreigabeErgebnis(
+                        name=name,
+                        ordner=ordner,
+                        erfolg=True,
+                        meldung=meldung,
+                        principal=principal,
+                        returncode=neu_ergebnis.returncode,
+                        stdout=neu_ergebnis.stdout,
+                        stderr=neu_ergebnis.stderr,
+                    )
+                )
+                logging.info(meldung)
+                erstellt = True
+                break
+
+            fehlercode = _ermittle_systemfehlercode(neu_ergebnis.stdout, neu_ergebnis.stderr)
+            letzte_meldung = (
+                f"Freigabe {name} mit Principal '{principal}' fehlgeschlagen"
+                f" (Systemfehler: {fehlercode or 'unbekannt'})."
+            )
+
+            # 1332 = Konto konnte nicht aufgelöst werden -> kontrollierter Fallback.
+            if fehlercode == 1332:
+                logging.warning("%s Fallback wird versucht.", letzte_meldung)
+                continue
+
+            # Für andere Fehlercode ist kein weiterer Fallback sinnvoll.
+            break
+
+        if not erstellt:
+            ergebnisse.append(
+                FreigabeErgebnis(
+                    name=name,
+                    ordner=ordner,
+                    erfolg=False,
+                    meldung=letzte_meldung or f"Freigabe {name} konnte nicht erstellt werden.",
+                    principal=principal_kandidaten[0] if principal_kandidaten else "",
+                    returncode=letztes_ergebnis.returncode if letztes_ergebnis else None,
+                    stdout=letztes_ergebnis.stdout if letztes_ergebnis else "",
+                    stderr=letztes_ergebnis.stderr if letztes_ergebnis else "",
+                )
+            )
+            logging.error(ergebnisse[-1].meldung)
+
+    logging.info("Freigabe-Ergebnisse: %s", [asdict(e) for e in ergebnisse])
+    return ergebnisse
 
 
 def pruefe_und_erstelle_struktur(basis_pfad: str):
