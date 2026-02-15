@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Iterable, Protocol
 
 from .config import STANDARD_PORTS
+from .logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 from .models import (
     APPRollenDetails,
     AnalyseErgebnis,
@@ -36,6 +37,8 @@ _PARTNER_KEYWORDS = ["dms", "crm", "edi", "shop", "bi", "isv"]
 _MANAGEMENT_STUDIO_KEYWORDS = ["sql server management studio", "ssms"]
 _SQL_SERVICE_KEYWORDS = ("mssql", "sql server", "sqlserveragent")
 _CTX_SERVICE_KEYWORDS = ("termservice", "sessionenv", "umrdpservice", "rdp")
+
+logger = konfiguriere_logger(__name__, dateiname="server_analysis.log")
 
 
 @dataclass(frozen=True)
@@ -316,13 +319,19 @@ def _pruefe_rollen(ergebnis: AnalyseErgebnis) -> None:
 def analysiere_server(
     ziel: ServerZiel,
     remote_provider: RemoteDatenProvider | None = None,
+    lauf_id: str | None = None,
 ) -> AnalyseErgebnis:
     """Erstellt ein belastbares Analyseergebnis mit Portstatus und Hinweisen."""
+    aktive_lauf_id = lauf_id or erstelle_lauf_id()
+    setze_lauf_id(aktive_lauf_id)
+    logger.info("Starte Serveranalyse für %s", ziel.name)
+
     ziel_rollen = _normalisiere_rollen(ziel.rollen)
     os_name, os_version = _ermittle_systeminformationen(ziel.name)
     ergebnis = AnalyseErgebnis(
         server=ziel.name.strip(),
         zeitpunkt=datetime.now(),
+        lauf_id=aktive_lauf_id,
         rollen=ziel_rollen,
         betriebssystem=os_name,
         os_version=os_version,
@@ -387,6 +396,7 @@ def analysiere_server(
             "Analyse läuft nicht auf Windows; WMI/PowerShell-Details sind daher nicht aktiv."
         )
 
+    logger.info("Serveranalyse abgeschlossen für %s", ergebnis.server)
     return ergebnis
 
 
@@ -394,17 +404,26 @@ def analysiere_mehrere_server(
     ziele: list[ServerZiel],
     max_worker: int = 6,
     remote_provider: RemoteDatenProvider | None = None,
+    lauf_id: str | None = None,
 ) -> list[AnalyseErgebnis]:
     """Analysiert mehrere Server parallel für bessere Performance in größeren Umgebungen."""
     if not ziele:
         return []
 
+    aktive_lauf_id = lauf_id or erstelle_lauf_id()
+    setze_lauf_id(aktive_lauf_id)
+    logger.info("Starte Mehrserveranalyse für %s Ziel(e) mit Lauf-ID %s", len(ziele), aktive_lauf_id)
+
     ergebnisse: list[AnalyseErgebnis] = []
     with ThreadPoolExecutor(max_workers=min(max_worker, len(ziele))) as executor:
-        futures = [executor.submit(analysiere_server, ziel, remote_provider) for ziel in ziele]
+        futures = [
+            executor.submit(analysiere_server, ziel, remote_provider, aktive_lauf_id)
+            for ziel in ziele
+        ]
         for future in as_completed(futures):
             ergebnisse.append(future.result())
 
+    logger.info("Mehrserveranalyse abgeschlossen mit Lauf-ID %s", aktive_lauf_id)
     return sorted(ergebnisse, key=lambda item: item.server.lower())
 
 

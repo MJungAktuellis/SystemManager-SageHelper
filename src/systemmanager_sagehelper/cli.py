@@ -7,8 +7,11 @@ from pathlib import Path
 
 from .analyzer import analysiere_mehrere_server, entdecke_server_kandidaten
 from .folder_structure import ermittle_fehlende_ordner, lege_ordner_an
+from .logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 from .models import ServerZiel
 from .report import render_markdown
+
+logger = konfiguriere_logger(__name__, dateiname="cli.log")
 
 
 def _parse_liste(wert: str, *, to_upper: bool = False) -> list[str]:
@@ -73,6 +76,9 @@ def main() -> int:
     """Startet die CLI und führt den ausgewählten Arbeitsmodus aus."""
     parser = baue_parser()
     args = parser.parse_args()
+    lauf_id = erstelle_lauf_id()
+    setze_lauf_id(lauf_id)
+    logger.info("CLI gestartet mit Kommando: %s", args.kommando)
 
     if args.kommando == "scan":
         server_liste = _parse_liste(args.server)
@@ -98,10 +104,12 @@ def main() -> int:
             for server in server_liste
         ]
 
-        ergebnisse = analysiere_mehrere_server(ziele)
+        ergebnisse = analysiere_mehrere_server(ziele, lauf_id=lauf_id)
         markdown = render_markdown(ergebnisse)
         Path(args.out).write_text(markdown, encoding="utf-8")
+        logger.info("Markdown-Dokumentation erstellt: %s", args.out)
         print(f"Markdown-Dokumentation erstellt: {args.out}")
+        print(f"Lauf-ID: {lauf_id}")
         return 0
 
     if args.kommando == "ordner-check":

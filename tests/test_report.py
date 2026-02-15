@@ -14,6 +14,7 @@ class TestReport(unittest.TestCase):
         ergebnis = AnalyseErgebnis(
             server="srv-app-01",
             zeitpunkt=datetime(2026, 1, 1, 10, 30, 0),
+            lauf_id="lauf-20260101-103000-abcd1234",
             rollen=["APP"],
             betriebssystem="Windows",
             os_version="2022",
@@ -32,6 +33,7 @@ class TestReport(unittest.TestCase):
         self.assertIn("3389 (RDP): ✅ offen", md)
         self.assertIn("CPU (logische Kerne): 8", md)
         self.assertIn("Sage-Version: Sage 100 9.0", md)
+        self.assertIn("Lauf-ID: lauf-20260101-103000-abcd1234", md)
 
 
 if __name__ == "__main__":

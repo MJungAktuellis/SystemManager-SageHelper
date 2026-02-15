@@ -7,13 +7,12 @@ parallel analysiert werden können.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
-from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 from systemmanager_sagehelper.analyzer import analysiere_mehrere_server, entdecke_server_kandidaten
+from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, hole_lauf_id, konfiguriere_logger, setze_lauf_id
 from systemmanager_sagehelper.models import AnalyseErgebnis, ServerZiel
 
 
@@ -52,15 +51,7 @@ _CHECK_AN = "☑"
 _CHECK_AUS = "☐"
 
 
-def _konfiguriere_logging() -> None:
-    """Initialisiert Datei-Logging in einem robust angelegten Log-Ordner."""
-    log_verzeichnis = Path.cwd() / "logs"
-    log_verzeichnis.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        filename=log_verzeichnis / "server_analysis_log.txt",
-        level=logging.INFO,
-        format="[%(asctime)s] %(levelname)s: %(message)s",
-    )
+logger = konfiguriere_logger(__name__, dateiname="server_analysis_gui.log")
 
 
 def _normalisiere_servernamen(servername: str) -> str:
@@ -141,6 +132,7 @@ class MehrserverAnalyseGUI:
         self.master.geometry("980x760")
 
         self._zeilen_nach_id: dict[str, ServerTabellenZeile] = {}
+        self._lauf_id_var = tk.StringVar(value=hole_lauf_id())
 
         self._baue_kopfbereich()
         self._baue_tabelle()
@@ -154,6 +146,9 @@ class MehrserverAnalyseGUI:
             font=("Arial", 18, "bold"),
         )
         self.headline.pack(pady=10)
+
+        tk.Label(self.master, text="Lauf-ID:", font=("Arial", 10, "bold")).pack()
+        tk.Label(self.master, textvariable=self._lauf_id_var, font=("Consolas", 10)).pack(pady=(0, 8))
 
         self.form_frame = tk.Frame(self.master)
         self.form_frame.pack(fill="x", padx=12)
@@ -253,7 +248,7 @@ class MehrserverAnalyseGUI:
 
     def _fuege_zeile_ein(self, zeile: ServerTabellenZeile) -> None:
         if self._exists_server(zeile.servername):
-            logging.info("Server %s wird wegen Duplikat ignoriert.", zeile.servername)
+            logger.info("Server %s wird wegen Duplikat ignoriert.", zeile.servername)
             return
 
         item_id = self.tree.insert(
@@ -328,7 +323,7 @@ class MehrserverAnalyseGUI:
         try:
             hosts = entdecke_server_kandidaten(basis=basis.strip(), start=startwert, ende=endwert)
         except Exception as exc:  # noqa: BLE001 - robuste GUI-Fehlerbehandlung.
-            logging.exception("Discovery fehlgeschlagen")
+            logger.exception("Discovery fehlgeschlagen")
             messagebox.showerror("Discovery-Fehler", f"Discovery konnte nicht ausgeführt werden: {exc}")
             self._setze_status_alle("bereit")
             return
@@ -392,9 +387,12 @@ class MehrserverAnalyseGUI:
         self.master.update_idletasks()
 
         try:
-            ergebnisse = analysiere_mehrere_server(ziele)
+            lauf_id = erstelle_lauf_id()
+            setze_lauf_id(lauf_id)
+            self._lauf_id_var.set(lauf_id)
+            ergebnisse = analysiere_mehrere_server(ziele, lauf_id=lauf_id)
         except Exception as exc:  # noqa: BLE001 - GUI soll Fehler anzeigen statt abzubrechen.
-            logging.exception("Mehrserveranalyse fehlgeschlagen")
+            logger.exception("Mehrserveranalyse fehlgeschlagen")
             messagebox.showerror("Analysefehler", f"Mehrserveranalyse fehlgeschlagen: {exc}")
             self._setze_status_alle("fehlerhaft")
             return
@@ -405,11 +403,12 @@ class MehrserverAnalyseGUI:
             self.tree.set(item_id, _SPALTE_STATUS, zeile.status)
 
         self._zeige_ergebnisse_aufklappbar(ergebnisse)
+        messagebox.showinfo("Analyse abgeschlossen", f"Analyse abgeschlossen. Lauf-ID: {self._lauf_id_var.get()}")
 
 
 def start_gui() -> None:
     """Programmatischer Einstiegspunkt für die Mehrserver-GUI."""
-    _konfiguriere_logging()
+    setze_lauf_id(erstelle_lauf_id())
     root = tk.Tk()
     MehrserverAnalyseGUI(root)
     root.mainloop()

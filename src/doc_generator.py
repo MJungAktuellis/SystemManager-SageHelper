@@ -9,69 +9,59 @@ Funktionen enthalten:
 3. Speicherung der Berichte in einem bestimmten Verzeichnis, z. B. für Microsoft Loop.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
-import logging
 
-# Logging-Konfiguration
-logging.basicConfig(
-    filename="logs/doc_generator.log",
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+from systemmanager_sagehelper.logging_setup import konfiguriere_logger
 
-def lese_logs(log_verzeichnis: str) -> str:
-    """
-    Liest alle Log-Dateien in einem Verzeichnis und gibt diese als zusammengefassten String zurück.
+logger = konfiguriere_logger(__name__, dateiname="doc_generator.log")
 
-    Args:
-        log_verzeichnis (str): Pfad zum Verzeichnis mit Log-Dateien.
 
-    Returns:
-        str: Konsolidierter Inhalt der Log-Dateien.
-    """
-    logs_content = []
+def lese_logs(log_verzeichnis: str, *, include_altformate: bool = True) -> str:
+    """Liest konsolidierte Logs aus ``*.log`` und optional aus legacy ``*.txt``-Dateien."""
+    logs_content: list[str] = []
     try:
-        log_pfade = Path(log_verzeichnis).glob("*.log")
+        basis = Path(log_verzeichnis)
+        muster = ["*.log"]
+        if include_altformate:
+            muster.append("*.txt")
+
+        log_pfade: list[Path] = []
+        for pattern in muster:
+            log_pfade.extend(sorted(basis.glob(pattern)))
+
         for log_pfad in log_pfade:
-            with open(log_pfad, "r", encoding="utf-8") as f:
-                logs_content.append(f"# Log-Datei: {log_pfad.name}\n")
-                logs_content.append(f.read() + "\n")
-        logging.info("Alle Logs erfolgreich gelesen.")
-    except Exception as e:
-        logging.error(f"Fehler beim Lesen der Logs: {e}")
+            inhalt = log_pfad.read_text(encoding="utf-8")
+            logs_content.append(f"# Log-Datei: {log_pfad.name}\n")
+            logs_content.append(inhalt + "\n")
+
+        logger.info("Alle Logs erfolgreich gelesen. Dateien: %s", [pfad.name for pfad in log_pfade])
+    except Exception as exc:  # noqa: BLE001 - robuste Legacy-Verarbeitung.
+        logger.error("Fehler beim Lesen der Logs: %s", exc)
     return "\n".join(logs_content)
 
-def generiere_markdown_bericht(inhalt: str, output_pfad: str):
-    """
-    Erstellt eine Markdown-Datei basierend auf gegebenem Inhalt.
 
-    Args:
-        inhalt (str): Inhalt, der in die Markdown-Datei geschrieben wird.
-        output_pfad (str): Pfad und Name der Markdown-Ausgabedatei.
-    """
+def generiere_markdown_bericht(inhalt: str, output_pfad: str | Path) -> None:
+    """Erstellt eine Markdown-Datei basierend auf gegebenem Inhalt."""
     try:
-        with open(output_pfad, "w", encoding="utf-8") as f:
-            f.write(inhalt)
-        logging.info(f"Markdown-Bericht erfolgreich erstellt: {output_pfad}")
-    except Exception as e:
-        logging.error(f"Fehler beim Erstellen des Markdown-Berichts: {e}")
+        Path(output_pfad).write_text(inhalt, encoding="utf-8")
+        logger.info("Markdown-Bericht erfolgreich erstellt: %s", output_pfad)
+    except Exception as exc:  # noqa: BLE001 - robuste Dateibehandlung.
+        logger.error("Fehler beim Erstellen des Markdown-Berichts: %s", exc)
 
-def erstelle_dokumentation(log_verzeichnis: str, output_verzeichnis: str):
-    """
-    Hauptprozess zur Erstellung einer zusammengefassten Markdown-Dokumentation aus Log-Dateien.
 
-    Args:
-        log_verzeichnis (str): Verzeichnis, in dem die Logs gespeichert sind.
-        output_verzeichnis (str): Zielverzeichnis für die Markdown-Dokumentation.
-    """
-    logging.info("Starte Dokumentationserstellung...")
+def erstelle_dokumentation(log_verzeichnis: str, output_verzeichnis: str) -> None:
+    """Erstellt die zusammengefasste Markdown-Dokumentation aus vorhandenen Logs."""
+    logger.info("Starte Dokumentationserstellung...")
     Path(output_verzeichnis).mkdir(parents=True, exist_ok=True)
 
-    logs_inhalt = lese_logs(log_verzeichnis)
+    logs_inhalt = lese_logs(log_verzeichnis, include_altformate=True)
     markdown_datei = Path(output_verzeichnis) / "ServerDokumentation.md"
 
     generiere_markdown_bericht(logs_inhalt, markdown_datei)
-    logging.info("Dokumentationserstellung abgeschlossen.")
+    logger.info("Dokumentationserstellung abgeschlossen.")
+
 
 if __name__ == "__main__":
     # Beispielaufruf
