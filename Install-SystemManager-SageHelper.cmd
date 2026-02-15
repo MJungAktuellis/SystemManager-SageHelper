@@ -2,6 +2,20 @@
 setlocal
 REM Starter fuer Windows: startet den PowerShell-Installer aus dem Projektordner.
 REM Mit --nopause kann das Pausieren am Ende deaktiviert werden.
+REM Falls per Doppelklick gestartet, wird einmalig ein persistentes CMD-Fenster geoeffnet.
+
+set "SCRIPT_PATH=%~f0"
+set "CONSOLE_MARKER=%~1"
+
+if /I not "%CONSOLE_MARKER%"=="--persist-console" (
+    echo %CMDCMDLINE% | findstr /I /C:"/c" >nul
+    if not errorlevel 1 (
+        start "SystemManager-SageHelper Installer" cmd /k "\"%SCRIPT_PATH%\" --persist-console"
+        exit /b 0
+    )
+)
+
+if /I "%CONSOLE_MARKER%"=="--persist-console" shift
 
 set "SCRIPT_DIR=%~dp0"
 set "PS_SCRIPT=%SCRIPT_DIR%scripts\install_assistant.ps1"
@@ -24,6 +38,7 @@ if not exist "%PS_SCRIPT%" (
 
 echo === Starte One-Click-Installer ===
 echo [INFO] Launcher-Log: %LAUNCHER_LOG%
+echo [INFO] Nutze PowerShell-Skript: %PS_SCRIPT%
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" >>"%LAUNCHER_LOG%" 2>&1
 set "EXIT_CODE=%errorlevel%"
