@@ -40,6 +40,38 @@ SystemManager-SageHelper/
     └── test_report.py
 ```
 
+## Technische Architektur
+
+### Single Source of Truth
+
+- **Paketpfad `src/systemmanager_sagehelper/` ist führend** für alle Fachmodule (Analyse, Freigaben, Doku, Workflow).
+- Legacy-Dateien unter `src/*.py` dienen nur noch als **kompatible Wrapper** für bestehende Aufrufe.
+- Gemeinsame Zielserver-Logik (Parsing, Normalisierung, Rollenabbildung) ist zentral in `targeting.py` umgesetzt und wird von CLI und GUI identisch genutzt.
+
+### Module und Datenfluss
+
+1. **Installation (`installer.py`)**
+   - prüft Werkzeuge (Git/Python/Pip) und liefert strukturierte Statusobjekte.
+2. **Analyse (`analyzer.py`)**
+   - verarbeitet `ServerZiel`-Objekte,
+   - führt Discovery/Portprüfung aus,
+   - ergänzt Rollenableitung (SQL/APP/CTX) über Ports, Dienste und Software.
+3. **Ordner/Freigaben (`share_manager.py`, `folder_structure.py`)**
+   - stellt Zielstruktur her,
+   - setzt SMB-Freigaben mit robustem Fallback bei lokalisierungsbedingten Principal-Problemen.
+4. **Dokumentation (`report.py`, `documentation.py`)**
+   - erzeugt Analyse-Report (Markdown) plus konsolidierte Log-Dokumentation.
+5. **Orchestrierung (`workflow.py`)**
+   - steuert den Standardablauf: **Installation → Analyse → Ordner/Freigaben → Dokumentation**,
+   - nutzt ein einheitliches Fortschrittsmodell (`WorkflowSchritt`, Prozentwert, Meldung),
+   - liefert pro Schritt ein standardisiertes Ergebnisobjekt (`SchrittErgebnis`).
+
+### Erweiterungspunkte für Drittentwickler
+
+- **Remote-Inventar erweitern:** neue Adapter über `RemoteDatenProvider` in `analyzer.py` anbinden (z. B. produktives WinRM/WMI).
+- **Workflow erweitern:** zusätzliche Schritte in `workflow.py` ergänzen, ohne bestehende CLI/GUI-Verbraucher zu brechen.
+- **Eigene Ausgaben:** zusätzliche Reporter (JSON/HTML) auf Basis von `AnalyseErgebnis` erstellen und in Schritt „Dokumentation“ integrieren.
+
 ## Installation
 
 ### Option A: One-Click-Installer unter Windows (empfohlen)

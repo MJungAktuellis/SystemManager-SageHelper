@@ -32,7 +32,7 @@ def test_setze_freigaben_loescht_nicht_bei_2310() -> None:
 
         raise AssertionError(f"Unerwarteter Aufruf: {cmd}")
 
-    with patch("folder_manager.subprocess.run", side_effect=fake_run):
+    with patch("systemmanager_sagehelper.share_manager.subprocess.run", side_effect=fake_run):
         ergebnisse = folder_manager.setze_freigaben("C:/SystemAG")
 
     assert all(result.erfolg for result in ergebnisse)
@@ -57,7 +57,7 @@ def test_setze_freigaben_faellt_bei_1332_auf_alternativen_principal_zurueck() ->
 
         raise AssertionError(f"Unerwarteter Aufruf: {cmd}")
 
-    with patch("folder_manager.subprocess.run", side_effect=fake_run):
+    with patch("systemmanager_sagehelper.share_manager.subprocess.run", side_effect=fake_run):
         ergebnisse = folder_manager.setze_freigaben("C:/SystemAG")
 
     assert all(result.erfolg for result in ergebnisse)
