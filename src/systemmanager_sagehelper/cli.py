@@ -11,13 +11,24 @@ from .models import ServerZiel
 from .report import render_markdown
 
 
-def _parse_serverliste(wert: str) -> list[str]:
-    return [eintrag.strip() for eintrag in wert.split(",") if eintrag.strip()]
+def _parse_liste(wert: str, *, to_upper: bool = False) -> list[str]:
+    """Parst kommaseparierte Werte, entfernt Leerwerte/Duplikate und behält Reihenfolge."""
+    eintraege: list[str] = []
+    for rohwert in wert.split(","):
+        kandidat = rohwert.strip()
+        if to_upper:
+            kandidat = kandidat.upper()
+        if kandidat and kandidat not in eintraege:
+            eintraege.append(kandidat)
+    return eintraege
 
 
 def baue_parser() -> argparse.ArgumentParser:
     """Erstellt den CLI-Parser mit klaren Unterbefehlen."""
-    parser = argparse.ArgumentParser(prog="sage-helper", description="Serveranalyse für Sage-Umgebungen")
+    parser = argparse.ArgumentParser(
+        prog="sage-helper",
+        description="Serveranalyse für Sage-Umgebungen",
+    )
     sub = parser.add_subparsers(dest="kommando", required=True)
 
     scan = sub.add_parser("scan", help="Server analysieren und Markdown erzeugen")
@@ -38,10 +49,12 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.kommando == "scan":
-        rollen = _parse_serverliste(args.rollen)
-        ergebnisse = []
-        for server in _parse_serverliste(args.server):
-            ergebnisse.append(analysiere_server(ServerZiel(name=server, rollen=rollen)))
+        server_liste = _parse_liste(args.server)
+        if not server_liste:
+            parser.error("Mindestens ein gültiger Servername muss angegeben werden.")
+
+        rollen = _parse_liste(args.rollen, to_upper=True)
+        ergebnisse = [analysiere_server(ServerZiel(name=server, rollen=rollen)) for server in server_liste]
 
         markdown = render_markdown(ergebnisse)
         Path(args.out).write_text(markdown, encoding="utf-8")
