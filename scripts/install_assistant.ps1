@@ -29,6 +29,9 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "✅ Python gefunden."
 }
 
-# Startet den Python-Installationsprozess für SystemManager-SageHelper
-Write-Host "[INFO] Starte Python-Installer für SystemManager-SageHelper..."
+# Starte die eigentliche Installation
+Write-Host "[INFO] Starte Installationsprozess für SystemManager-SageHelper..."
 python $PSScriptRoot/../src/visual_installer.py
+
+# Abschließende Meldung
+Write-Host "✅ Installationsprozess abgeschlossen. Sie können das Programm jetzt verwenden."
