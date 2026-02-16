@@ -38,6 +38,7 @@ class TestReport(unittest.TestCase):
         self.assertIn("Sage-Version: Sage 100 9.0", md)
         self.assertIn("Lauf-ID: lauf-20260101-103000-abcd1234", md)
         self.assertIn("Rollenquelle: manuell gesetzt", md)
+        self.assertIn("### Freigegebene/relevante Ports", md)
 
 
 if __name__ == "__main__":
