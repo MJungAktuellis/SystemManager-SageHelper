@@ -14,6 +14,7 @@ from typing import Iterable, Protocol
 from .config import STANDARD_PORTS
 from .logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 from .models import (
+    DiscoveryErgebnis,
     APPRollenDetails,
     AnalyseErgebnis,
     BetriebssystemDetails,
@@ -49,6 +50,30 @@ _HINWEIS_WINRM = "[WINRM]"
 _HINWEIS_TIMEOUT = "[TIMEOUT]"
 
 logger = konfiguriere_logger(__name__, dateiname="server_analysis.log")
+
+
+@dataclass(frozen=True)
+class DiscoveryKonfiguration:
+    """Steuert Strategien, Timeouts und Parallelität eines Discovery-Laufs."""
+
+    ping_timeout: float = 0.8
+    tcp_timeout: float = 0.5
+    max_worker: int = 48
+    tcp_ports: tuple[int, ...] = (135, 139, 445, 1433, 3389)
+    nutze_reverse_dns: bool = True
+    nutze_ad_ldap: bool = False
+
+
+@dataclass(frozen=True)
+class DiscoveryLaufProtokoll:
+    """Verdichtete Laufmetrik inklusive Strategie- und Fehlerübersicht."""
+
+    basis: str
+    start: int
+    ende: int
+    strategien: tuple[str, ...]
+    trefferzahl: int
+    fehlerursachen: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -706,14 +731,183 @@ def analysiere_mehrere_server(
     return sorted(ergebnisse, key=lambda item: item.server.lower())
 
 
-def entdecke_server_kandidaten(basis: str, start: int, ende: int) -> list[str]:
-    """Sucht erreichbare Hosts in einem IPv4-Subnetz über DNS- und Port-Signaturen."""
-    if start > ende:
-        start, ende = ende, start
+def _validiere_discovery_range(basis: str, start: int, ende: int) -> tuple[str, int, int]:
+    """Validiert und normalisiert den Discovery-Adressbereich robust."""
+    bereinigte_basis = basis.strip()
+    teile = bereinigte_basis.split(".")
+    if len(teile) != 3:
+        raise ValueError("IPv4-Basis muss genau drei Oktette enthalten (z. B. 192.168.178).")
+    if any(not teil.isdigit() or not 0 <= int(teil) <= 255 for teil in teile):
+        raise ValueError("IPv4-Basis enthält ungültige Oktette.")
+    if not 0 <= start <= 255 or not 0 <= ende <= 255:
+        raise ValueError("Start- und Endwert müssen im Bereich 0..255 liegen.")
+    return bereinigte_basis, min(start, ende), max(start, ende)
 
-    kandidaten: list[str] = []
-    for host_teil in range(start, ende + 1):
-        host = f"{basis}.{host_teil}"
-        if _ermittle_ip_adressen(host):
-            kandidaten.append(host)
-    return kandidaten
+
+def _ping_host(host: str, timeout: float) -> bool:
+    """Prüft ICMP-Erreichbarkeit plattformabhängig über das Ping-Kommando."""
+    if timeout <= 0:
+        return False
+    system = platform.system().lower()
+    if system == "windows":
+        cmd = ["ping", "-n", "1", "-w", str(max(1, int(timeout * 1000))), host]
+    else:
+        cmd = ["ping", "-c", "1", "-W", str(max(1, int(timeout))), host]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=max(1.0, timeout + 0.5), check=False)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _resolve_reverse_dns(ip_adresse: str) -> str | None:
+    """Löst optionalen Reverse-DNS-Namen auf und kapselt Fehler."""
+    try:
+        hostname, *_ = socket.gethostbyaddr(ip_adresse)
+    except (socket.herror, socket.gaierror, TimeoutError):
+        return None
+    return hostname.strip() or None
+
+
+def _ad_ldap_hinweis() -> str | None:
+    """Liefert optionalen AD/LDAP-Hinweis, sofern Domänenumfeld erkannt wird."""
+    import os
+
+    domain = (os.environ.get("USERDNSDOMAIN") or os.environ.get("USERDOMAIN") or "").strip()
+    if domain and domain.lower() not in {"workgroup", "localhost"}:
+        return f"Domäne erkannt: {domain}"
+    return None
+
+
+def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -> DiscoveryErgebnis | None:
+    """Führt alle Discovery-Strategien für genau einen Host zusammen."""
+    strategien: list[str] = []
+    fehlerursachen: list[str] = []
+    erkannte_dienste: list[str] = []
+    ip_adresse = host
+    erreichbar = False
+    vertrauensgrad = 0.0
+
+    ip_adressen = _ermittle_ip_adressen(host)
+    if ip_adressen:
+        ip_adresse = ip_adressen[0]
+    else:
+        fehlerursachen.append("dns_auflosung")
+
+    if _ping_host(host, konfiguration.ping_timeout):
+        strategien.append("icmp")
+        erreichbar = True
+        vertrauensgrad += 0.45
+
+    for port in konfiguration.tcp_ports:
+        kandidaten = _ermittle_socket_kandidaten(host, port)
+        if kandidaten and pruefe_tcp_port(kandidaten, timeout=konfiguration.tcp_timeout):
+            erreichbar = True
+            strategien.append("tcp_syn")
+            erkannte_dienste.append(str(port))
+
+    if erkannte_dienste:
+        vertrauensgrad += min(0.4, 0.1 * len(erkannte_dienste))
+    elif "icmp" not in strategien:
+        fehlerursachen.append("tcp_timeout")
+
+    hostname = host
+    if konfiguration.nutze_reverse_dns and ip_adressen:
+        reverse = _resolve_reverse_dns(ip_adresse)
+        if reverse:
+            strategien.append("reverse_dns")
+            hostname = reverse
+            vertrauensgrad += 0.1
+
+    if konfiguration.nutze_ad_ldap:
+        ad_hinweis = _ad_ldap_hinweis()
+        if ad_hinweis:
+            strategien.append("ad_ldap")
+            erkannte_dienste.append(ad_hinweis)
+            vertrauensgrad += 0.05
+        else:
+            fehlerursachen.append("ad_ldap_nicht_verfuegbar")
+
+    if not erreichbar and "reverse_dns" not in strategien:
+        return None
+
+    return DiscoveryErgebnis(
+        hostname=hostname,
+        ip_adresse=ip_adresse,
+        erreichbar=erreichbar,
+        erkannte_dienste=_normalisiere_liste_ohne_duplikate(erkannte_dienste),
+        vertrauensgrad=min(1.0, vertrauensgrad),
+        strategien=_normalisiere_liste_ohne_duplikate(strategien),
+        fehlerursachen=_normalisiere_liste_ohne_duplikate(fehlerursachen),
+    )
+
+
+def entdecke_server_ergebnisse(
+    basis: str,
+    start: int,
+    ende: int,
+    konfiguration: DiscoveryKonfiguration | None = None,
+) -> list[DiscoveryErgebnis]:
+    """Ermittelt Discovery-Treffer über mehrere Strategien mit Parallelisierung."""
+    conf = konfiguration or DiscoveryKonfiguration()
+    normalisierte_basis, normalisierter_start, normalisiertes_ende = _validiere_discovery_range(basis, start, ende)
+
+    hosts = [f"{normalisierte_basis}.{host_teil}" for host_teil in range(normalisierter_start, normalisiertes_ende + 1)]
+    ergebnisse: list[DiscoveryErgebnis] = []
+
+    with ThreadPoolExecutor(max_workers=min(conf.max_worker, len(hosts) or 1)) as executor:
+        futures = [executor.submit(_entdecke_einzelnen_host, host, conf) for host in hosts]
+        for future in as_completed(futures):
+            treffer = future.result()
+            if treffer is not None:
+                ergebnisse.append(treffer)
+
+    dedupliziert: dict[tuple[str, str], DiscoveryErgebnis] = {}
+    for item in sorted(ergebnisse, key=lambda eintrag: (eintrag.hostname.lower(), -eintrag.vertrauensgrad)):
+        schluessel = (item.hostname.lower(), item.ip_adresse)
+        if schluessel in dedupliziert:
+            bestehend = dedupliziert[schluessel]
+            bestehend.erkannte_dienste = _normalisiere_liste_ohne_duplikate(bestehend.erkannte_dienste + item.erkannte_dienste)
+            bestehend.strategien = _normalisiere_liste_ohne_duplikate(bestehend.strategien + item.strategien)
+            bestehend.fehlerursachen = _normalisiere_liste_ohne_duplikate(bestehend.fehlerursachen + item.fehlerursachen)
+            bestehend.vertrauensgrad = max(bestehend.vertrauensgrad, item.vertrauensgrad)
+            bestehend.erreichbar = bestehend.erreichbar or item.erreichbar
+            continue
+        dedupliziert[schluessel] = item
+
+    strategie_liste = ["icmp", "tcp_syn"]
+    if conf.nutze_reverse_dns:
+        strategie_liste.append("reverse_dns")
+    if conf.nutze_ad_ldap:
+        strategie_liste.append("ad_ldap")
+
+    fehler_counter: dict[str, int] = {}
+    for item in dedupliziert.values():
+        for fehler in item.fehlerursachen:
+            fehler_counter[fehler] = fehler_counter.get(fehler, 0) + 1
+
+    laufprotokoll = DiscoveryLaufProtokoll(
+        basis=normalisierte_basis,
+        start=normalisierter_start,
+        ende=normalisiertes_ende,
+        strategien=tuple(strategie_liste),
+        trefferzahl=len(dedupliziert),
+        fehlerursachen=fehler_counter,
+    )
+    logger.info(
+        "Discovery abgeschlossen | Range=%s.%s-%s | Treffer=%s | Strategien=%s | Fehler=%s",
+        laufprotokoll.basis,
+        laufprotokoll.start,
+        laufprotokoll.ende,
+        laufprotokoll.trefferzahl,
+        ",".join(laufprotokoll.strategien),
+        laufprotokoll.fehlerursachen,
+    )
+
+    return sorted(dedupliziert.values(), key=lambda item: (item.hostname.lower(), item.ip_adresse))
+
+
+def entdecke_server_kandidaten(basis: str, start: int, ende: int) -> list[str]:
+    """Kompatibilitätsfunktion: liefert nur Hostnamen aus den Discovery-Ergebnissen."""
+    ergebnisse = entdecke_server_ergebnisse(basis=basis, start=start, ende=ende)
+    return [treffer.hostname for treffer in ergebnisse]

@@ -8,14 +8,14 @@ from tkinter import simpledialog, ttk
 
 from systemmanager_sagehelper.analyzer import (
     analysiere_mehrere_server,
-    entdecke_server_kandidaten,
-    schlage_rollen_per_portsignatur_vor,
+    DiscoveryKonfiguration,
+    entdecke_server_ergebnisse,
 )
 from systemmanager_sagehelper.gui_shell import GuiShell
 from systemmanager_sagehelper.installation_state import pruefe_installationszustand, verarbeite_installations_guard
 from systemmanager_sagehelper.gui_state import GUIStateStore
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
-from systemmanager_sagehelper.models import AnalyseErgebnis, ServerZiel
+from systemmanager_sagehelper.models import AnalyseErgebnis, DiscoveryErgebnis, ServerZiel
 from systemmanager_sagehelper.targeting import normalisiere_servernamen, rollen_aus_bool_flags
 
 
@@ -106,6 +106,131 @@ def _kurzstatus(ergebnis: AnalyseErgebnis) -> str:
     return f"Rollen: {rollen} | Quelle: {quelle} | Offene Ports: {', '.join(offene_ports) if offene_ports else 'keine'}"
 
 
+
+
+@dataclass
+class DiscoveryTabellenTreffer:
+    """Bearbeitbares GUI-Modell für Discovery-Treffer vor der Übernahme."""
+
+    hostname: str
+    ip_adresse: str
+    erreichbar: bool
+    dienste: str
+    vertrauensgrad: float
+
+
+class DiscoveryTrefferDialog:
+    """Dialog zur Auswahl, Filterung und Korrektur von Discovery-Treffern."""
+
+    def __init__(self, parent: tk.Misc, treffer: list[DiscoveryErgebnis]) -> None:
+        self._treffer = [
+            DiscoveryTabellenTreffer(
+                hostname=item.hostname,
+                ip_adresse=item.ip_adresse,
+                erreichbar=item.erreichbar,
+                dienste=", ".join(item.erkannte_dienste) or "-",
+                vertrauensgrad=item.vertrauensgrad,
+            )
+            for item in treffer
+        ]
+        self.ausgewaehlt: list[DiscoveryTabellenTreffer] = []
+
+        self.window = tk.Toplevel(parent)
+        self.window.title("Discovery-Treffer prüfen")
+        self.window.geometry("900x520")
+        self.window.transient(parent)
+        self.window.grab_set()
+
+        self.filter_var = tk.StringVar(value="")
+        self.filter_var.trace_add("write", lambda *_: self._render_treffer())
+
+        kopf = ttk.Frame(self.window)
+        kopf.pack(fill="x", padx=8, pady=8)
+        ttk.Label(kopf, text="Filter (Hostname/IP):").pack(side="left")
+        ttk.Entry(kopf, textvariable=self.filter_var, width=30).pack(side="left", padx=6)
+        ttk.Button(kopf, text="Alle auswählen", command=self._waehle_alle).pack(side="left", padx=4)
+        ttk.Button(kopf, text="Auswahl übernehmen", command=self._uebernehmen).pack(side="right", padx=4)
+
+        self.tree = ttk.Treeview(
+            self.window,
+            columns=("hostname", "ip", "erreichbar", "dienste", "vertrauen"),
+            show="headings",
+            selectmode="extended",
+            height=17,
+        )
+        self.tree.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.tree.heading("hostname", text="Hostname (bearbeitbar)")
+        self.tree.heading("ip", text="IP")
+        self.tree.heading("erreichbar", text="Erreichbar")
+        self.tree.heading("dienste", text="Dienste")
+        self.tree.heading("vertrauen", text="Vertrauensgrad")
+        self.tree.column("hostname", width=220)
+        self.tree.column("ip", width=150)
+        self.tree.column("erreichbar", width=90, anchor="center")
+        self.tree.column("dienste", width=260)
+        self.tree.column("vertrauen", width=100, anchor="e")
+        self.tree.bind("<Double-1>", self._bearbeite_hostname)
+
+        self._id_zu_treffer: dict[str, DiscoveryTabellenTreffer] = {}
+        self._render_treffer()
+
+    def _render_treffer(self) -> None:
+        for item_id in self.tree.get_children(""):
+            self.tree.delete(item_id)
+        self._id_zu_treffer.clear()
+
+        filtertext = self.filter_var.get().strip().lower()
+        for treffer in self._treffer:
+            if filtertext and filtertext not in treffer.hostname.lower() and filtertext not in treffer.ip_adresse.lower():
+                continue
+            item_id = self.tree.insert(
+                "",
+                "end",
+                values=(
+                    treffer.hostname,
+                    treffer.ip_adresse,
+                    "ja" if treffer.erreichbar else "nein",
+                    treffer.dienste,
+                    f"{treffer.vertrauensgrad:.2f}",
+                ),
+            )
+            self._id_zu_treffer[item_id] = treffer
+
+    def _waehle_alle(self) -> None:
+        self.tree.selection_set(self.tree.get_children(""))
+
+    def _bearbeite_hostname(self, event: tk.Event[tk.Misc]) -> None:
+        item_id = self.tree.identify_row(event.y)
+        column = self.tree.identify_column(event.x)
+        if not item_id or column != "#1":
+            return
+        aktueller = self._id_zu_treffer[item_id]
+        neuer_hostname = simpledialog.askstring(
+            "Hostname korrigieren",
+            "Hostname anpassen:",
+            parent=self.window,
+            initialvalue=aktueller.hostname,
+        )
+        if neuer_hostname is None:
+            return
+        aktueller.hostname = neuer_hostname.strip() or aktueller.hostname
+        self.tree.set(item_id, "hostname", aktueller.hostname)
+
+    def _uebernehmen(self) -> None:
+        self.ausgewaehlt = [self._id_zu_treffer[item_id] for item_id in self.tree.selection() if item_id in self._id_zu_treffer]
+        self.window.destroy()
+
+
+def _rollen_aus_discovery_treffer(treffer: DiscoveryTabellenTreffer) -> list[str]:
+    """Leitet eine konservative Rollenvorbelegung aus Discovery-Diensten ab."""
+    rollen = []
+    if "1433" in treffer.dienste:
+        rollen.append("SQL")
+    if "3389" in treffer.dienste:
+        rollen.append("CTX")
+    if not rollen:
+        rollen.append("APP")
+    return rollen
 def _detailzeilen(ergebnis: AnalyseErgebnis) -> list[str]:
     """Liefert strukturierte Detailzeilen je Server für die aufklappbare Ansicht."""
     details: list[str] = [
@@ -373,25 +498,33 @@ class MehrserverAnalyseGUI:
         self.master.update_idletasks()
 
         try:
-            hosts = entdecke_server_kandidaten(basis=basis.strip(), start=startwert, ende=endwert)
+            treffer = entdecke_server_ergebnisse(
+                basis=basis.strip(),
+                start=startwert,
+                ende=endwert,
+                konfiguration=DiscoveryKonfiguration(nutze_reverse_dns=True, nutze_ad_ldap=True),
+            )
         except Exception as exc:  # noqa: BLE001 - robuste GUI-Fehlerbehandlung.
             logger.exception("Discovery fehlgeschlagen")
             self.shell.zeige_fehler("Discovery-Fehler", f"Discovery konnte nicht ausgeführt werden: {exc}", "Prüfen Sie Netzwerkbereich und Berechtigungen.")
             self.shell.setze_status("Discovery fehlgeschlagen")
             return
 
+        dialog = DiscoveryTrefferDialog(self.master, treffer)
+        self.master.wait_window(dialog.window)
+
         hinzugefuegt = 0
-        for host in hosts:
+        for auswahl in dialog.ausgewaehlt:
             vorher = len(self._zeilen_nach_id)
-            auto_rollen = schlage_rollen_per_portsignatur_vor(host)
-            auto_rolle = ", ".join(auto_rollen) if auto_rollen else None
+            auto_rollen = _rollen_aus_discovery_treffer(auswahl)
+            auto_rolle = ", ".join(auto_rollen)
             self._fuege_zeile_ein(
                 ServerTabellenZeile(
-                    servername=host,
+                    servername=auswahl.hostname,
                     quelle="Discovery",
                     status="bereit",
                     sql="SQL" in auto_rollen,
-                    app="APP" in auto_rollen or not auto_rollen,
+                    app="APP" in auto_rollen,
                     ctx="CTX" in auto_rollen,
                     auto_rolle=auto_rolle,
                 )
@@ -401,7 +534,7 @@ class MehrserverAnalyseGUI:
 
         self.shell.zeige_erfolg(
             "Discovery abgeschlossen",
-            f"Gefundene Hosts: {len(hosts)}\nNeu übernommen: {hinzugefuegt}\nIgnorierte Duplikate: {len(hosts) - hinzugefuegt}",
+            f"Gefundene Treffer: {len(treffer)}\nAusgewählt: {len(dialog.ausgewaehlt)}\nNeu übernommen: {hinzugefuegt}",
             "Prüfen Sie die Serverliste und passen Sie Rollen bei Bedarf an.",
         )
         self.shell.setze_status("Discovery abgeschlossen")

@@ -6,9 +6,11 @@ import unittest
 from unittest.mock import Mock, patch
 
 from systemmanager_sagehelper.analyzer import (
+    DiscoveryKonfiguration,
     RemoteAbrufFehler,
     _klassifiziere_anwendungen,
     _normalisiere_rollen,
+    entdecke_server_ergebnisse,
     analysiere_server,
     analysiere_mehrere_server,
     schlage_rollen_per_portsignatur_vor,
@@ -121,6 +123,80 @@ class TestAnalyzer(unittest.TestCase):
     def test_hinweis_freigegebene_relevante_ports(self, _sock_mock, _port_mock, _dns_mock) -> None:
         ergebnis = analysiere_server(ServerZiel(name="srv-sql-01", rollen=["SQL"]))
         self.assertTrue(any("Freigegebene/relevante Ports" in h and "1433" in h for h in ergebnis.hinweise))
+
+
+    def test_discovery_invalid_range_wirft_value_error(self) -> None:
+        with self.assertRaises(ValueError):
+            entdecke_server_ergebnisse(basis="192.168", start=1, ende=2)
+
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value="srv-dns-only.local")
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.0.5"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=False)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=False)
+    def test_discovery_dns_only_treffer_wird_uebernommen(
+        self,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _reverse_mock,
+    ) -> None:
+        ergebnisse = entdecke_server_ergebnisse(
+            basis="10.0.0",
+            start=5,
+            ende=5,
+            konfiguration=DiscoveryKonfiguration(nutze_reverse_dns=True, max_worker=1),
+        )
+
+        self.assertEqual(1, len(ergebnisse))
+        self.assertEqual("srv-dns-only.local", ergebnisse[0].hostname)
+        self.assertIn("reverse_dns", ergebnisse[0].strategien)
+
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value="srv-duplikat.local")
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.0.8"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=True)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=True)
+    def test_discovery_duplikate_werden_dedupliziert(
+        self,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _reverse_mock,
+    ) -> None:
+        ergebnisse = entdecke_server_ergebnisse(
+            basis="10.0.0",
+            start=8,
+            ende=9,
+            konfiguration=DiscoveryKonfiguration(max_worker=2),
+        )
+
+        self.assertEqual(1, len(ergebnisse))
+        self.assertEqual("srv-duplikat.local", ergebnisse[0].hostname)
+
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value=None)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.1.7"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=False)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=False)
+    def test_discovery_timeout_netz_liefert_keinen_treffer(
+        self,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _reverse_mock,
+    ) -> None:
+        ergebnisse = entdecke_server_ergebnisse(
+            basis="10.0.1",
+            start=7,
+            ende=7,
+            konfiguration=DiscoveryKonfiguration(nutze_reverse_dns=False, max_worker=1),
+        )
+
+        self.assertEqual([], ergebnisse)
 
 
 if __name__ == "__main__":
