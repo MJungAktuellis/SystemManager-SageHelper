@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 MINDEST_PYTHON_VERSION = (3, 11)
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -205,7 +205,12 @@ def _normalisiere_pfad_fuer_vergleich(pfad: str) -> str:
     return os.path.normcase(os.path.abspath(pfad))
 
 
-def finde_kompatiblen_python_interpreter() -> str | None:
+def _formatiere_befehl_fuer_logs(befehl: Sequence[str]) -> str:
+    """Formatiert einen Befehlsvektor robust für Log- und Statusausgaben."""
+    return subprocess.list2cmdline(list(befehl))
+
+
+def finde_kompatiblen_python_interpreter() -> list[str] | None:
     """Findet einen Python-Interpreter mit Mindestversion in gängigen Quellen."""
     kandidaten = [
         [sys.executable],
@@ -219,21 +224,21 @@ def finde_kompatiblen_python_interpreter() -> str | None:
         ausgabe = lese_befehlsausgabe([*kandidat, "--version"])
         version = _parse_python_version(ausgabe)
         if version and _ist_python_version_kompatibel(version):
-            return " ".join(kandidat)
+            return kandidat
     return None
 
 
-def _pip_verfuegbar_fuer_interpreter(interpreter: str) -> bool:
+def _pip_verfuegbar_fuer_interpreter(interpreter: Sequence[str]) -> bool:
     """Prüft pip-Verfügbarkeit für einen Interpreter-String inkl. Argumenten."""
-    befehl = interpreter.split() + ["-m", "pip", "--version"]
+    befehl = list(interpreter) + ["-m", "pip", "--version"]
     return lese_befehlsausgabe(befehl) is not None
 
 
-def starte_installationsassistent_mit_interpreter(interpreter: str, argv: list[str] | None = None) -> None:
+def starte_installationsassistent_mit_interpreter(interpreter: Sequence[str], argv: list[str] | None = None) -> None:
     """Startet den aktuellen Installer-Prozess mit einem (neuen) Interpreter erneut."""
     script_argv = argv or sys.argv
-    cmd = interpreter.split() + script_argv
-    logging.getLogger(__name__).info("Starte Re-Entry des Installers: %s", " ".join(cmd))
+    cmd = list(interpreter) + script_argv
+    logging.getLogger(__name__).info("Starte Re-Entry des Installers: %s", _formatiere_befehl_fuer_logs(cmd))
     raise SystemExit(subprocess.call(cmd))
 
 
@@ -398,23 +403,23 @@ def pruefe_und_behebe_voraussetzungen(argv_reentry: list[str] | None = None) -> 
         VoraussetzungStatus(
             pruefung="Python-Version",
             status=ErgebnisStatus.OK,
-            nachricht=f"Kompatibler Interpreter gefunden ({interpreter}).",
+            nachricht=f"Kompatibler Interpreter gefunden ({_formatiere_befehl_fuer_logs(interpreter)}).",
             naechste_aktion="Keine Aktion erforderlich.",
         )
     )
 
-    if _normalisiere_pfad_fuer_vergleich(interpreter.split()[0]) != _normalisiere_pfad_fuer_vergleich(sys.executable):
+    if _normalisiere_pfad_fuer_vergleich(interpreter[0]) != _normalisiere_pfad_fuer_vergleich(sys.executable):
         ergebnisse.append(
             VoraussetzungStatus(
                 pruefung="Re-Entry",
                 status=ErgebnisStatus.WARN,
                 nachricht="Installer wird mit dem kompatiblen Interpreter neu gestartet.",
-                naechste_aktion=f"Re-Entry mit '{interpreter}'.",
+                naechste_aktion=f"Re-Entry mit '{_formatiere_befehl_fuer_logs(interpreter)}'.",
             )
         )
         starte_installationsassistent_mit_interpreter(interpreter, argv=argv_reentry)
 
-    if _pip_verfuegbar_fuer_interpreter(sys.executable):
+    if _pip_verfuegbar_fuer_interpreter([sys.executable]):
         ergebnisse.append(
             VoraussetzungStatus(
                 pruefung="pip",
@@ -435,7 +440,7 @@ def pruefe_und_behebe_voraussetzungen(argv_reentry: list[str] | None = None) -> 
     )
     fuehre_installationsbefehl_aus([sys.executable, "-m", "ensurepip", "--upgrade"], "pip-Bootstrap")
 
-    if _pip_verfuegbar_fuer_interpreter(sys.executable):
+    if _pip_verfuegbar_fuer_interpreter([sys.executable]):
         ergebnisse.append(
             VoraussetzungStatus(
                 pruefung="pip",
