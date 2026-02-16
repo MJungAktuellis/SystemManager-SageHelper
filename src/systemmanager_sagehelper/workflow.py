@@ -18,6 +18,7 @@ from .installer import erzeuge_installationsbericht
 from .models import AnalyseErgebnis, ServerZiel
 from .report import render_markdown
 from .share_manager import FreigabeErgebnis, pruefe_und_erstelle_struktur
+from .share_policy import SharePolicy
 
 
 class WorkflowSchritt(Enum):
@@ -86,9 +87,18 @@ def _schritt_analyse(ziele: list[ServerZiel], lauf_id: str | None, progress: Pro
     )
 
 
-def _schritt_ordner_und_freigaben(basis_pfad: Path, progress: ProgressCallback | None) -> SchrittErgebnis:
+def _schritt_ordner_und_freigaben(
+    basis_pfad: Path,
+    progress: ProgressCallback | None,
+    share_bestaetigung: Callable[[str], bool] | None,
+    share_policy: SharePolicy | None,
+) -> SchrittErgebnis:
     _melde(progress, WorkflowSchritt.ORDNER_FREIGABEN, 70, "Ordner/Freigaben werden verarbeitet")
-    freigaben = pruefe_und_erstelle_struktur(str(basis_pfad))
+    freigaben = pruefe_und_erstelle_struktur(
+        str(basis_pfad),
+        bestaetigung=share_bestaetigung,
+        policy=share_policy,
+    )
     erfolgreich = all(e.erfolg for e in freigaben)
     meldung = "Freigaben erfolgreich gesetzt" if erfolgreich else "Mindestens eine Freigabe fehlgeschlagen"
     _melde(progress, WorkflowSchritt.ORDNER_FREIGABEN, 85, meldung)
@@ -129,6 +139,8 @@ def fuehre_standard_workflow_aus(
     docs_verzeichnis: Path,
     lauf_id: str | None = None,
     progress: ProgressCallback | None = None,
+    share_bestaetigung: Callable[[str], bool] | None = None,
+    share_policy: SharePolicy | None = None,
 ) -> WorkflowErgebnis:
     """Führt den vollständigen Standardprozess in definierter Reihenfolge aus."""
     ergebnis = WorkflowErgebnis()
@@ -140,7 +152,12 @@ def fuehre_standard_workflow_aus(
     ergebnis.schritte.append(analyse)
     analyse_ergebnisse = analyse.details.get("analyse_ergebnisse", [])
 
-    ordner = _schritt_ordner_und_freigaben(basis_pfad, progress)
+    ordner = _schritt_ordner_und_freigaben(
+        basis_pfad,
+        progress,
+        share_bestaetigung=share_bestaetigung,
+        share_policy=share_policy,
+    )
     ergebnis.schritte.append(ordner)
 
     dokumentation = _schritt_dokumentation(
