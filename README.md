@@ -88,6 +88,68 @@ SystemManager-SageHelper/
 python scripts/install.py
 ```
 
+## Windows-Build & distributierbares Installer-Paket
+
+Für Enterprise-Umgebungen ist ein reproduzierbarer Windows-Buildpfad enthalten:
+
+1. **App-Binary bauen**: PyInstaller erzeugt eine GUI-Executable aus `src/gui_manager.py`.
+2. **Installer bauen**: Inno Setup erstellt ein signierbares Setup-Paket mit sauberem Uninstall-Eintrag.
+
+### Voraussetzungen
+
+- Windows Build-Host mit Python 3.11+
+- Inno Setup 6.x (`iscc` im `PATH`)
+
+### Reproduzierbarer Build
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1 -Version 1.0.0 -Publisher "SystemManager Team"
+```
+
+Das Skript erzeugt anschließend:
+
+- Binary: `build/dist/SystemManager-SageHelper.exe`
+- Setup-Paket: `build/installer/SystemManager-SageHelper-<Version>-setup.exe`
+
+### Installationsziele des Setups
+
+- **Programmdateien (nur lesen/ausführen):** `%ProgramFiles%\SystemManager-SageHelper`
+- **Schreibbare Laufzeitdaten:** `%ProgramData%\SystemManager-SageHelper`
+  - `%ProgramData%\SystemManager-SageHelper\config`
+  - `%ProgramData%\SystemManager-SageHelper\logs`
+
+Der Installer setzt die Ordnerrechte unter `%ProgramData%` so, dass Standardbenutzer Konfigurationen und Logs schreiben können.
+
+### Registrierung in „Programme und Features“
+
+Der Installer registriert automatisch einen vollständigen Deinstallations-Eintrag mit:
+
+- `DisplayName`: `SystemManager-SageHelper`
+- `DisplayVersion`: über `-Version` im Buildskript
+- `Publisher`: über `-Publisher` im Buildskript
+- `UninstallString`: vom Installer automatisch gepflegt
+
+### Verknüpfungen
+
+- Startmenü-Verknüpfung auf den GUI-Launcher wird standardmäßig erstellt.
+- Optionale Desktop-Verknüpfung ist im Setup als auswählbare Aufgabe verfügbar.
+
+### Deinstallation
+
+Es gibt zwei saubere Wege:
+
+1. **Windows GUI:** „Programme und Features“ → `SystemManager-SageHelper` → Deinstallieren.
+2. **Direkt über Uninstaller:** `C:\Program Files\SystemManager-SageHelper\unins*.exe`
+
+> Hinweis: Nutzdaten in `%ProgramData%\SystemManager-SageHelper` können für Audits bewusst erhalten bleiben und bei Bedarf manuell gelöscht werden.
+
+### Troubleshooting (Adminrechte / UAC)
+
+- **Setup fordert Adminrechte an:** Das ist korrekt, weil nach `%ProgramFiles%` installiert wird.
+- **UAC-Dialog erscheint nicht:** Setup explizit per Rechtsklick „Als Administrator ausführen“ starten.
+- **`iscc` nicht gefunden:** Inno Setup installieren und den Compiler-Pfad in die `PATH`-Variable aufnehmen.
+- **`PyInstaller`-Build bricht ab:** Buildskript erneut mit `-Clean` ausführen, damit alte Artefakte entfernt werden.
+
 ## Verwendung
 
 ### 1) Multi-Server-Scan und Markdown-Export
