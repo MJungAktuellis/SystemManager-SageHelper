@@ -74,6 +74,38 @@ SystemManager-SageHelper/
 
 ## Installation
 
+## Schnellstart für Einsteiger ("Dummies")
+
+Wenn du das Tool **einfach nur installieren und benutzen** willst, gehe genau so vor:
+
+1. **ZIP herunterladen und entpacken**
+   - Lege den Ordner z. B. auf dem Desktop ab.
+2. **Installer starten**
+   - Öffne den entpackten Ordner.
+   - Starte `Install-SystemManager-SageHelper.cmd` mit Doppelklick.
+3. **Rückfragen bestätigen**
+   - Windows kann nach Admin-Rechten fragen (UAC) → mit **Ja** bestätigen.
+4. **Warten, bis "Fertig" erscheint**
+   - Das Fenster nicht schließen, bis der Assistent abgeschlossen ist.
+5. **Programm starten**
+   - Über die angelegte Startmenü-Verknüpfung oder erneut über den Projektordner.
+
+### Erste Bedienung in 3 Schritten
+
+1. **Server eintragen** (z. B. `srv-app-01` oder IP-Adresse).
+2. **Analyse starten**.
+3. **Bericht öffnen** unter `docs/` (Markdown-Datei für Doku / Microsoft Loop).
+
+### Wenn etwas nicht funktioniert
+
+- Prüfe die Logdateien in `logs/`.
+- Teile bei Supportanfragen idealerweise diese Dateien:
+  - `logs/install_launcher.log`
+  - `logs/install_assistant_ps.log`
+  - `logs/install_assistant.log`
+
+> Tipp für Teams: Beim ersten Rollout einmal mit einem Testserver prüfen, dann den gleichen Ablauf für alle weiteren Server nutzen.
+
 ### Option A: One-Click-Installer unter Windows (empfohlen)
 
 1. Repository als ZIP auf den Zielserver kopieren und entpacken.
