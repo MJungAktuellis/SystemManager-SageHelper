@@ -39,9 +39,9 @@ foreach ($candidate in $PythonCandidates) {
     if ($candidate.Count -gt 1) {
         $arguments += $candidate[1..($candidate.Count - 1)]
     }
-    $arguments += @($InstallScript)
+    $arguments += @($InstallScript, "--non-interactive")
 
-    Write-Host "[INFO] Starte Installer mit: $($candidate -join ' ')"
+    Write-Host "[INFO] Starte Installer mit: $($candidate -join ' ') (Non-Interactive)"
     & $exe @arguments
     $exitCode = $LASTEXITCODE
     if ($exitCode -eq 0) {
