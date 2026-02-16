@@ -63,12 +63,33 @@ class SoftwareInfo:
 
 
 @dataclass
+class SQLDatenpfadInfo:
+    """Beschreibt einen konkreten SQL-Datenpfad je Instanz und Verwendungszweck."""
+
+    instanzname: str
+    kategorie: str
+    pfad: str
+
+
+@dataclass
+class SQLInstanzInfo:
+    """Erweiterte Metadaten einer SQL-Instanz inkl. erkannter Datenpfade."""
+
+    instanzname: str
+    instanz_id: str | None = None
+    version: str | None = None
+    edition: str | None = None
+    datenpfade: list[SQLDatenpfadInfo] = field(default_factory=list)
+
+
+@dataclass
 class SQLRollenDetails:
     """Auswertung der SQL-Rolle auf Basis von Diensten und Instanzhinweisen."""
 
     erkannt: bool = False
     instanzen: list[str] = field(default_factory=list)
     dienste: list[str] = field(default_factory=list)
+    instanz_details: list[SQLInstanzInfo] = field(default_factory=list)
 
 
 @dataclass

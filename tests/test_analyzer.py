@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from systemmanager_sagehelper.analyzer import (
+    RemoteAbrufFehler,
     _klassifiziere_anwendungen,
     _normalisiere_rollen,
     analysiere_server,
@@ -100,6 +101,26 @@ class TestAnalyzer(unittest.TestCase):
         self.assertEqual("nachträglich geändert", ergebnis.rollenquelle)
         self.assertEqual(["SQL"], ergebnis.auto_rollen)
         self.assertTrue(ergebnis.manuell_ueberschrieben)
+
+
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.0.1"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=False)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[])
+    def test_hinweis_bei_remote_timeout_wird_klassifiziert(self, _sock_mock, _port_mock, _dns_mock) -> None:
+        provider = Mock()
+        provider.ist_verfuegbar.return_value = True
+        provider.lese_systemdaten.side_effect = RemoteAbrufFehler("[TIMEOUT]", "Zeitüberschreitung bei WinRM-Verbindung.")
+
+        ergebnis = analysiere_server(ServerZiel(name="srv-timeout", rollen=["APP"]), remote_provider=provider)
+
+        self.assertTrue(any(hinweis.startswith("[TIMEOUT]") for hinweis in ergebnis.hinweise))
+
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.0.1"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", side_effect=[True, False, False])
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[])
+    def test_hinweis_freigegebene_relevante_ports(self, _sock_mock, _port_mock, _dns_mock) -> None:
+        ergebnis = analysiere_server(ServerZiel(name="srv-sql-01", rollen=["SQL"]))
+        self.assertTrue(any("Freigegebene/relevante Ports" in h and "1433" in h for h in ergebnis.hinweise))
 
 
 if __name__ == "__main__":

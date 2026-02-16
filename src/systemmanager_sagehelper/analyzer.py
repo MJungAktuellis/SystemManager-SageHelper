@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import platform
 import socket
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -20,6 +22,8 @@ from .models import (
     HardwareDetails,
     PortStatus,
     RollenDetails,
+    SQLDatenpfadInfo,
+    SQLInstanzInfo,
     SQLRollenDetails,
     ServerZiel,
     SoftwareInfo,
@@ -37,6 +41,12 @@ _PARTNER_KEYWORDS = ["dms", "crm", "edi", "shop", "bi", "isv"]
 _MANAGEMENT_STUDIO_KEYWORDS = ["sql server management studio", "ssms"]
 _SQL_SERVICE_KEYWORDS = ("mssql", "sql server", "sqlserveragent")
 _CTX_SERVICE_KEYWORDS = ("termservice", "sessionenv", "umrdpservice", "rdp")
+
+# Präfixe zur strukturierten Fehlerklassifikation für Remote-Ziele.
+_HINWEIS_DNS = "[DNS]"
+_HINWEIS_AUTH = "[AUTH]"
+_HINWEIS_WINRM = "[WINRM]"
+_HINWEIS_TIMEOUT = "[TIMEOUT]"
 
 logger = konfiguriere_logger(__name__, dateiname="server_analysis.log")
 
@@ -59,6 +69,15 @@ class RemoteSystemdaten:
     hardware: HardwareDetails = field(default_factory=HardwareDetails)
     dienste: list[DienstInfo] = field(default_factory=list)
     software: list[SoftwareInfo] = field(default_factory=list)
+    sql_instanzen: list[SQLInstanzInfo] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class RemoteAbrufFehler(Exception):
+    """Domänenspezifischer Fehler mit Klassifikation für Hinweise im Analysebericht."""
+
+    kategorie: str
+    nachricht: str
 
 
 class RemoteDatenProvider(Protocol):
@@ -72,17 +91,151 @@ class RemoteDatenProvider(Protocol):
 
 
 class WinRMAdapter:
-    """Basisadapter für WinRM.
+    """Produktiver WinRM-Adapter auf Basis von PowerShell-Remoting.
 
-    Die produktive Implementierung kann hier später angebunden werden,
-    ohne die fachliche Analysepipeline zu verändern.
+    Die Implementierung nutzt bewusst PowerShell als kleinsten gemeinsamen Nenner,
+    damit keine zusätzlichen Python-Abhängigkeiten erforderlich sind.
     """
 
-    def ist_verfuegbar(self) -> bool:
-        return False
+    def _fuehre_powershell_aus(self, command: str, timeout: float = 20.0) -> subprocess.CompletedProcess[str]:
+        """Führt einen PowerShell-Befehl robust aus und liefert den Prozess zurück."""
+        return subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
 
-    def lese_systemdaten(self, server: str) -> RemoteSystemdaten | None:  # noqa: ARG002
-        return None
+    def _klassifiziere_fehler(self, fehler: str) -> RemoteAbrufFehler:
+        """Ordnet typische PowerShell-/WinRM-Fehler einer stabilen Kategorie zu."""
+        text = fehler.lower()
+        if any(token in text for token in ["timed out", "timeout", "operationtimedout"]):
+            return RemoteAbrufFehler(_HINWEIS_TIMEOUT, "Zeitüberschreitung bei WinRM-Verbindung.")
+        if any(token in text for token in ["access is denied", "unauthorized", "authentication"]):
+            return RemoteAbrufFehler(_HINWEIS_AUTH, "Authentifizierung am Zielserver fehlgeschlagen.")
+        if any(token in text for token in ["winrm", "wsman", "client cannot connect"]):
+            return RemoteAbrufFehler(_HINWEIS_WINRM, "WinRM ist nicht konfiguriert oder nicht erreichbar.")
+        return RemoteAbrufFehler(_HINWEIS_WINRM, "Unbekannter WinRM-Fehler beim Abruf der Systemdaten.")
+
+    def ist_verfuegbar(self) -> bool:
+        """Prüft, ob lokale PowerShell und WinRM grundsätzlich genutzt werden können."""
+        try:
+            pruefung = self._fuehre_powershell_aus("$PSVersionTable.PSVersion.ToString(); Test-WSMan -ErrorAction Stop | Out-Null", timeout=8.0)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+        return pruefung.returncode == 0
+
+    def lese_systemdaten(self, server: str) -> RemoteSystemdaten | None:
+        """Liest Inventardaten per Invoke-Command und parst das JSON-Ergebnis."""
+        script_block = r"""
+$ErrorActionPreference = 'Stop'
+$remoteScript = {
+    $os = Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, OSArchitecture
+    $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfLogicalProcessors
+
+    $ramBytes = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
+    $software = @()
+    foreach ($root in @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )) {
+        if (Test-Path $root) {
+            $software += Get-ItemProperty $root -ErrorAction SilentlyContinue |
+                Where-Object { $_.DisplayName } |
+                Select-Object @{N='Name';E={$_.DisplayName}}, @{N='Version';E={$_.DisplayVersion}}, @{N='Hersteller';E={$_.Publisher}}, @{N='Installationspfad';E={$_.InstallLocation}}
+        }
+    }
+
+    $dienste = Get-Service |
+        Where-Object {
+            $_.Name -match 'MSSQL|SQLSERVERAGENT|TermService|SessionEnv|UmRdpService|Rdp' -or
+            $_.DisplayName -match 'SQL|Terminal|Remote Desktop'
+        } |
+        Select-Object Name, Status, StartType
+
+    $instanzMap = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL' -ErrorAction SilentlyContinue)
+    $sqlInstanzen = @()
+    if ($instanzMap) {
+        foreach ($prop in $instanzMap.PSObject.Properties) {
+            if ($prop.Name -in @('PSPath','PSParentPath','PSChildName','PSDrive','PSProvider')) { continue }
+            $instanzName = $prop.Name
+            $instanzId = [string]$prop.Value
+            $setupPath = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$instanzId\Setup"
+            $mssqlPath = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$instanzId\MSSQLServer"
+            $setup = Get-ItemProperty $setupPath -ErrorAction SilentlyContinue
+            $mssql = Get-ItemProperty $mssqlPath -ErrorAction SilentlyContinue
+            $datenpfade = @()
+            foreach ($entry in @(
+                @{ Kategorie = 'DataRoot'; Wert = $mssql.DefaultData },
+                @{ Kategorie = 'LogRoot'; Wert = $mssql.DefaultLog },
+                @{ Kategorie = 'BackupRoot'; Wert = $mssql.BackupDirectory },
+                @{ Kategorie = 'MasterData'; Wert = $mssql.DefaultData },
+                @{ Kategorie = 'MasterLog'; Wert = $mssql.DefaultLog }
+            )) {
+                if ($entry.Wert) {
+                    $datenpfade += [pscustomobject]@{
+                        Instanzname = $instanzName
+                        Kategorie = $entry.Kategorie
+                        Pfad = [string]$entry.Wert
+                    }
+                }
+            }
+
+            $sqlInstanzen += [pscustomobject]@{
+                Instanzname = $instanzName
+                InstanzId = $instanzId
+                Version = [string]$setup.Version
+                Edition = [string]$setup.Edition
+                Datenpfade = $datenpfade
+            }
+        }
+    }
+
+    [pscustomobject]@{
+        Betriebssystem = [pscustomobject]@{
+            Name = [string]$os.Caption
+            Version = [string]$os.Version
+            Build = [string]$os.BuildNumber
+            Architektur = [string]$os.OSArchitecture
+        }
+        Hardware = [pscustomobject]@{
+            CpuModell = [string]$cpu.Name
+            CpuLogischeKerne = [int]$cpu.NumberOfLogicalProcessors
+            ArbeitsspeicherGB = [math]::Round($ramBytes / 1GB, 2)
+        }
+        Dienste = $dienste
+        Software = ($software | Sort-Object Name -Unique)
+        SqlInstanzen = $sqlInstanzen
+    }
+}
+Invoke-Command -ComputerName '__SERVER__' -ScriptBlock $remoteScript -ErrorAction Stop |
+    ConvertTo-Json -Depth 6 -Compress
+""".replace("__SERVER__", server)
+
+        try:
+            prozess = self._fuehre_powershell_aus(script_block, timeout=60.0)
+        except FileNotFoundError:
+            raise RemoteAbrufFehler(_HINWEIS_WINRM, "PowerShell ist auf dem Analysehost nicht verfügbar.")
+        except subprocess.TimeoutExpired:
+            raise RemoteAbrufFehler(_HINWEIS_TIMEOUT, f"Zeitüberschreitung beim Abruf von '{server}'.")
+
+        if prozess.returncode != 0:
+            raise self._klassifiziere_fehler((prozess.stderr or prozess.stdout).strip())
+
+        roh = prozess.stdout.strip()
+        if not roh:
+            raise RemoteAbrufFehler(_HINWEIS_WINRM, "WinRM lieferte keine auswertbaren Daten zurück.")
+
+        try:
+            daten = json.loads(roh)
+        except json.JSONDecodeError as exc:
+            raise RemoteAbrufFehler(_HINWEIS_WINRM, f"Ungültige JSON-Antwort von WinRM: {exc.msg}")
+
+        if not isinstance(daten, dict):
+            raise RemoteAbrufFehler(_HINWEIS_WINRM, "Unerwartetes Antwortformat aus WinRM.")
+
+        return _baue_remote_systemdaten_aus_json(daten)
 
 
 class WMIAdapter:
@@ -136,6 +289,85 @@ def _normalisiere_liste_ohne_duplikate(eintraege: Iterable[str]) -> list[str]:
         if kandidat and kandidat not in ergebnis:
             ergebnis.append(kandidat)
     return ergebnis
+
+
+def _json_liste(rohwert: object) -> list[dict]:
+    """Normalisiert JSON-Felder auf eine Liste von Objekten."""
+    if isinstance(rohwert, list):
+        return [eintrag for eintrag in rohwert if isinstance(eintrag, dict)]
+    if isinstance(rohwert, dict):
+        return [rohwert]
+    return []
+
+
+def _baue_remote_systemdaten_aus_json(daten: dict) -> RemoteSystemdaten:
+    """Mapped PowerShell-JSON robust in die internen Dataklassen."""
+    os_daten = daten.get("Betriebssystem") if isinstance(daten.get("Betriebssystem"), dict) else {}
+    hw_daten = daten.get("Hardware") if isinstance(daten.get("Hardware"), dict) else {}
+
+    software = [
+        SoftwareInfo(
+            name=str(eintrag.get("Name") or "").strip(),
+            version=str(eintrag.get("Version") or "").strip() or None,
+            hersteller=str(eintrag.get("Hersteller") or "").strip() or None,
+            installationspfad=str(eintrag.get("Installationspfad") or "").strip() or None,
+        )
+        for eintrag in _json_liste(daten.get("Software"))
+        if str(eintrag.get("Name") or "").strip()
+    ]
+
+    dienste = [
+        DienstInfo(
+            name=str(eintrag.get("Name") or "").strip(),
+            status=str(eintrag.get("Status") or "").strip() or None,
+            starttyp=str(eintrag.get("StartType") or "").strip() or None,
+        )
+        for eintrag in _json_liste(daten.get("Dienste"))
+        if str(eintrag.get("Name") or "").strip()
+    ]
+
+    sql_instanzen: list[SQLInstanzInfo] = []
+    for eintrag in _json_liste(daten.get("SqlInstanzen")):
+        instanzname = str(eintrag.get("Instanzname") or "").strip()
+        if not instanzname:
+            continue
+
+        datenpfade = [
+            SQLDatenpfadInfo(
+                instanzname=str(pfad.get("Instanzname") or instanzname).strip(),
+                kategorie=str(pfad.get("Kategorie") or "Unbekannt").strip(),
+                pfad=str(pfad.get("Pfad") or "").strip(),
+            )
+            for pfad in _json_liste(eintrag.get("Datenpfade"))
+            if str(pfad.get("Pfad") or "").strip()
+        ]
+
+        sql_instanzen.append(
+            SQLInstanzInfo(
+                instanzname=instanzname,
+                instanz_id=str(eintrag.get("InstanzId") or "").strip() or None,
+                version=str(eintrag.get("Version") or "").strip() or None,
+                edition=str(eintrag.get("Edition") or "").strip() or None,
+                datenpfade=datenpfade,
+            )
+        )
+
+    return RemoteSystemdaten(
+        betriebssystem=BetriebssystemDetails(
+            name=str(os_daten.get("Name") or "").strip() or None,
+            version=str(os_daten.get("Version") or "").strip() or None,
+            build=str(os_daten.get("Build") or "").strip() or None,
+            architektur=str(os_daten.get("Architektur") or "").strip() or None,
+        ),
+        hardware=HardwareDetails(
+            cpu_modell=str(hw_daten.get("CpuModell") or "").strip() or None,
+            cpu_logische_kerne=int(hw_daten.get("CpuLogischeKerne")) if hw_daten.get("CpuLogischeKerne") is not None else None,
+            arbeitsspeicher_gb=float(hw_daten.get("ArbeitsspeicherGB")) if hw_daten.get("ArbeitsspeicherGB") is not None else None,
+        ),
+        dienste=dienste,
+        software=software,
+        sql_instanzen=sql_instanzen,
+    )
 
 
 def _ermittle_ip_adressen(host: str) -> list[str]:
@@ -272,8 +504,13 @@ def _uebernehme_inventardaten(ergebnis: AnalyseErgebnis, inventar: RemoteSystemd
         if eintrag.name
     ]
     ergebnis.installierte_anwendungen = _normalisiere_liste_ohne_duplikate(installierte)
+    ergebnis.rollen_details.sql.instanz_details = inventar.sql_instanzen
 
 
+def _freigegebene_relevante_ports(ergebnis: AnalyseErgebnis) -> list[str]:
+    """Formatiert fachlich relevante offene Ports für den Reportabschnitt."""
+    relevante = [f"{port.port} ({port.bezeichnung})" for port in ergebnis.ports if port.offen]
+    return _normalisiere_liste_ohne_duplikate(relevante)
 
 
 def schlage_rollen_per_portsignatur_vor(server: str) -> list[str]:
@@ -289,6 +526,7 @@ def schlage_rollen_per_portsignatur_vor(server: str) -> list[str]:
         erkannte_rollen.append("APP")
     return erkannte_rollen
 
+
 def _pruefe_rollen(ergebnis: AnalyseErgebnis) -> None:
     """Ermittelt strukturierte Rollenindikatoren aus Ports, Diensten und Software."""
     dienstnamen = [dienst.name.lower() for dienst in ergebnis.dienste]
@@ -298,7 +536,9 @@ def _pruefe_rollen(ergebnis: AnalyseErgebnis) -> None:
     ]
 
     sql_dienste = [dienst.name for dienst in ergebnis.dienste if any(k in dienst.name.lower() for k in _SQL_SERVICE_KEYWORDS)]
-    sql_instanzen = [name for name in software_namen if "sql server" in name.lower()]
+    sql_instanzen = [instanz.instanzname for instanz in ergebnis.rollen_details.sql.instanz_details] or [
+        name for name in software_namen if "sql server" in name.lower()
+    ]
     sql_erkannt = bool(sql_dienste or sql_instanzen or any(p.offen and p.port == 1433 for p in ergebnis.ports))
 
     sage_eintraege = [eintrag for eintrag in ergebnis.software if any(k in eintrag.name.lower() for k in _SAGE_KEYWORDS)]
@@ -321,7 +561,12 @@ def _pruefe_rollen(ergebnis: AnalyseErgebnis) -> None:
     ctx_erkannt = bool(ctx_dienste or ctx_indikatoren)
 
     ergebnis.rollen_details = RollenDetails(
-        sql=SQLRollenDetails(erkannt=sql_erkannt, instanzen=sql_instanzen, dienste=sql_dienste),
+        sql=SQLRollenDetails(
+            erkannt=sql_erkannt,
+            instanzen=sql_instanzen,
+            dienste=sql_dienste,
+            instanz_details=ergebnis.rollen_details.sql.instanz_details,
+        ),
         app=APPRollenDetails(erkannt=app_erkannt, sage_pfade=sage_pfade, sage_versionen=sage_versionen),
         ctx=CTXRollenDetails(erkannt=ctx_erkannt, terminaldienste=ctx_dienste, session_indikatoren=ctx_indikatoren),
     )
@@ -358,7 +603,7 @@ def analysiere_server(
     ip_adressen = _ermittle_ip_adressen(ergebnis.server)
     if not ip_adressen:
         ergebnis.hinweise.append(
-            "Hostname konnte nicht aufgelöst werden. Bitte DNS/Netzwerkverbindung prüfen."
+            f"{_HINWEIS_DNS} Hostname konnte nicht aufgelöst werden. Bitte DNS/Netzwerkverbindung prüfen."
         )
 
     erkannte_rollen: set[str] = set()
@@ -375,6 +620,12 @@ def analysiere_server(
 
     if ip_adressen:
         ergebnis.hinweise.append(f"Aufgelöste Adressen: {', '.join(ip_adressen)}")
+
+    freigegebene_ports = _freigegebene_relevante_ports(ergebnis)
+    if freigegebene_ports:
+        ergebnis.hinweise.append("Freigegebene/relevante Ports: " + ", ".join(freigegebene_ports))
+    else:
+        ergebnis.hinweise.append("Freigegebene/relevante Ports: keine")
 
     if erkannte_rollen and ziel_rollen:
         fehlende_rollen = sorted(set(ziel_rollen) - erkannte_rollen)
@@ -395,10 +646,15 @@ def analysiere_server(
     if os_name is not None:
         _uebernehme_inventardaten(ergebnis, _ermittle_lokale_systeminventar())
     else:
-        remote_daten = provider.lese_systemdaten(ergebnis.server) if provider.ist_verfuegbar() else None
+        try:
+            remote_daten = provider.lese_systemdaten(ergebnis.server) if provider.ist_verfuegbar() else None
+        except RemoteAbrufFehler as fehler:
+            ergebnis.hinweise.append(f"{fehler.kategorie} {fehler.nachricht}")
+            remote_daten = None
+
         if remote_daten is None:
             ergebnis.hinweise.append(
-                "Remote-Ziel erkannt: CPU-, Dienst- und Softwaredetails benötigen einen aktiven WinRM/WMI-Adapter."
+                f"{_HINWEIS_WINRM} Remote-Ziel erkannt: CPU-, Dienst- und Softwaredetails benötigen einen aktiven WinRM/WMI-Adapter."
             )
         else:
             _uebernehme_inventardaten(ergebnis, remote_daten)

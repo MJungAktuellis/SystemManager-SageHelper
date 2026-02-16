@@ -94,6 +94,11 @@ def render_markdown(ergebnisse: list[AnalyseErgebnis]) -> str:
             zeilen.append(f"- {port.port} ({port.bezeichnung}): {status}")
 
         zeilen.append("")
+        zeilen.append("### Freigegebene/relevante Ports")
+        offene_ports = [f"{port.port} ({port.bezeichnung})" for port in ergebnis.ports if port.offen]
+        zeilen.extend(_render_liste_tabelle(offene_ports))
+
+        zeilen.append("")
         zeilen.append("### Dienste (Auszug)")
         zeilen.extend(_render_liste_tabelle([f"{dienst.name} ({dienst.status or 'unbekannt'})" for dienst in ergebnis.dienste]))
 
