@@ -10,7 +10,10 @@ set "CONSOLE_MARKER=%~1"
 if /I not "%CONSOLE_MARKER%"=="--persist-console" (
     echo %CMDCMDLINE% | findstr /I /C:"/c" >nul
     if not errorlevel 1 (
-        start "SystemManager-SageHelper Installer" cmd /k "\"%SCRIPT_PATH%\" --persist-console"
+        REM WICHTIG: In CMD werden Anfuehrungszeichen mit doppelten Quotes maskiert,
+        REM nicht mit Backslashes. Sonst versucht cmd ein Literal wie '\"C:\...\"'
+        REM auszufuehren und meldet "is not recognized as an internal or external command".
+        start "SystemManager-SageHelper Installer" cmd /k ""%SCRIPT_PATH%" --persist-console"
         exit /b 0
     )
 )
