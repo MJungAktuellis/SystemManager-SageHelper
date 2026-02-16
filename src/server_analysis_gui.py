@@ -12,6 +12,7 @@ from systemmanager_sagehelper.analyzer import (
     schlage_rollen_per_portsignatur_vor,
 )
 from systemmanager_sagehelper.gui_shell import GuiShell
+from systemmanager_sagehelper.installation_state import pruefe_installationszustand, verarbeite_installations_guard
 from systemmanager_sagehelper.gui_state import GUIStateStore
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 from systemmanager_sagehelper.models import AnalyseErgebnis, ServerZiel
@@ -525,7 +526,24 @@ def start_gui() -> None:
 
 
 def main() -> None:
-    """CLI-kompatibler Startpunkt."""
+    """CLI-kompatibler Startpunkt mit Installationsschutz."""
+
+    def _zeige_fehler(text: str) -> None:
+        print(f"❌ {text}")
+
+    def _frage_installation(_frage: str) -> bool:
+        antwort = input("Installation starten? [j/N]: ").strip().lower()
+        return antwort in {"j", "ja", "y", "yes"}
+
+    freigegeben = verarbeite_installations_guard(
+        pruefe_installationszustand(),
+        modulname="Serveranalyse",
+        fehlermeldung_fn=_zeige_fehler,
+        installationsfrage_fn=_frage_installation,
+    )
+    if not freigegeben:
+        return
+
     start_gui()
 
 
