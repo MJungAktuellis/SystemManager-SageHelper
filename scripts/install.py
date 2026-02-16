@@ -6,6 +6,7 @@ und führt die Installation in einer festen, validierten Reihenfolge aus.
 
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 from pathlib import Path
@@ -58,7 +59,12 @@ def drucke_statusbericht() -> None:
 def _frage_ja_nein(prompt: str, standard: bool = True) -> bool:
     """Fragt eine Ja/Nein-Entscheidung mit sinnvoller Standardauswahl ab."""
     suffix = "[J/n]" if standard else "[j/N]"
-    eingabe = input(f"{prompt} {suffix}: ").strip().lower()
+    try:
+        eingabe = input(f"{prompt} {suffix}: ").strip().lower()
+    except EOFError:
+        # Fallback für nicht-interaktive Umgebungen (z. B. One-Click-Launcher mit Umleitung).
+        print("⚠️ Keine Benutzereingabe möglich, Standardwert wird verwendet.")
+        return standard
 
     if not eingabe:
         return standard
@@ -87,8 +93,20 @@ def ermittle_interaktive_auswahl(komponenten: dict) -> dict[str, bool]:
     return auswahl
 
 
+def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parst Installer-Argumente für interaktive und One-Click-Ausführung."""
+    parser = argparse.ArgumentParser(description="Installationsassistent für SystemManager-SageHelper")
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Aktiviert alle Standard-Komponenten ohne Eingabeaufforderung.",
+    )
+    return parser.parse_args(argv)
+
+
 def main() -> None:
     """Startpunkt des geführten Installationsprozesses."""
+    cli_args = parse_cli_args()
     print("=== Installation von SystemManager-SageHelper ===")
     log_datei = konfiguriere_logging(REPO_ROOT)
     print(f"📄 Installationslog: {log_datei}")
@@ -99,7 +117,16 @@ def main() -> None:
     try:
         drucke_voraussetzungsstatus()
         drucke_statusbericht()
-        auswahl = ermittle_interaktive_auswahl(komponenten)
+        if cli_args.non_interactive:
+            # One-Click-Modus: alle Standardkomponenten laut Default aktivieren.
+            auswahl = {
+                komponenten_id: komponenten[komponenten_id].default_aktiv
+                for komponenten_id in STANDARD_REIHENFOLGE
+            }
+            validiere_auswahl_und_abhaengigkeiten(komponenten, auswahl)
+            print("\nℹ️ Non-Interactive-Modus aktiv: Standardauswahl wird verwendet.")
+        else:
+            auswahl = ermittle_interaktive_auswahl(komponenten)
         ergebnisse = fuehre_installationsplan_aus(komponenten, auswahl)
         report_datei = schreibe_installationsreport(REPO_ROOT, ergebnisse, auswahl)
         marker_datei = schreibe_installations_marker(repo_root=REPO_ROOT)
