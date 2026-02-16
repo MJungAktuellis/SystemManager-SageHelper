@@ -6,10 +6,12 @@ import argparse
 from pathlib import Path
 
 from .analyzer import analysiere_mehrere_server, entdecke_server_kandidaten
+from .confirmation import bestaetige_aenderungen_cli
 from .folder_structure import ermittle_fehlende_ordner, lege_ordner_an
 from .logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 from .report import render_markdown
 from .targeting import baue_serverziele, parse_deklarationen, parse_liste
+from .share_policy import SharePolicy
 from .workflow import WorkflowSchritt, fuehre_standard_workflow_aus
 
 logger = konfiguriere_logger(__name__, dateiname="cli.log")
@@ -49,6 +51,13 @@ def baue_parser() -> argparse.ArgumentParser:
     workflow.add_argument("--out", default="docs/serverbericht.md", help="Markdown-Bericht der Analyse")
     workflow.add_argument("--logs", default="logs", help="Log-Verzeichnis für Doku-Konsolidierung")
     workflow.add_argument("--docs", default="docs", help="Zielordner für Log-Dokumentation")
+    workflow.add_argument("--share-auto-anwenden", action="store_true", help="Share-Änderungen ohne Rückfrage anwenden")
+    workflow.add_argument("--share-policy-kopie", action="store_true", help="Optionale _Kopie-Struktur ergänzen")
+    workflow.add_argument(
+        "--share-policy-doku",
+        action="store_true",
+        help="Optionale Dokumentation-Unterordner (Analysen/Aenderungen) ergänzen",
+    )
 
     ordner = sub.add_parser("ordner-check", help="SystemAG-Struktur prüfen oder anlegen")
     ordner.add_argument("--basis", required=True, help="Basisordner, z. B. D:/SystemAG")
@@ -109,6 +118,11 @@ def main() -> int:
         def _progress(schritt: WorkflowSchritt, prozent: int, text: str) -> None:
             print(f"[{prozent:>3}%] {schritt.value}: {text}")
 
+        share_policy = SharePolicy(
+            erstelle_systemag_kopie=args.share_policy_kopie,
+            erstelle_doku_unterordner=args.share_policy_doku,
+        )
+
         ergebnis = fuehre_standard_workflow_aus(
             ziele=ziele,
             basis_pfad=Path(args.basis),
@@ -117,6 +131,8 @@ def main() -> int:
             docs_verzeichnis=Path(args.docs),
             lauf_id=lauf_id,
             progress=_progress,
+            share_bestaetigung=None if args.share_auto_anwenden else bestaetige_aenderungen_cli,
+            share_policy=share_policy,
         )
         print(f"Workflow abgeschlossen: {'erfolgreich' if ergebnis.erfolgreich else 'mit Fehlern'}")
         return 0 if ergebnis.erfolgreich else 2
