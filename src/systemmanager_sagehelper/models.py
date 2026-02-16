@@ -10,6 +10,9 @@ class ServerZiel:
 
     name: str
     rollen: list[str]
+    rollenquelle: str | None = None
+    auto_rollen: list[str] = field(default_factory=list)
+    manuell_ueberschrieben: bool = False
 
 
 @dataclass
@@ -105,6 +108,9 @@ class AnalyseErgebnis:
     betriebssystem: str | None = None
     os_version: str | None = None
     rollen: list[str] = field(default_factory=list)
+    rollenquelle: str | None = None
+    auto_rollen: list[str] = field(default_factory=list)
+    manuell_ueberschrieben: bool = False
     ports: list[PortStatus] = field(default_factory=list)
     cpu_logische_kerne: int | None = None
     cpu_modell: str | None = None

@@ -16,6 +16,9 @@ class TestReport(unittest.TestCase):
             zeitpunkt=datetime(2026, 1, 1, 10, 30, 0),
             lauf_id="lauf-20260101-103000-abcd1234",
             rollen=["APP"],
+            rollenquelle="manuell gesetzt",
+            auto_rollen=["APP"],
+            manuell_ueberschrieben=False,
             betriebssystem="Windows",
             os_version="2022",
             cpu_logische_kerne=8,
@@ -34,6 +37,7 @@ class TestReport(unittest.TestCase):
         self.assertIn("CPU (logische Kerne): 8", md)
         self.assertIn("Sage-Version: Sage 100 9.0", md)
         self.assertIn("Lauf-ID: lauf-20260101-103000-abcd1234", md)
+        self.assertIn("Rollenquelle: manuell gesetzt", md)
 
 
 if __name__ == "__main__":

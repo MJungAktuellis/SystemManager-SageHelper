@@ -274,6 +274,21 @@ def _uebernehme_inventardaten(ergebnis: AnalyseErgebnis, inventar: RemoteSystemd
     ergebnis.installierte_anwendungen = _normalisiere_liste_ohne_duplikate(installierte)
 
 
+
+
+def schlage_rollen_per_portsignatur_vor(server: str) -> list[str]:
+    """Leitet einen schnellen Rollenvorschlag allein aus typischen Portsignaturen ab."""
+    erkannte_rollen: list[str] = []
+    for port, rolle in _PORT_ROLLEN_MAPPING.items():
+        kandidaten = _ermittle_socket_kandidaten(server, port)
+        if kandidaten and pruefe_tcp_port(kandidaten) and rolle not in erkannte_rollen:
+            erkannte_rollen.append(rolle)
+
+    # Fallback: Falls kein eindeutiger Indikator gefunden wurde, bleibt APP als Defaultrolle aktiv.
+    if not erkannte_rollen:
+        erkannte_rollen.append("APP")
+    return erkannte_rollen
+
 def _pruefe_rollen(ergebnis: AnalyseErgebnis) -> None:
     """Ermittelt strukturierte Rollenindikatoren aus Ports, Diensten und Software."""
     dienstnamen = [dienst.name.lower() for dienst in ergebnis.dienste]
@@ -333,6 +348,9 @@ def analysiere_server(
         zeitpunkt=datetime.now(),
         lauf_id=aktive_lauf_id,
         rollen=ziel_rollen,
+        rollenquelle=ziel.rollenquelle or None,
+        auto_rollen=_normalisiere_rollen(ziel.auto_rollen),
+        manuell_ueberschrieben=ziel.manuell_ueberschrieben,
         betriebssystem=os_name,
         os_version=os_version,
     )
@@ -367,6 +385,11 @@ def analysiere_server(
             )
     elif erkannte_rollen and not ziel_rollen:
         ergebnis.rollen = sorted(erkannte_rollen)
+
+    if not ergebnis.rollenquelle:
+        ergebnis.rollenquelle = "automatisch erkannt" if not ziel_rollen else "manuell gesetzt"
+    if ergebnis.manuell_ueberschrieben:
+        ergebnis.rollenquelle = "nachträglich geändert"
 
     provider = remote_provider or KombinierterRemoteProvider()
     if os_name is not None:
