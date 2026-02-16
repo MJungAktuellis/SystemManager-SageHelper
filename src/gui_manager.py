@@ -5,10 +5,11 @@ from __future__ import annotations
 import subprocess
 import sys
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from systemmanager_sagehelper.gui_shell import GuiShell
 from systemmanager_sagehelper.gui_state import GUIStateStore
+from systemmanager_sagehelper.installation_state import install_workflow_befehl, pruefe_installationszustand
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 from systemmanager_sagehelper.ui_theme import LAYOUT
 
@@ -233,15 +234,43 @@ class SystemManagerGUI:
             self._aktualisiere_dashboard_status()
 
     def installieren(self) -> None:
-        self._execute_command("Installation", [sys.executable, "scripts/install_assistant.py"])
+        """Startet den zentralen Installationsworkflow."""
+        self._execute_command("Installation", install_workflow_befehl())
+
+    def _installation_erforderlich_dialog(self, modulname: str) -> bool:
+        """Blockiert Modulstarts ohne valide Installation und bietet direkt die Aktion an."""
+        pruefung = pruefe_installationszustand()
+        if pruefung.installiert:
+            return True
+
+        gruende = "\n- " + "\n- ".join(pruefung.gruende) if pruefung.gruende else ""
+        self.shell.zeige_warnung(
+            "Installation erforderlich",
+            f"{modulname} ist noch nicht freigeschaltet.{gruende}",
+            "Wählen Sie 'Ja', um jetzt den Installationsworkflow zu starten.",
+        )
+        if messagebox.askyesno(
+            "Installation starten",
+            f"{modulname} kann erst nach erfolgreicher Installation genutzt werden.\n\n"
+            "Jetzt Installation starten?",
+            parent=self.master,
+        ):
+            self.installieren()
+        return False
 
     def serveranalyse(self) -> None:
+        if not self._installation_erforderlich_dialog("Serveranalyse"):
+            return
         self._execute_command("Serveranalyse", [sys.executable, "src/server_analysis_gui.py"])
 
     def ordner_verwalten(self) -> None:
+        if not self._installation_erforderlich_dialog("Ordnerverwaltung"):
+            return
         self._execute_command("Ordnerverwaltung", [sys.executable, "src/folder_manager.py"])
 
     def dokumentation_generieren(self) -> None:
+        if not self._installation_erforderlich_dialog("Dokumentation"):
+            return
         self._execute_command("Dokumentation", [sys.executable, "src/doc_generator.py"])
 
     def speichern(self) -> None:

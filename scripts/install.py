@@ -15,6 +15,7 @@ SRC_PATH = REPO_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
+from systemmanager_sagehelper.installation_state import schreibe_installations_marker
 from systemmanager_sagehelper.installer import (
     ErgebnisStatus,
     InstallationsFehler,
@@ -101,6 +102,7 @@ def main() -> None:
         auswahl = ermittle_interaktive_auswahl(komponenten)
         ergebnisse = fuehre_installationsplan_aus(komponenten, auswahl)
         report_datei = schreibe_installationsreport(REPO_ROOT, ergebnisse, auswahl)
+        marker_datei = schreibe_installations_marker(repo_root=REPO_ROOT)
     except InstallationsFehler as fehler:
         LOGGER.error("Installationsfehler: %s", fehler)
         print(f"❌ {fehler}")
@@ -116,6 +118,7 @@ def main() -> None:
     print("\n✅ Installation abgeschlossen.")
     print("📄 Logdatei:", log_datei)
     print("🧾 Installationsreport:", report_datei)
+    print("🧩 Installationsmarker:", marker_datei)
     print("Startbeispiel:")
     print("  python -m systemmanager_sagehelper scan --server localhost --rollen APP --out report.md")
 
