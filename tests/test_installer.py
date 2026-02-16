@@ -70,6 +70,56 @@ class TestInstaller(unittest.TestCase):
                 logger.removeHandler(handler)
                 handler.close()
 
+    def test_validiere_auswahl_und_abhaengigkeiten_fehlt_abhaengigkeit(self) -> None:
+        komponenten = {
+            "python": installer.InstallationsKomponente(
+                id="python",
+                name="Python",
+                default_aktiv=True,
+                install_fn=lambda: "ok",
+                verify_fn=lambda: (True, "ok"),
+            ),
+            "tool": installer.InstallationsKomponente(
+                id="tool",
+                name="Tool",
+                default_aktiv=True,
+                abhaengigkeiten=("python",),
+                install_fn=lambda: "ok",
+                verify_fn=lambda: (True, "ok"),
+            ),
+        }
+
+        with self.assertRaises(installer.InstallationsFehler):
+            installer.validiere_auswahl_und_abhaengigkeiten(
+                komponenten,
+                {"python": False, "tool": True},
+            )
+
+    def test_fuehre_installationsplan_aus_nutzt_feste_reihenfolge(self) -> None:
+        aufruf_reihenfolge: list[str] = []
+
+        def baue_komponente(komponenten_id: str) -> installer.InstallationsKomponente:
+            return installer.InstallationsKomponente(
+                id=komponenten_id,
+                name=komponenten_id,
+                default_aktiv=True,
+                install_fn=lambda: aufruf_reihenfolge.append(komponenten_id) or "ok",
+                verify_fn=lambda: (True, "ok"),
+            )
+
+        komponenten = {
+            key: baue_komponente(key)
+            for key in installer.STANDARD_REIHENFOLGE
+        }
+
+        ergebnisse = installer.fuehre_installationsplan_aus(
+            komponenten,
+            {key: True for key in installer.STANDARD_REIHENFOLGE},
+        )
+
+        self.assertEqual(installer.STANDARD_REIHENFOLGE, aufruf_reihenfolge)
+        self.assertEqual(len(installer.STANDARD_REIHENFOLGE), len(ergebnisse))
+
 
 if __name__ == "__main__":
     unittest.main()

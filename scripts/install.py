@@ -1,7 +1,7 @@
 """Geführter Installationsassistent für SystemManager-SageHelper.
 
-Der Assistent kann auf Windows zusätzlich Git und Python automatisch
-nachinstallieren und richtet anschließend die Python-Abhängigkeiten ein.
+Dieses Skript bietet einen interaktiven Auswahlmodus für Installationskomponenten
+und führt die Installation in einer festen, validierten Reihenfolge aus.
 """
 
 from __future__ import annotations
@@ -16,14 +16,14 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from systemmanager_sagehelper.installer import (
-    MINDEST_PYTHON_VERSION,
     InstallationsFehler,
+    STANDARD_REIHENFOLGE,
+    erstelle_standard_komponenten,
     erzeuge_installationsbericht,
-    installiere_git_unter_windows,
-    installiere_python_pakete,
-    installiere_python_unter_windows,
-    ist_windows_system,
+    fuehre_installationsplan_aus,
     konfiguriere_logging,
+    schreibe_installationsreport,
+    validiere_auswahl_und_abhaengigkeiten,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -38,27 +38,36 @@ def drucke_statusbericht() -> None:
         print(f"  {symbol} {status.name}{version}")
 
 
-def validiere_python_version() -> None:
-    """Bricht auf Nicht-Windows-Systemen bei zu alter Python-Version sauber ab."""
-    if sys.version_info >= MINDEST_PYTHON_VERSION:
-        return
+def _frage_ja_nein(prompt: str, standard: bool = True) -> bool:
+    """Fragt eine Ja/Nein-Entscheidung mit sinnvoller Standardauswahl ab."""
+    suffix = "[J/n]" if standard else "[j/N]"
+    eingabe = input(f"{prompt} {suffix}: ").strip().lower()
 
-    benoetigt = ".".join(map(str, MINDEST_PYTHON_VERSION))
-    raise InstallationsFehler(
-        f"Python {benoetigt}+ wird benötigt. Aktuell aktiv: {sys.version.split()[0]}"
-    )
+    if not eingabe:
+        return standard
+    if eingabe in {"j", "ja", "y", "yes"}:
+        return True
+    if eingabe in {"n", "nein", "no"}:
+        return False
+
+    print("⚠️ Ungültige Eingabe, Standardwert wird übernommen.")
+    return standard
 
 
-def fuehre_windows_bootstrap_aus() -> None:
-    """Installiert fehlende Windows-Voraussetzungen, sofern möglich, automatisiert."""
-    git_installiert = installiere_git_unter_windows()
-    if git_installiert:
-        print("✅ Git wurde installiert.")
+def ermittle_interaktive_auswahl(komponenten: dict) -> dict[str, bool]:
+    """Ermittelt die gewünschte Komponentenauswahl interaktiv am Terminal."""
+    print("\nInteraktiver Modus: Komponenten können optional deaktiviert werden.")
+    print("Standardmäßig sind alle Komponenten aktiviert.\n")
 
-    python_installiert = installiere_python_unter_windows()
-    if python_installiert:
-        print("✅ Python wurde installiert. Starte den Installer danach erneut.")
-        raise SystemExit(0)
+    auswahl = {komponenten_id: komponenten[komponenten_id].default_aktiv for komponenten_id in STANDARD_REIHENFOLGE}
+
+    for komponenten_id in STANDARD_REIHENFOLGE:
+        komponente = komponenten[komponenten_id]
+        aktiv = _frage_ja_nein(f"Komponente aktivieren: {komponente.name}", standard=komponente.default_aktiv)
+        auswahl[komponenten_id] = aktiv
+
+    validiere_auswahl_und_abhaengigkeiten(komponenten, auswahl)
+    return auswahl
 
 
 def main() -> None:
@@ -68,16 +77,13 @@ def main() -> None:
     print(f"📄 Installationslog: {log_datei}")
     LOGGER.info("Installationslauf gestartet.")
 
+    komponenten = erstelle_standard_komponenten(REPO_ROOT)
+
     try:
         drucke_statusbericht()
-
-        if ist_windows_system():
-            print("\nWindows erkannt: Voraussetzungen werden bei Bedarf nachinstalliert.")
-            fuehre_windows_bootstrap_aus()
-        else:
-            validiere_python_version()
-
-        installiere_python_pakete(REPO_ROOT)
+        auswahl = ermittle_interaktive_auswahl(komponenten)
+        ergebnisse = fuehre_installationsplan_aus(komponenten, auswahl)
+        report_datei = schreibe_installationsreport(REPO_ROOT, ergebnisse, auswahl)
     except InstallationsFehler as fehler:
         LOGGER.error("Installationsfehler: %s", fehler)
         print(f"❌ {fehler}")
@@ -92,6 +98,7 @@ def main() -> None:
     LOGGER.info("Installationslauf erfolgreich abgeschlossen.")
     print("\n✅ Installation abgeschlossen.")
     print("📄 Logdatei:", log_datei)
+    print("🧾 Installationsreport:", report_datei)
     print("Startbeispiel:")
     print("  python -m systemmanager_sagehelper scan --server localhost --rollen APP --out report.md")
 

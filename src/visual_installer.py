@@ -1,33 +1,25 @@
-from install_handler import verarbeite_installation
-import os
+"""Legacy-Entry-Point für den visuellen Installer.
 
-def visueller_installationsassistent():
-    print("=== Visueller Installationsassistent ===")
-    print("Dieser Assistent hilft Ihnen, Module korrekt zu installieren.")
+Hinweis: Dieser Pfad ist veraltet und delegiert auf ``scripts/install.py``.
+"""
 
-    # Schritt 1: ZIP-Datei angeben
-    zip_pfad = input("Bitte geben Sie den Pfad zur ZIP-Datei ein: ").strip()
-    if not os.path.exists(zip_pfad):
-        print(f"❌ Fehler: Die Datei '{zip_pfad}' wurde nicht gefunden.")
-        return
+from __future__ import annotations
 
-    # Schritt 2: Zielverzeichnis angeben
-    ziel_verzeichnis = input("Bitte geben Sie das Zielverzeichnis für die Installation ein: ").strip()
-    if not os.path.exists(ziel_verzeichnis):
-        try:
-            os.makedirs(ziel_verzeichnis)
-            print(f"📁 Zielverzeichnis '{ziel_verzeichnis}' wurde erstellt.")
-        except Exception as e:
-            print(f"❌ Fehler: Das Zielverzeichnis konnte nicht erstellt werden: {e}")
-            return
+import subprocess
+import sys
+from pathlib import Path
 
-    # Installation starten
-    try:
-        print("\n🚀 Installation wird gestartet...")
-        verarbeite_installation(zip_pfad, ziel_verzeichnis)
-        print("\n✅ Installation erfolgreich abgeschlossen.")
-    except Exception as e:
-        print(f"❌ Ein Fehler ist während der Installation aufgetreten: {e}")
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+INSTALL_SCRIPT = REPO_ROOT / "scripts" / "install.py"
+
+
+def visueller_installationsassistent() -> None:
+    """Leitet auf den aktuellen Installationsassistenten weiter."""
+    print("⚠️ Hinweis: 'src/visual_installer.py' ist veraltet.")
+    print("➡️  Starte stattdessen den zentralen Installer aus scripts/install.py ...")
+    subprocess.check_call([sys.executable, str(INSTALL_SCRIPT)])
+
 
 if __name__ == "__main__":
     visueller_installationsassistent()
