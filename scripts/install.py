@@ -16,17 +16,33 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from systemmanager_sagehelper.installer import (
+    ErgebnisStatus,
     InstallationsFehler,
     STANDARD_REIHENFOLGE,
     erstelle_standard_komponenten,
     erzeuge_installationsbericht,
     fuehre_installationsplan_aus,
     konfiguriere_logging,
+    pruefe_und_behebe_voraussetzungen,
     schreibe_installationsreport,
     validiere_auswahl_und_abhaengigkeiten,
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+def drucke_voraussetzungsstatus() -> None:
+    """Zeigt standardisierte Zustände der Voraussetzungskontrolle an."""
+    print("\nVoraussetzungen:")
+    for status in pruefe_und_behebe_voraussetzungen():
+        symbol = {
+            ErgebnisStatus.OK: "✅",
+            ErgebnisStatus.WARN: "⚠️",
+            ErgebnisStatus.ERROR: "❌",
+        }[status.status]
+        print(f"  {symbol} [{status.status.value}] {status.pruefung}: {status.nachricht}")
+        if status.naechste_aktion and status.naechste_aktion != "Keine Aktion erforderlich.":
+            print(f"      → Nächste Aktion: {status.naechste_aktion}")
 
 
 def drucke_statusbericht() -> None:
@@ -80,6 +96,7 @@ def main() -> None:
     komponenten = erstelle_standard_komponenten(REPO_ROOT)
 
     try:
+        drucke_voraussetzungsstatus()
         drucke_statusbericht()
         auswahl = ermittle_interaktive_auswahl(komponenten)
         ergebnisse = fuehre_installationsplan_aus(komponenten, auswahl)

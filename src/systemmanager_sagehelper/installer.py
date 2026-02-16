@@ -14,6 +14,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Callable
 
@@ -45,6 +46,26 @@ class InstallationsErgebnis:
     name: str
     erfolgreich: bool
     nachricht: str
+    status: str = "OK"
+    naechste_aktion: str = "Keine Aktion erforderlich."
+
+
+class ErgebnisStatus(str, Enum):
+    """Standardisierte Ergebniszustände für Assistenten und Installer."""
+
+    OK = "OK"
+    WARN = "WARN"
+    ERROR = "ERROR"
+
+
+@dataclass(frozen=True)
+class VoraussetzungStatus:
+    """Ergebnis einer einzelnen Voraussetzungen-Prüfung inkl. Folgeaktion."""
+
+    pruefung: str
+    status: ErgebnisStatus
+    nachricht: str
+    naechste_aktion: str
 
 
 @dataclass(frozen=True)
@@ -155,6 +176,67 @@ def pruefe_voraussetzungen() -> tuple[bool, str]:
     return True, "Voraussetzungen (Windows + Adminrechte) erfüllt."
 
 
+def _ist_python_version_kompatibel(version: tuple[int, int, int]) -> bool:
+    """Prüft, ob eine geparste Python-Version die Mindestanforderung erfüllt."""
+    return version[:2] >= MINDEST_PYTHON_VERSION
+
+
+def _parse_python_version(versions_text: str | None) -> tuple[int, int, int] | None:
+    """Parst die numerische Python-Version aus typischen Versionsausgaben."""
+    if not versions_text:
+        return None
+
+    for token in versions_text.replace("Python", "").split():
+        teile = token.strip().split(".")
+        if len(teile) < 2:
+            continue
+        try:
+            major = int(teile[0])
+            minor = int(teile[1])
+            patch = int(teile[2]) if len(teile) > 2 else 0
+            return major, minor, patch
+        except ValueError:
+            continue
+    return None
+
+
+def _normalisiere_pfad_fuer_vergleich(pfad: str) -> str:
+    """Normalisiert Pfade robust für Interpreter-Vergleiche unter Windows/Linux."""
+    return os.path.normcase(os.path.abspath(pfad))
+
+
+def finde_kompatiblen_python_interpreter() -> str | None:
+    """Findet einen Python-Interpreter mit Mindestversion in gängigen Quellen."""
+    kandidaten = [
+        [sys.executable],
+        ["py", f"-{MINDEST_PYTHON_VERSION[0]}.{MINDEST_PYTHON_VERSION[1]}"] if ist_windows_system() else None,
+        ["py", "-3"] if ist_windows_system() else None,
+        ["python"],
+        ["python3"],
+    ]
+
+    for kandidat in [k for k in kandidaten if k is not None]:
+        ausgabe = lese_befehlsausgabe([*kandidat, "--version"])
+        version = _parse_python_version(ausgabe)
+        if version and _ist_python_version_kompatibel(version):
+            return " ".join(kandidat)
+    return None
+
+
+def _pip_verfuegbar_fuer_interpreter(interpreter: str) -> bool:
+    """Prüft pip-Verfügbarkeit für einen Interpreter-String inkl. Argumenten."""
+    befehl = interpreter.split() + ["-m", "pip", "--version"]
+    return lese_befehlsausgabe(befehl) is not None
+
+
+def starte_installationsassistent_mit_interpreter(interpreter: str, argv: list[str] | None = None) -> None:
+    """Startet den aktuellen Installer-Prozess mit einem (neuen) Interpreter erneut."""
+    script_argv = argv or sys.argv
+    cmd = interpreter.split() + script_argv
+    logging.getLogger(__name__).info("Starte Re-Entry des Installers: %s", " ".join(cmd))
+    raise SystemExit(subprocess.call(cmd))
+
+
 def pruefe_python_version() -> WerkzeugStatus:
     """Ermittelt den Status der aktuell laufenden Python-Version."""
     version = sys.version.split()[0]
@@ -247,6 +329,132 @@ def installiere_python_unter_windows() -> bool:
     raise InstallationsFehler(
         "Python 3.11+ fehlt und weder winget noch choco wurden gefunden."
     )
+
+
+def pruefe_und_behebe_voraussetzungen(argv_reentry: list[str] | None = None) -> list[VoraussetzungStatus]:
+    """Prüft Python/Pip und behebt typische Voraussetzungen inkl. Re-Entry.
+
+    Die Funktion liefert standardisierte Zustände (OK/WARN/ERROR) zurück.
+    Falls ein neuer Interpreter installiert wurde, wird der Installer automatisch
+    mit diesem Interpreter neu gestartet.
+    """
+    ergebnisse: list[VoraussetzungStatus] = []
+
+    if not ist_windows_system():
+        ergebnisse.append(
+            VoraussetzungStatus(
+                pruefung="Betriebssystem",
+                status=ErgebnisStatus.ERROR,
+                nachricht="Das Installationsmodell unterstützt nur Windows.",
+                naechste_aktion="Installer auf einem Windows-Server ausführen.",
+            )
+        )
+        return ergebnisse
+
+    if not hat_adminrechte():
+        ergebnisse.append(
+            VoraussetzungStatus(
+                pruefung="Administratorrechte",
+                status=ErgebnisStatus.ERROR,
+                nachricht="Administratorrechte fehlen.",
+                naechste_aktion="Installer als Administrator neu starten.",
+            )
+        )
+        return ergebnisse
+
+    ergebnisse.append(
+        VoraussetzungStatus(
+            pruefung="Administratorrechte",
+            status=ErgebnisStatus.OK,
+            nachricht="Administratorrechte vorhanden.",
+            naechste_aktion="Keine Aktion erforderlich.",
+        )
+    )
+
+    interpreter = finde_kompatiblen_python_interpreter()
+    if interpreter is None:
+        ergebnisse.append(
+            VoraussetzungStatus(
+                pruefung="Python-Version",
+                status=ErgebnisStatus.WARN,
+                nachricht="Kein kompatibler Python-Interpreter gefunden.",
+                naechste_aktion="Python 3.11+ wird über winget/choco installiert.",
+            )
+        )
+        installiere_python_unter_windows()
+        interpreter = finde_kompatiblen_python_interpreter()
+        if interpreter is None:
+            ergebnisse.append(
+                VoraussetzungStatus(
+                    pruefung="Python-Version",
+                    status=ErgebnisStatus.ERROR,
+                    nachricht="Python-Installation war nicht erfolgreich.",
+                    naechste_aktion="Python manuell installieren und Installer erneut starten.",
+                )
+            )
+            return ergebnisse
+
+    ergebnisse.append(
+        VoraussetzungStatus(
+            pruefung="Python-Version",
+            status=ErgebnisStatus.OK,
+            nachricht=f"Kompatibler Interpreter gefunden ({interpreter}).",
+            naechste_aktion="Keine Aktion erforderlich.",
+        )
+    )
+
+    if _normalisiere_pfad_fuer_vergleich(interpreter.split()[0]) != _normalisiere_pfad_fuer_vergleich(sys.executable):
+        ergebnisse.append(
+            VoraussetzungStatus(
+                pruefung="Re-Entry",
+                status=ErgebnisStatus.WARN,
+                nachricht="Installer wird mit dem kompatiblen Interpreter neu gestartet.",
+                naechste_aktion=f"Re-Entry mit '{interpreter}'.",
+            )
+        )
+        starte_installationsassistent_mit_interpreter(interpreter, argv=argv_reentry)
+
+    if _pip_verfuegbar_fuer_interpreter(sys.executable):
+        ergebnisse.append(
+            VoraussetzungStatus(
+                pruefung="pip",
+                status=ErgebnisStatus.OK,
+                nachricht="pip ist funktionsfähig.",
+                naechste_aktion="Keine Aktion erforderlich.",
+            )
+        )
+        return ergebnisse
+
+    ergebnisse.append(
+        VoraussetzungStatus(
+            pruefung="pip",
+            status=ErgebnisStatus.WARN,
+            nachricht="pip ist nicht verfügbar und wird über ensurepip repariert.",
+            naechste_aktion="ensurepip ausführen.",
+        )
+    )
+    fuehre_installationsbefehl_aus([sys.executable, "-m", "ensurepip", "--upgrade"], "pip-Bootstrap")
+
+    if _pip_verfuegbar_fuer_interpreter(sys.executable):
+        ergebnisse.append(
+            VoraussetzungStatus(
+                pruefung="pip",
+                status=ErgebnisStatus.OK,
+                nachricht="pip wurde erfolgreich bereitgestellt.",
+                naechste_aktion="Keine Aktion erforderlich.",
+            )
+        )
+    else:
+        ergebnisse.append(
+            VoraussetzungStatus(
+                pruefung="pip",
+                status=ErgebnisStatus.ERROR,
+                nachricht="pip konnte nicht bereitgestellt werden.",
+                naechste_aktion="Python-Installation prüfen und Installer erneut starten.",
+            )
+        )
+
+    return ergebnisse
 
 
 def pruefe_pip_und_venv() -> tuple[bool, str]:
@@ -360,6 +568,8 @@ def fuehre_installationsplan_aus(
             name=komponente.name,
             erfolgreich=True,
             nachricht=nachricht,
+            status=ErgebnisStatus.OK.value,
+            naechste_aktion="Keine Aktion erforderlich.",
         )
         ergebnisse.append(ergebnis)
         logger.info("Installationsschritt abgeschlossen: %s", komponente.name)
@@ -406,16 +616,23 @@ def erstelle_standard_komponenten(repo_root: Path) -> dict[str, InstallationsKom
     """Erzeugt das zentrale Installationsmodell mit standardisierten Komponenten."""
 
     def install_voraussetzungen() -> str:
-        return "Systemvoraussetzungen geprüft."
+        statusliste = pruefe_und_behebe_voraussetzungen()
+        kritische_fehler = [eintrag for eintrag in statusliste if eintrag.status == ErgebnisStatus.ERROR]
+        if kritische_fehler:
+            erster = kritische_fehler[0]
+            raise InstallationsFehler(f"{erster.pruefung}: {erster.nachricht} | {erster.naechste_aktion}")
+        return "Voraussetzungen inkl. Python/Pip wurden geprüft und bei Bedarf behoben."
 
     def verify_voraussetzungen() -> tuple[bool, str]:
-        return pruefe_voraussetzungen()
+        statusliste = pruefe_und_behebe_voraussetzungen()
+        kritische_fehler = [eintrag for eintrag in statusliste if eintrag.status == ErgebnisStatus.ERROR]
+        if kritische_fehler:
+            erster = kritische_fehler[0]
+            return False, f"{erster.pruefung}: {erster.nachricht}"
+        return True, "Voraussetzungen sind erfüllt."
 
     def install_python() -> str:
-        installiert = installiere_python_unter_windows()
-        if installiert:
-            return "Python wurde installiert oder aktualisiert."
-        return "Python-Version war bereits ausreichend."
+        return "Python-Status wird in der Voraussetzungsprüfung behandelt."
 
     def verify_python() -> tuple[bool, str]:
         python_status = pruefe_python_version()

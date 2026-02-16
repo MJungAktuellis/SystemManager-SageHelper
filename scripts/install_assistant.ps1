@@ -1,49 +1,61 @@
-# Installationsassistent – Erzwinge Administratorrechte
+# Installationsassistent – PowerShell dient nur als Launcher für die Python-Kernlogik.
 [CmdletBinding()]
 Param()
 
 function Test-Admin {
     $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
-    $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-if (-Not (Test-Admin)) {
+if (-not (Test-Admin)) {
     Write-Host "[INFO] Skript läuft nicht mit Administratorrechten. Starte neu als Admin..."
-    Start-Process -FilePath PowerShell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
-    Exit
+    Start-Process -FilePath "PowerShell" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    exit
 }
 
-Write-Host "[INFO] Skript läuft mit Administratorrechten. Fortfahren..."
+Write-Host "=== SystemManager-SageHelper: Installations-Launcher ==="
+Write-Host "[INFO] Delegiere an scripts/install.py (zentraler Installationspfad)."
 
-# Python prüfen und ggf. installieren
-Write-Host "=== SystemManager-SageHelper: One-Click-Installer ==="
-Write-Host "[INFO] Prüfe, ob Python installiert ist..."
-python --version
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "[INFO] Python ist nicht installiert. Starte automatische Installation..."
+$RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
+$InstallScript = Join-Path $RepoRoot "scripts\install.py"
 
-    $PythonInstallerUrl = "https://www.python.org/ftp/python/3.11.5/python-3.11.5-amd64.exe"
-    $InstallerPath = "$PSScriptRoot\\python-installer.exe"
+# Bevorzugte Interpreter-Reihenfolge für den Start der Python-Kernlogik.
+$PythonCandidates = @(
+    @("py", "-3"),
+    @("python"),
+    @("python3")
+)
 
-    Write-Host "[INFO] Lade Python-Installer herunter..."
-    Invoke-WebRequest -Uri $PythonInstallerUrl -OutFile $InstallerPath
-
-    Write-Host "[INFO] Installiere Python..."
-    Start-Process -FilePath $InstallerPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -NoNewWindow -Wait
-
-    python --version
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "❌ Fehler: Python konnte nicht installiert werden."
-        Exit 1
+$launched = $false
+foreach ($candidate in $PythonCandidates) {
+    $exe = $candidate[0]
+    $cmd = Get-Command $exe -ErrorAction SilentlyContinue
+    if (-not $cmd) {
+        continue
     }
-    Write-Host "✅ Python erfolgreich installiert."
-} else {
-    Write-Host "✅ Python gefunden."
+
+    $arguments = @()
+    if ($candidate.Count -gt 1) {
+        $arguments += $candidate[1..($candidate.Count - 1)]
+    }
+    $arguments += @($InstallScript)
+
+    Write-Host "[INFO] Starte Installer mit: $($candidate -join ' ')"
+    & $exe @arguments
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) {
+        $launched = $true
+        break
+    }
+
+    Write-Host "[WARN] Installer mit '$($candidate -join ' ')' beendet mit ExitCode $exitCode."
 }
 
-# Starte den Haupt-Installationsprozess
-Write-Host "[INFO] Starte Installationsprozess für SystemManager-SageHelper..."
-python $PSScriptRoot/../src/visual_installer.py
+if (-not $launched) {
+    Write-Host "❌ Fehler: Konnte den Python-basierten Installer nicht erfolgreich starten."
+    Write-Host "➡️ Bitte prüfen Sie die Python-Installation oder führen Sie scripts/install.py manuell aus."
+    exit 1
+}
 
-Write-Host "✅ Installationsprozess abgeschlossen. Sie können das Programm jetzt verwenden."
+Write-Host "✅ Installationsprozess abgeschlossen."
