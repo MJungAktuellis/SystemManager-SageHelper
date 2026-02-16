@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import builtins
 import importlib.util
+import io
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -32,6 +34,79 @@ class TestInstallScript(unittest.TestCase):
     def test_frage_ja_nein_nutzt_standardwert_bei_eof_false(self) -> None:
         with patch.object(builtins, "input", side_effect=EOFError):
             self.assertFalse(install_script._frage_ja_nein("Test", standard=False))
+
+    def test_safe_print_cp1252_ersetzt_emojis_ohne_unicodefehler(self) -> None:
+        """Stellt sicher, dass cp1252-Konsolen robust mit Emoji-Ausgaben umgehen.
+
+        Hintergrund: In älteren Windows-Konsolen ist häufig cp1252 aktiv.
+        Emojis sind dort nicht direkt darstellbar und müssen zuverlässig in
+        einen ASCII-kompatiblen Fallback überführt werden.
+        """
+
+        class FakeStdout(io.StringIO):
+            # Simuliert eine klassische Windows-Konsole mit cp1252-Codepage.
+            encoding = "cp1252"
+
+        fake_stdout = FakeStdout()
+        with patch.object(install_script.sys, "stdout", fake_stdout):
+            install_script._safe_print("Installationsstatus ✅ 🚀")
+
+        self.assertIn("Installationsstatus", fake_stdout.getvalue())
+        self.assertIn("? ?", fake_stdout.getvalue())
+
+    def test_safe_print_ascii_fallback_wenn_stdout_schreiben_scheitert(self) -> None:
+        """Prüft den finalen ASCII-Fallback bei Schreibproblemen der Konsole."""
+
+        class ProblematischerStdout:
+            # Simuliert eine defekte/inkonsistente Konsole mit cp1252-Codepage,
+            # bei der das Schreiben zunächst einen UnicodeEncodeError wirft.
+            encoding = "cp1252"
+
+            def __init__(self) -> None:
+                self._buffer: list[str] = []
+                self._saw_first_error = False
+
+            def write(self, text: str) -> int:
+                if not self._saw_first_error:
+                    self._saw_first_error = True
+                    raise UnicodeEncodeError("cp1252", "✅", 0, 1, "cannot encode")
+                self._buffer.append(text)
+                return len(text)
+
+            def flush(self) -> None:  # pragma: no cover - keine Logik, nur Print-Vertrag
+                return None
+
+            def getvalue(self) -> str:
+                return "".join(self._buffer)
+
+        stdout = ProblematischerStdout()
+        with patch.object(install_script.sys, "stdout", stdout):
+            install_script._safe_print("Installation ✅")
+
+        self.assertIn("Installation ?", stdout.getvalue())
+
+    def test_main_non_interactive_verwendet_standardauswahl(self) -> None:
+        """Deckt den Non-Interactive-Ausgabepfad im Hauptablauf mit Mocks ab."""
+
+        komponenten = {"kern": SimpleNamespace(default_aktiv=True, name="Kernkomponente")}
+
+        with (
+            patch.object(install_script, "parse_cli_args", return_value=SimpleNamespace(non_interactive=True)),
+            patch.object(install_script, "konfiguriere_logging", return_value="install.log"),
+            patch.object(install_script, "erstelle_standard_komponenten", return_value=komponenten),
+            patch.object(install_script, "drucke_voraussetzungsstatus"),
+            patch.object(install_script, "drucke_statusbericht"),
+            patch.object(install_script, "STANDARD_REIHENFOLGE", ["kern"]),
+            patch.object(install_script, "validiere_auswahl_und_abhaengigkeiten") as validiere_mock,
+            patch.object(install_script, "fuehre_installationsplan_aus", return_value=[]),
+            patch.object(install_script, "schreibe_installationsreport", return_value="report.md"),
+            patch.object(install_script, "schreibe_installations_marker", return_value="installed.marker"),
+            patch.object(install_script, "_safe_print") as safe_print_mock,
+        ):
+            install_script.main()
+
+        validiere_mock.assert_called_once_with(komponenten, {"kern": True})
+        safe_print_mock.assert_any_call("\n[INFO] Non-Interactive-Modus aktiv: Standardauswahl wird verwendet.")
 
 
 if __name__ == "__main__":
