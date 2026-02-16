@@ -100,3 +100,139 @@ def test_rollenableitung_aus_discovery_diensten() -> None:
 
     assert _rollen_aus_discovery_treffer(sql_ctx) == ["SQL", "CTX"]
     assert _rollen_aus_discovery_treffer(nur_app) == ["APP"]
+
+
+def test_executive_summary_aggregiert_rollen_ports_und_warnungen() -> None:
+    """Die Executive Summary soll zentrale Kennzahlen konsistent zusammenfassen."""
+    from server_analysis_gui import _baue_executive_summary
+
+    ergebnisse = [
+        AnalyseErgebnis(
+            server="srv-01",
+            zeitpunkt=datetime.now(),
+            rollen=["SQL", "APP"],
+            ports=[
+                PortStatus(port=1433, offen=True, bezeichnung="MSSQL"),
+                PortStatus(port=3389, offen=False, bezeichnung="RDP"),
+            ],
+            hinweise=["Hinweis A"],
+        ),
+        AnalyseErgebnis(
+            server="srv-02",
+            zeitpunkt=datetime.now(),
+            rollen=["CTX"],
+            ports=[PortStatus(port=135, offen=True, bezeichnung="RPC")],
+            hinweise=[],
+        ),
+    ]
+
+    summary = _baue_executive_summary(ergebnisse)
+
+    assert any("Analysierte Server: 2" in zeile for zeile in summary)
+    assert any("SQL=1" in zeile and "APP=1" in zeile and "CTX=1" in zeile for zeile in summary)
+    assert any("Offene kritische Ports: 2" in zeile for zeile in summary)
+    assert any("Warnungen/Hinweise gesamt: 2" in zeile for zeile in summary)
+
+
+def test_analyse_starten_erzeugt_report_und_zeigt_verweis(monkeypatch) -> None:
+    """Nach erfolgreicher Analyse soll ein Report erzeugt und als Verweis sichtbar werden."""
+    from server_analysis_gui import MehrserverAnalyseGUI
+
+    class _FakeVar:
+        def __init__(self, value: str = "") -> None:
+            self.value = value
+
+        def get(self) -> str:
+            return self.value
+
+        def set(self, value: str) -> None:
+            self.value = value
+
+    class _FakeTree:
+        def __init__(self) -> None:
+            self.children: list[str] = []
+            self.status_updates: dict[tuple[str, str], str] = {}
+
+        def get_children(self, _root: str = "") -> list[str]:
+            return list(self.children)
+
+        def delete(self, _item_id: str) -> None:
+            return
+
+        def set(self, item_id: str, column: str, value: str) -> None:
+            self.status_updates[(item_id, column)] = value
+
+    class _FakeSummaryLabel:
+        def __init__(self) -> None:
+            self.text = ""
+
+        def configure(self, *, text: str) -> None:
+            self.text = text
+
+    class _FakeShell:
+        def __init__(self) -> None:
+            self.lauf_id_var = _FakeVar("lauf-001")
+            self.logs: list[str] = []
+            self.status = ""
+            self.erfolg_anzeigen = False
+
+        def bestaetige_aktion(self, _titel: str, _nachricht: str) -> bool:
+            return True
+
+        def setze_lauf_id(self, lauf_id: str) -> None:
+            self.lauf_id_var.set(lauf_id)
+
+        def setze_status(self, status: str) -> None:
+            self.status = status
+
+        def logge_meldung(self, text: str) -> None:
+            self.logs.append(text)
+
+        def zeige_fehler(self, *_args) -> None:
+            raise AssertionError("Bei Erfolg darf kein Fehlerdialog erscheinen")
+
+        def zeige_warnung(self, *_args) -> None:
+            raise AssertionError("Bei Erfolg darf kein Warnungsdialog erscheinen")
+
+        def zeige_erfolg(self, *_args) -> None:
+            self.erfolg_anzeigen = True
+
+    gui = MehrserverAnalyseGUI.__new__(MehrserverAnalyseGUI)
+    gui._zeilen_nach_id = {
+        "row-1": ServerTabellenZeile(servername="srv-01", app=True, sql=False, ctx=False, status="bereit")
+    }
+    gui.tree = _FakeTree()
+    gui.tree_ergebnisse = _FakeTree()
+    gui.lbl_executive_summary = _FakeSummaryLabel()
+    gui._ausgabe_pfad = _FakeVar("docs/test_report.md")
+    gui._report_verweis_var = _FakeVar("")
+    gui._letzter_export_pfad = ""
+    gui._letzter_exportzeitpunkt = ""
+    gui._letzte_export_lauf_id = ""
+    gui._letzte_ergebnisse = []
+    gui.shell = _FakeShell()
+    gui.master = type("Master", (), {"update_idletasks": staticmethod(lambda: None)})()
+    gui.speichern = lambda: None
+    gui._zeige_ergebnisse_aufklappbar = lambda _ergebnisse: None
+
+    ergebnis = AnalyseErgebnis(
+        server="srv-01",
+        zeitpunkt=datetime.now(),
+        rollen=["APP"],
+        ports=[PortStatus(port=1433, offen=True, bezeichnung="MSSQL")],
+    )
+
+    monkeypatch.setattr("server_analysis_gui.erstelle_lauf_id", lambda: "lauf-001")
+    monkeypatch.setattr("server_analysis_gui.setze_lauf_id", lambda _lauf_id: None)
+    monkeypatch.setattr("server_analysis_gui.analysiere_mehrere_server", lambda _ziele, lauf_id=None: [ergebnis])
+    monkeypatch.setattr(
+        "server_analysis_gui._schreibe_analyse_report",
+        lambda _ergebnisse, _pfad: ("docs/test_report.md", "2026-01-02T03:04:05"),
+    )
+
+    gui.analyse_starten()
+
+    assert gui._report_verweis_var.get().startswith("Letzter Analysebericht: docs/test_report.md")
+    assert "Lauf-ID: lauf-001" in gui._report_verweis_var.get()
+    assert gui.shell.erfolg_anzeigen is True
+    assert any("Analysebericht erzeugt: docs/test_report.md" in eintrag for eintrag in gui.shell.logs)

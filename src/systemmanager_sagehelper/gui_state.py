@@ -28,6 +28,9 @@ _STANDARD_ZUSTAND: dict[str, Any] = {
             },
             "letzte_kerninfos": [],
             "bericht_verweise": [],
+            "letzter_exportpfad": "",
+            "letzter_exportzeitpunkt": "",
+            "letzte_export_lauf_id": "",
         },
         "server_analysis": {
             "serverlisten": [],
@@ -39,6 +42,9 @@ _STANDARD_ZUSTAND: dict[str, Any] = {
             },
             "letzte_kerninfos": [],
             "bericht_verweise": [],
+            "letzter_exportpfad": "",
+            "letzter_exportzeitpunkt": "",
+            "letzte_export_lauf_id": "",
         },
     }
 }

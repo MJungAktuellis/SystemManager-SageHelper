@@ -27,6 +27,9 @@ def test_speichere_und_lade_modulzustand(tmp_path: Path) -> None:
         "ausgabepfade": {"analyse_report": "docs/a.md", "log_report": "logs/b.md"},
         "letzte_kerninfos": ["Analysierte Server: 1"],
         "bericht_verweise": ["docs/a.md"],
+        "letzter_exportpfad": "docs/a.md",
+        "letzter_exportzeitpunkt": "2026-01-02T03:04:05",
+        "letzte_export_lauf_id": "lauf-001",
     }
 
     store.speichere_modulzustand("server_analysis", modulzustand)
@@ -35,3 +38,5 @@ def test_speichere_und_lade_modulzustand(tmp_path: Path) -> None:
     assert geladen["serverlisten"][0]["servername"] == "srv-01"
     assert geladen["rollen"]["srv-01"] == ["APP"]
     assert geladen["ausgabepfade"]["analyse_report"] == "docs/a.md"
+    assert geladen["letzter_exportpfad"] == "docs/a.md"
+    assert geladen["letzte_export_lauf_id"] == "lauf-001"
