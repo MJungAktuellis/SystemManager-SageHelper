@@ -1,132 +1,140 @@
-"""Tkinter-basierte GUI für den SystemManager-SageHelper.
-
-Die GUI dient als einfacher Launcher für Installation, Analyse,
-Ordnerverwaltung und Dokumentation.
-"""
+"""Tkinter-basierte Startoberfläche mit gemeinsamem GUI-Shell-Konzept."""
 
 from __future__ import annotations
 
 import subprocess
 import sys
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
+from systemmanager_sagehelper.gui_shell import GuiShell
+from systemmanager_sagehelper.gui_state import GUIStateStore
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 
 logger = konfiguriere_logger(__name__, dateiname="gui_manager.log")
 
 
 class SystemManagerGUI:
-    """Kapselt Aufbau und Verhalten der Desktop-Oberfläche."""
+    """Kapselt Aufbau und Verhalten der Launcher-Oberfläche."""
 
     def __init__(self, master: tk.Tk) -> None:
         self.master = master
-        master.title("SystemManager-SageHelper GUI")
-        master.geometry("500x420")
+        self.master.geometry("980x760")
 
-        self.label = tk.Label(
+        self.state_store = GUIStateStore()
+        self.modulzustand = self.state_store.lade_modulzustand("gui_manager")
+
+        self.shell = GuiShell(
             master,
-            text="Willkommen beim SystemManager-SageHelper!",
-            font=("Arial", 14),
+            titel="SystemManager-SageHelper",
+            untertitel="Zentrale Steuerung für Analyse, Ordnermanagement und Dokumentation",
+            on_save=self.speichern,
+            on_back=self.zurueck,
+            on_exit=self.master.quit,
         )
-        self.label.pack(pady=10)
 
-        self.lauf_id_var = tk.StringVar(value="-")
-        tk.Label(master, text="Aktuelle Lauf-ID:", font=("Arial", 10, "bold")).pack()
-        tk.Label(master, textvariable=self.lauf_id_var, font=("Consolas", 10)).pack(pady=(0, 8))
+        self._baue_modulaktionen()
+        self._baue_uebersichtsseite()
 
-        self.install_button = tk.Button(master, text="Installieren", command=self.installieren, width=25)
-        self.install_button.pack(pady=5)
+    def _baue_modulaktionen(self) -> None:
+        """Erzeugt die primären Launcher-Aktionen als schnelle Einstiegspunkte."""
+        rahmen = ttk.LabelFrame(self.shell.content_frame, text="Module starten")
+        rahmen.pack(fill="x", pady=(0, 10))
 
-        self.server_analysis_button = tk.Button(
-            master,
-            text="Serveranalyse starten",
-            command=self.serveranalyse,
-            width=25,
+        ttk.Button(rahmen, text="Installieren", command=self.installieren).pack(side="left", padx=8, pady=8)
+        ttk.Button(rahmen, text="Serveranalyse starten", command=self.serveranalyse).pack(side="left", padx=8)
+        ttk.Button(rahmen, text="Ordner verwalten", command=self.ordner_verwalten).pack(side="left", padx=8)
+        ttk.Button(rahmen, text="Dokumentation generieren", command=self.dokumentation_generieren).pack(
+            side="left", padx=8
         )
-        self.server_analysis_button.pack(pady=5)
 
-        self.folder_manager_button = tk.Button(
-            master,
-            text="Ordner verwalten",
-            command=self.ordner_verwalten,
-            width=25,
-        )
-        self.folder_manager_button.pack(pady=5)
+    def _baue_uebersichtsseite(self) -> None:
+        """Stellt je Modul Kerninfos und Berichtverweise aus der Persistenz dar."""
+        rahmen = ttk.LabelFrame(self.shell.content_frame, text="Übersicht: letzte Analyseinformationen")
+        rahmen.pack(fill="both", expand=True)
 
-        self.doc_generator_button = tk.Button(
-            master,
-            text="Dokumentation generieren",
-            command=self.dokumentation_generieren,
-            width=25,
-        )
-        self.doc_generator_button.pack(pady=5)
+        spalten = ("modul", "infos", "berichte")
+        self.uebersicht = ttk.Treeview(rahmen, columns=spalten, show="headings", height=14)
+        self.uebersicht.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
 
-        self.quit_button = tk.Button(master, text="Beenden", command=master.quit, width=25)
-        self.quit_button.pack(pady=5)
+        self.uebersicht.heading("modul", text="Modul")
+        self.uebersicht.heading("infos", text="Letzte Kerninfos")
+        self.uebersicht.heading("berichte", text="Berichtverweise")
 
-        self.log_label = tk.Label(master, text="Log-Ausgabe:", font=("Arial", 12))
-        self.log_label.pack(pady=5)
+        self.uebersicht.column("modul", width=180)
+        self.uebersicht.column("infos", width=430)
+        self.uebersicht.column("berichte", width=330)
 
-        self.log_output = tk.Text(master, height=10, width=60, state="disabled")
-        self.log_output.pack()
+        scrollbar = ttk.Scrollbar(rahmen, orient="vertical", command=self.uebersicht.yview)
+        scrollbar.pack(side="right", fill="y", pady=8, padx=8)
+        self.uebersicht.configure(yscrollcommand=scrollbar.set)
+
+        self._lade_uebersichtszeilen()
+
+    def _lade_uebersichtszeilen(self) -> None:
+        """Lädt Übersichtsdaten aus allen bekannten Modulen in die Tabelle."""
+        for item_id in self.uebersicht.get_children(""):
+            self.uebersicht.delete(item_id)
+
+        zustand = self.state_store.lade_gesamtzustand().get("modules", {})
+        for modulname, modulwerte in zustand.items():
+            infos = "; ".join(modulwerte.get("letzte_kerninfos", [])) or "Keine Daten"
+            berichte = "; ".join(modulwerte.get("bericht_verweise", [])) or "Keine Verweise"
+            self.uebersicht.insert("", "end", values=(modulname, infos, berichte))
 
     def _starte_neuen_lauf(self) -> str:
         """Erzeugt pro Aktion eine neue Lauf-ID für konsistente Korrelation."""
         lauf_id = erstelle_lauf_id()
         setze_lauf_id(lauf_id)
-        self.lauf_id_var.set(lauf_id)
+        self.shell.setze_lauf_id(lauf_id)
         logger.info("Neuer GUI-Lauf gestartet")
         return lauf_id
 
-    def installieren(self) -> None:
-        """Startet den Installationsassistenten im aktuellen Python-Interpreter."""
+    def _execute_command(self, action_name: str, command: list[str]) -> None:
+        """Führt ein externes Kommando aus und zeigt Status/Fehler in der Shell an."""
         lauf_id = self._starte_neuen_lauf()
-        self.log(f"[{lauf_id}] Starte die Installation...")
-        try:
-            subprocess.check_call([sys.executable, "scripts/install_assistant.py"])
-            messagebox.showinfo("Erfolg", f"Installation abgeschlossen!\nLauf-ID: {lauf_id}")
-        except subprocess.CalledProcessError as exc:
-            logger.exception("Installation fehlgeschlagen")
-            messagebox.showerror("Fehler", f"Fehler bei der Installation: {exc}\nLauf-ID: {lauf_id}")
-        self.log(f"[{lauf_id}] Installation abgeschlossen.")
-
-    def serveranalyse(self) -> None:
-        """Startet die Serveranalyse-GUI."""
-        self.execute_command("Serveranalyse", [sys.executable, "src/server_analysis_gui.py"])
-
-    def ordner_verwalten(self) -> None:
-        """Startet die Ordnerverwaltung."""
-        self.execute_command("Ordnerverwaltung", [sys.executable, "src/folder_manager.py"])
-
-    def dokumentation_generieren(self) -> None:
-        """Startet den Dokumentationsgenerator."""
-        self.execute_command("Dokumentation", [sys.executable, "src/doc_generator.py"])
-
-    def execute_command(self, action_name: str, command: list[str]) -> None:
-        """Führt ein externes Kommando aus und zeigt Logs/Fehler in der GUI an."""
-        lauf_id = self._starte_neuen_lauf()
-        self.log(f"[{lauf_id}] Starte {action_name}...")
-        logger.info("Starte Kommando %s: %s", action_name, command)
+        self.shell.setze_status(f"{action_name} läuft")
+        self.shell.logge_meldung(f"[{lauf_id}] Starte {action_name}: {' '.join(command)}")
         try:
             result = subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
-            self.log(result)
-            messagebox.showinfo("Erfolg", f"{action_name} abgeschlossen!\nLauf-ID: {lauf_id}")
+            self.shell.logge_meldung(result.strip() or "(Keine Ausgabe)")
+            self.shell.setze_status(f"{action_name} abgeschlossen")
+            messagebox.showinfo("Erfolg", f"{action_name} abgeschlossen.\nLauf-ID: {lauf_id}")
         except subprocess.CalledProcessError as exc:
             logger.exception("Fehler bei GUI-Kommando %s", action_name)
-            self.log(exc.output)
+            self.shell.logge_meldung(exc.output)
+            self.shell.setze_status(f"{action_name} fehlgeschlagen")
             messagebox.showerror("Fehler", f"Fehler bei der Ausführung von {action_name}: {exc}\nLauf-ID: {lauf_id}")
 
-    def log(self, message: str) -> None:
-        """Hängt eine Logzeile unten in der GUI an."""
-        self.log_output.config(state="normal")
-        self.log_output.insert(tk.END, message + "\n")
-        self.log_output.config(state="disabled")
-        self.log_output.see(tk.END)
+    def installieren(self) -> None:
+        self._execute_command("Installation", [sys.executable, "scripts/install_assistant.py"])
+
+    def serveranalyse(self) -> None:
+        self._execute_command("Serveranalyse", [sys.executable, "src/server_analysis_gui.py"])
+
+    def ordner_verwalten(self) -> None:
+        self._execute_command("Ordnerverwaltung", [sys.executable, "src/folder_manager.py"])
+
+    def dokumentation_generieren(self) -> None:
+        self._execute_command("Dokumentation", [sys.executable, "src/doc_generator.py"])
+
+    def speichern(self) -> None:
+        """Persistiert Launcher-relevante Einstellungen und aktualisiert die Übersicht."""
+        self.modulzustand.setdefault("letzte_kerninfos", ["Launcher zuletzt geöffnet"])
+        self.modulzustand.setdefault("bericht_verweise", [])
+        self.state_store.speichere_modulzustand("gui_manager", self.modulzustand)
+        self._lade_uebersichtszeilen()
+        self.shell.setze_status("Launcher-Zustand gespeichert")
+        self.shell.logge_meldung(f"Zustand gespeichert unter: {self.state_store.dateipfad}")
+
+    def zurueck(self) -> None:
+        """Navigationsaktion: im Launcher bedeutet Zurück eine Übersichts-Aktualisierung."""
+        self._lade_uebersichtszeilen()
+        self.shell.setze_status("Übersicht aktualisiert")
 
 
 if __name__ == "__main__":
     setze_lauf_id(erstelle_lauf_id())
     root = tk.Tk()
-    gui = SystemManagerGUI(root)
+    SystemManagerGUI(root)
     root.mainloop()
