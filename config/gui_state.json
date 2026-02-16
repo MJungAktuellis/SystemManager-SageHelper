@@ -1,0 +1,26 @@
+{
+  "modules": {
+    "gui_manager": {
+      "serverlisten": [],
+      "rollen": {},
+      "letzte_discovery_range": "",
+      "ausgabepfade": {
+        "analyse_report": "docs/serverbericht.md",
+        "log_report": "logs/log_dokumentation.md"
+      },
+      "letzte_kerninfos": [],
+      "bericht_verweise": []
+    },
+    "server_analysis": {
+      "serverlisten": [],
+      "rollen": {},
+      "letzte_discovery_range": "",
+      "ausgabepfade": {
+        "analyse_report": "docs/serverbericht.md",
+        "log_report": "logs/log_dokumentation.md"
+      },
+      "letzte_kerninfos": [],
+      "bericht_verweise": []
+    }
+  }
+}
