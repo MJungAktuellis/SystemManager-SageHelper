@@ -120,7 +120,13 @@ def _schritt_dokumentation(
     _melde(progress, WorkflowSchritt.DOKUMENTATION, 90, "Markdown-Berichte werden erzeugt")
     report_pfad.parent.mkdir(parents=True, exist_ok=True)
     report_pfad.write_text(render_markdown(analyse_ergebnisse), encoding="utf-8")
-    log_doku = erstelle_dokumentation(str(logs_verzeichnis), str(docs_verzeichnis))
+    log_doku = erstelle_dokumentation(
+        str(logs_verzeichnis),
+        str(docs_verzeichnis),
+        analyse_ergebnisse=analyse_ergebnisse,
+        analysebericht_pfad=str(report_pfad),
+        berichtsmodus="loop",
+    )
     _melde(progress, WorkflowSchritt.DOKUMENTATION, 100, "Dokumentation abgeschlossen")
     return SchrittErgebnis(
         schritt=WorkflowSchritt.DOKUMENTATION,

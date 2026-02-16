@@ -185,6 +185,31 @@ PYTHONPATH=src python -m systemmanager_sagehelper ordner-check --basis /tmp/Syst
 PYTHONPATH=src python -m systemmanager_sagehelper ordner-check --basis /tmp/SystemAG --anlegen
 ```
 
+### 5) Dokumentationsmodus für Microsoft Loop (kompakt)
+
+Der Workflow erzeugt die `docs/ServerDokumentation.md` standardmäßig im **Modus `loop`**:
+
+- entscheidungsorientiert (Executive Summary + priorisierte Maßnahmen),
+- konsistente Artefaktverweise (`Analysebericht`, `Logpfade`, `Lauf-IDs`),
+- Rohlogs nur als **Anhang/Referenz**.
+
+Beispielauszug:
+
+```md
+## Kopfbereich
+- Kunde: nicht angegeben
+- Umgebung: nicht angegeben
+- Lauf-ID: lauf-20260102-110000-efgh5678
+- Berichtsmodus: Loop (kompakt)
+
+## Maßnahmen/Offene Punkte
+| Priorität | Maßnahme |
+| --- | --- |
+| P1 | srv-sql-01: Port 1433 (MSSQL) prüfen/freischalten |
+```
+
+Für technische Tiefenanalysen kann `erstelle_dokumentation(..., berichtsmodus="voll")` verwendet werden.
+
 
 ## Logging, Berichte und Lauf-ID-Korrelation
 
