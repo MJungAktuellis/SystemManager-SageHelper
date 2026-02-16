@@ -121,5 +121,35 @@ class TestInstaller(unittest.TestCase):
         self.assertEqual(len(installer.STANDARD_REIHENFOLGE), len(ergebnisse))
 
 
+    def test_pruefe_und_behebe_voraussetzungen_liefert_admin_fehler(self) -> None:
+        with (
+            patch("systemmanager_sagehelper.installer.ist_windows_system", return_value=True),
+            patch("systemmanager_sagehelper.installer.hat_adminrechte", return_value=False),
+        ):
+            statusliste = installer.pruefe_und_behebe_voraussetzungen()
+
+        self.assertEqual(installer.ErgebnisStatus.ERROR, statusliste[0].status)
+        self.assertEqual("Administratorrechte", statusliste[0].pruefung)
+
+    def test_pruefe_und_behebe_voraussetzungen_pip_ok(self) -> None:
+        with (
+            patch("systemmanager_sagehelper.installer.ist_windows_system", return_value=True),
+            patch("systemmanager_sagehelper.installer.hat_adminrechte", return_value=True),
+            patch(
+                "systemmanager_sagehelper.installer.finde_kompatiblen_python_interpreter",
+                return_value=installer.sys.executable,
+            ),
+            patch("systemmanager_sagehelper.installer._pip_verfuegbar_fuer_interpreter", return_value=True),
+        ):
+            statusliste = installer.pruefe_und_behebe_voraussetzungen()
+
+        self.assertTrue(
+            any(
+                eintrag.pruefung == "pip" and eintrag.status == installer.ErgebnisStatus.OK
+                for eintrag in statusliste
+            )
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
