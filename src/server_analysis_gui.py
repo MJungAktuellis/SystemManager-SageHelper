@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import simpledialog, ttk
 
 from systemmanager_sagehelper.analyzer import (
     analysiere_mehrere_server,
@@ -167,14 +167,16 @@ class MehrserverAnalyseGUI:
         self._baue_aktionsbereich(self.shell.content_frame)
         self._baue_ergebnisbereich(self.shell.content_frame)
         self._lade_serverliste_aus_status()
+        self._aktualisiere_button_zustaende()
 
     def _baue_formular(self, parent: ttk.Frame) -> None:
-        form_frame = ttk.LabelFrame(parent, text="Serverdeklaration")
+        form_frame = ttk.LabelFrame(parent, text="Serverdeklaration", style="Section.TLabelframe")
         form_frame.pack(fill="x", pady=(0, 8))
 
         ttk.Label(form_frame, text="Servername:").grid(row=0, column=0, sticky="w", padx=8, pady=8)
         self.entry_servername = ttk.Entry(form_frame, width=30)
         self.entry_servername.grid(row=0, column=1, padx=6)
+        self.entry_servername.bind("<KeyRelease>", self._aktualisiere_button_zustaende)
 
         self.var_sql = tk.BooleanVar(value=False)
         self.var_app = tk.BooleanVar(value=True)
@@ -184,9 +186,14 @@ class MehrserverAnalyseGUI:
         ttk.Checkbutton(form_frame, text="APP", variable=self.var_app).grid(row=0, column=3, padx=4)
         ttk.Checkbutton(form_frame, text="CTX", variable=self.var_ctx).grid(row=0, column=4, padx=4)
 
-        ttk.Button(form_frame, text="Server manuell hinzufügen", command=self.server_manuell_hinzufuegen).grid(
-            row=0, column=5, padx=8
+        self.btn_hinzufuegen = ttk.Button(
+            form_frame,
+            text="Server manuell hinzufügen",
+            style="Primary.TButton",
+            command=self.server_manuell_hinzufuegen,
+            state="disabled",
         )
+        self.btn_hinzufuegen.grid(row=0, column=5, padx=8)
 
         ttk.Label(form_frame, text="Letzte Discovery-Range:").grid(row=1, column=0, sticky="w", padx=8, pady=(2, 8))
         ttk.Entry(form_frame, textvariable=self._letzte_discovery_range, width=30).grid(row=1, column=1, padx=6)
@@ -195,7 +202,7 @@ class MehrserverAnalyseGUI:
         ttk.Entry(form_frame, textvariable=self._ausgabe_pfad, width=45).grid(row=1, column=3, columnspan=3, padx=6)
 
     def _baue_tabelle(self, parent: ttk.Frame) -> None:
-        table_frame = ttk.LabelFrame(parent, text="Serverliste")
+        table_frame = ttk.LabelFrame(parent, text="Serverliste", style="Section.TLabelframe")
         table_frame.pack(fill="both", expand=True, pady=(0, 8))
 
         self.tree = ttk.Treeview(table_frame, columns=_SPALTEN, show="headings", height=11)
@@ -222,19 +229,31 @@ class MehrserverAnalyseGUI:
         scrollbar.pack(side="right", fill="y", pady=8, padx=8)
         self.tree.configure(yscrollcommand=scrollbar.set)
         self.tree.bind("<Button-1>", self._toggle_rolle_per_klick)
+        self.tree.bind("<<TreeviewSelect>>", self._aktualisiere_button_zustaende)
 
     def _baue_aktionsbereich(self, parent: ttk.Frame) -> None:
         action_frame = ttk.Frame(parent)
         action_frame.pack(fill="x", pady=(0, 8))
 
-        ttk.Button(action_frame, text="Discovery", command=self.discovery_starten).pack(side="left", padx=4)
-        ttk.Button(action_frame, text="Ausgewählten Eintrag löschen", command=self.eintrag_loeschen).pack(
-            side="left", padx=4
+        self.btn_discovery = ttk.Button(
+            action_frame, text="Discovery", style="Secondary.TButton", command=self.discovery_starten
         )
-        ttk.Button(action_frame, text="Analyse starten", command=self.analyse_starten).pack(side="right", padx=4)
+        self.btn_discovery.pack(side="left", padx=4)
+        self.btn_loeschen = ttk.Button(
+            action_frame,
+            text="Ausgewählten Eintrag löschen",
+            style="Secondary.TButton",
+            command=self.eintrag_loeschen,
+            state="disabled",
+        )
+        self.btn_loeschen.pack(side="left", padx=4)
+        self.btn_analyse = ttk.Button(
+            action_frame, text="Analyse starten", style="Primary.TButton", command=self.analyse_starten, state="disabled"
+        )
+        self.btn_analyse.pack(side="right", padx=4)
 
     def _baue_ergebnisbereich(self, parent: ttk.Frame) -> None:
-        frame = ttk.LabelFrame(parent, text="Analyseergebnis je Server (aufklappbar)")
+        frame = ttk.LabelFrame(parent, text="Analyseergebnis je Server (aufklappbar)", style="Section.TLabelframe")
         frame.pack(fill="both", expand=True)
 
         self.tree_ergebnisse = ttk.Treeview(frame, columns=("details",), show="tree headings", height=10)
@@ -247,6 +266,17 @@ class MehrserverAnalyseGUI:
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.tree_ergebnisse.yview)
         scrollbar.pack(side="right", fill="y", pady=8, padx=8)
         self.tree_ergebnisse.configure(yscrollcommand=scrollbar.set)
+
+    def _aktualisiere_button_zustaende(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        """Aktiviert oder deaktiviert Aktionen abhängig vom aktuellen GUI-Zustand."""
+        servername = self.entry_servername.get().strip()
+        hat_server = bool(servername)
+        self.btn_hinzufuegen.configure(state="normal" if hat_server else "disabled")
+
+        hat_zeilen = bool(self._zeilen_nach_id)
+        hat_auswahl = bool(self.tree.selection())
+        self.btn_analyse.configure(state="normal" if hat_zeilen else "disabled")
+        self.btn_loeschen.configure(state="normal" if hat_auswahl else "disabled")
 
     def _lade_serverliste_aus_status(self) -> None:
         """Stellt gespeicherte Serverlisten beim Start der GUI wieder her."""
@@ -279,6 +309,7 @@ class MehrserverAnalyseGUI:
             ),
         )
         self._zeilen_nach_id[item_id] = zeile
+        self._aktualisiere_button_zustaende()
 
     def _toggle_rolle_per_klick(self, event: tk.Event[tk.Misc]) -> None:
         region = self.tree.identify("region", event.x, event.y)
@@ -306,7 +337,7 @@ class MehrserverAnalyseGUI:
     def server_manuell_hinzufuegen(self) -> None:
         servername = self.entry_servername.get().strip()
         if not servername:
-            messagebox.showwarning("Eingabe fehlt", "Bitte einen Servernamen eingeben.")
+            self.shell.zeige_warnung("Eingabe fehlt", "Bitte einen Servernamen eingeben.", "Erfassen Sie einen Zielserver und versuchen Sie es erneut.")
             return
 
         self._fuege_zeile_ein(
@@ -321,8 +352,12 @@ class MehrserverAnalyseGUI:
         )
         self.entry_servername.delete(0, tk.END)
         self.shell.setze_status("Server wurde hinzugefügt")
+        self._aktualisiere_button_zustaende()
 
     def discovery_starten(self) -> None:
+        if not self.shell.bestaetige_aktion("Discovery bestätigen", "Die Netzwerk-Discovery wird gestartet."):
+            return
+
         basis = simpledialog.askstring("Discovery", "IPv4-Basis eingeben (z. B. 192.168.178):", parent=self.master)
         if not basis:
             return
@@ -340,7 +375,7 @@ class MehrserverAnalyseGUI:
             hosts = entdecke_server_kandidaten(basis=basis.strip(), start=startwert, ende=endwert)
         except Exception as exc:  # noqa: BLE001 - robuste GUI-Fehlerbehandlung.
             logger.exception("Discovery fehlgeschlagen")
-            messagebox.showerror("Discovery-Fehler", f"Discovery konnte nicht ausgeführt werden: {exc}")
+            self.shell.zeige_fehler("Discovery-Fehler", f"Discovery konnte nicht ausgeführt werden: {exc}", "Prüfen Sie Netzwerkbereich und Berechtigungen.")
             self.shell.setze_status("Discovery fehlgeschlagen")
             return
 
@@ -363,11 +398,13 @@ class MehrserverAnalyseGUI:
             if len(self._zeilen_nach_id) > vorher:
                 hinzugefuegt += 1
 
-        messagebox.showinfo(
+        self.shell.zeige_erfolg(
             "Discovery abgeschlossen",
             f"Gefundene Hosts: {len(hosts)}\nNeu übernommen: {hinzugefuegt}\nIgnorierte Duplikate: {len(hosts) - hinzugefuegt}",
+            "Prüfen Sie die Serverliste und passen Sie Rollen bei Bedarf an.",
         )
         self.shell.setze_status("Discovery abgeschlossen")
+        self._aktualisiere_button_zustaende()
 
     def eintrag_loeschen(self) -> None:
         auswahl = self.tree.selection()
@@ -378,6 +415,7 @@ class MehrserverAnalyseGUI:
             self._zeilen_nach_id.pop(item_id, None)
             self.tree.delete(item_id)
         self.shell.setze_status("Ausgewählte Einträge gelöscht")
+        self._aktualisiere_button_zustaende()
 
     def _zeige_ergebnisse_aufklappbar(self, ergebnisse: list[AnalyseErgebnis]) -> None:
         for item_id in self.tree_ergebnisse.get_children(""):
@@ -403,10 +441,10 @@ class MehrserverAnalyseGUI:
         zeilen = list(self._zeilen_nach_id.values())
         ziele = _baue_serverziele(zeilen)
         if not ziele:
-            messagebox.showwarning("Keine Server", "Bitte mindestens einen gültigen Server hinzufügen.")
+            self.shell.zeige_warnung("Keine Server", "Bitte mindestens einen gültigen Server hinzufügen.", "Fügen Sie mindestens einen Server in der Liste hinzu.")
             return
 
-        bestaetigt = messagebox.askokcancel("Analyse bestätigen", _deklarationszusammenfassung(ziele, zeilen))
+        bestaetigt = self.shell.bestaetige_aktion("Analyse bestätigen", _deklarationszusammenfassung(ziele, zeilen))
         if not bestaetigt:
             return
 
@@ -421,7 +459,7 @@ class MehrserverAnalyseGUI:
             ergebnisse = analysiere_mehrere_server(ziele, lauf_id=lauf_id)
         except Exception as exc:  # noqa: BLE001 - GUI soll Fehler anzeigen statt abzubrechen.
             logger.exception("Mehrserveranalyse fehlgeschlagen")
-            messagebox.showerror("Analysefehler", f"Mehrserveranalyse fehlgeschlagen: {exc}")
+            self.shell.zeige_fehler("Analysefehler", f"Mehrserveranalyse fehlgeschlagen: {exc}", "Prüfen Sie die Logs und wiederholen Sie die Analyse.")
             self._setze_server_status("fehlerhaft")
             self.shell.setze_status("Analyse fehlgeschlagen")
             return
@@ -436,6 +474,7 @@ class MehrserverAnalyseGUI:
         self.shell.setze_status("Analyse abgeschlossen")
         self.shell.logge_meldung(f"Analyse abgeschlossen. Lauf-ID: {self.shell.lauf_id_var.get()}")
         self.speichern()
+        self.shell.zeige_erfolg("Analyse abgeschlossen", "Die Mehrserveranalyse wurde erfolgreich abgeschlossen.", "Öffnen Sie die Ergebnisdetails oder starten Sie den nächsten Lauf.")
 
     def _baue_kerninfos(self) -> list[str]:
         """Erzeugt kompakte Übersichtsinfos für die Übersichtsseite im Launcher."""
