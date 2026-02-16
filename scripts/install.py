@@ -32,28 +32,51 @@ from systemmanager_sagehelper.installer import (
 
 LOGGER = logging.getLogger(__name__)
 
+STATUS_PREFIX = {
+    ErgebnisStatus.OK: "[OK]",
+    ErgebnisStatus.WARN: "[WARN]",
+    ErgebnisStatus.ERROR: "[ERROR]",
+}
+
+
+def _safe_print(text: str) -> None:
+    """Gibt Text robust auf der Konsole aus, auch bei limitierter Windows-Codepage.
+
+    Hintergrund: Auf älteren Windows-Terminals ist `sys.stdout.encoding` häufig keine
+    UTF-8-Variante (z. B. cp1252). Unicode-Sonderzeichen können dort zu
+    `UnicodeEncodeError` führen. Deshalb normalisieren wir die Ausgabe vorab in die
+    Zielkodierung und ersetzen nicht darstellbare Zeichen zuverlässig.
+
+    Fallback-Verhalten: Sollte trotz Vorverarbeitung ein Kodierungsfehler auftreten,
+    wird der Text in eine sichere ASCII-Ausgabe umgewandelt, damit die Installation
+    niemals wegen einer Konsolenausgabe abbricht.
+    """
+    ziel_encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        ausgabe_text = text.encode(ziel_encoding, errors="replace").decode(ziel_encoding)
+        print(ausgabe_text)
+    except UnicodeEncodeError:
+        ascii_fallback = text.encode("ascii", errors="replace").decode("ascii")
+        print(ascii_fallback)
+
 
 def drucke_voraussetzungsstatus() -> None:
     """Zeigt standardisierte Zustände der Voraussetzungskontrolle an."""
-    print("\nVoraussetzungen:")
+    _safe_print("\nVoraussetzungen:")
     for status in pruefe_und_behebe_voraussetzungen():
-        symbol = {
-            ErgebnisStatus.OK: "✅",
-            ErgebnisStatus.WARN: "⚠️",
-            ErgebnisStatus.ERROR: "❌",
-        }[status.status]
-        print(f"  {symbol} [{status.status.value}] {status.pruefung}: {status.nachricht}")
+        prefix = STATUS_PREFIX[status.status]
+        _safe_print(f"  {prefix} [{status.status.value}] {status.pruefung}: {status.nachricht}")
         if status.naechste_aktion and status.naechste_aktion != "Keine Aktion erforderlich.":
-            print(f"      → Nächste Aktion: {status.naechste_aktion}")
+            _safe_print(f"      [INFO] Nächste Aktion: {status.naechste_aktion}")
 
 
 def drucke_statusbericht() -> None:
     """Zeigt den aktuellen Installationsstatus in kompakter Form an."""
-    print("\nSystemprüfung:")
+    _safe_print("\nSystemprüfung:")
     for status in erzeuge_installationsbericht():
-        symbol = "✅" if status.gefunden else "❌"
+        prefix = "[OK]" if status.gefunden else "[ERROR]"
         version = f" ({status.version})" if status.version else ""
-        print(f"  {symbol} {status.name}{version}")
+        _safe_print(f"  {prefix} {status.name}{version}")
 
 
 def _frage_ja_nein(prompt: str, standard: bool = True) -> bool:
@@ -63,7 +86,7 @@ def _frage_ja_nein(prompt: str, standard: bool = True) -> bool:
         eingabe = input(f"{prompt} {suffix}: ").strip().lower()
     except EOFError:
         # Fallback für nicht-interaktive Umgebungen (z. B. One-Click-Launcher mit Umleitung).
-        print("⚠️ Keine Benutzereingabe möglich, Standardwert wird verwendet.")
+        _safe_print("[WARN] Keine Benutzereingabe möglich, Standardwert wird verwendet.")
         return standard
 
     if not eingabe:
@@ -73,14 +96,14 @@ def _frage_ja_nein(prompt: str, standard: bool = True) -> bool:
     if eingabe in {"n", "nein", "no"}:
         return False
 
-    print("⚠️ Ungültige Eingabe, Standardwert wird übernommen.")
+    _safe_print("[WARN] Ungültige Eingabe, Standardwert wird übernommen.")
     return standard
 
 
 def ermittle_interaktive_auswahl(komponenten: dict) -> dict[str, bool]:
     """Ermittelt die gewünschte Komponentenauswahl interaktiv am Terminal."""
-    print("\nInteraktiver Modus: Komponenten können optional deaktiviert werden.")
-    print("Standardmäßig sind alle Komponenten aktiviert.\n")
+    _safe_print("\nInteraktiver Modus: Komponenten können optional deaktiviert werden.")
+    _safe_print("Standardmäßig sind alle Komponenten aktiviert.\n")
 
     auswahl = {komponenten_id: komponenten[komponenten_id].default_aktiv for komponenten_id in STANDARD_REIHENFOLGE}
 
@@ -107,9 +130,9 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main() -> None:
     """Startpunkt des geführten Installationsprozesses."""
     cli_args = parse_cli_args()
-    print("=== Installation von SystemManager-SageHelper ===")
+    _safe_print("=== Installation von SystemManager-SageHelper ===")
     log_datei = konfiguriere_logging(REPO_ROOT)
-    print(f"📄 Installationslog: {log_datei}")
+    _safe_print(f"[INFO] Installationslog: {log_datei}")
     LOGGER.info("Installationslauf gestartet.")
 
     komponenten = erstelle_standard_komponenten(REPO_ROOT)
@@ -124,7 +147,7 @@ def main() -> None:
                 for komponenten_id in STANDARD_REIHENFOLGE
             }
             validiere_auswahl_und_abhaengigkeiten(komponenten, auswahl)
-            print("\nℹ️ Non-Interactive-Modus aktiv: Standardauswahl wird verwendet.")
+            _safe_print("\n[INFO] Non-Interactive-Modus aktiv: Standardauswahl wird verwendet.")
         else:
             auswahl = ermittle_interaktive_auswahl(komponenten)
         ergebnisse = fuehre_installationsplan_aus(komponenten, auswahl)
@@ -132,22 +155,22 @@ def main() -> None:
         marker_datei = schreibe_installations_marker(repo_root=REPO_ROOT)
     except InstallationsFehler as fehler:
         LOGGER.error("Installationsfehler: %s", fehler)
-        print(f"❌ {fehler}")
-        print(f"📄 Details im Log: {log_datei}")
+        _safe_print(f"[ERROR] {fehler}")
+        _safe_print(f"[INFO] Details im Log: {log_datei}")
         raise SystemExit(1) from fehler
     except Exception:
         LOGGER.exception("Unerwarteter Fehler während der Installation.")
-        print("❌ Unerwarteter Fehler während der Installation.")
-        print(f"📄 Details im Log: {log_datei}")
+        _safe_print("[ERROR] Unerwarteter Fehler während der Installation.")
+        _safe_print(f"[INFO] Details im Log: {log_datei}")
         raise SystemExit(1)
 
     LOGGER.info("Installationslauf erfolgreich abgeschlossen.")
-    print("\n✅ Installation abgeschlossen.")
-    print("📄 Logdatei:", log_datei)
-    print("🧾 Installationsreport:", report_datei)
-    print("🧩 Installationsmarker:", marker_datei)
-    print("Startbeispiel:")
-    print("  python -m systemmanager_sagehelper scan --server localhost --rollen APP --out report.md")
+    _safe_print("\n[OK] Installation abgeschlossen.")
+    _safe_print(f"[INFO] Logdatei: {log_datei}")
+    _safe_print(f"[INFO] Installationsreport: {report_datei}")
+    _safe_print(f"[INFO] Installationsmarker: {marker_datei}")
+    _safe_print("Startbeispiel:")
+    _safe_print("  python -m systemmanager_sagehelper scan --server localhost --rollen APP --out report.md")
 
 
 if __name__ == "__main__":
