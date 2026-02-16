@@ -10,6 +10,7 @@ from server_analysis_gui import (
     _deklarationszusammenfassung,
     _detailzeilen,
     _kurzstatus,
+    _rollenquelle_fuer_zeile,
 )
 from systemmanager_sagehelper.models import AnalyseErgebnis, PortStatus
 
@@ -40,8 +41,8 @@ def test_deklarationszusammenfassung_enthaelt_quelle_und_rollen() -> None:
     zusammenfassung = _deklarationszusammenfassung(ziele, zeilen)
 
     assert "So wurden die Server deklariert:" in zusammenfassung
-    assert "srv-app-01 | Rollen: APP | Quelle: manuell" in zusammenfassung
-    assert "srv-sql-01 | Rollen: SQL | Quelle: Discovery" in zusammenfassung
+    assert "srv-app-01 | Rollen: APP | Quelle: manuell | Rollenquelle: manuell gesetzt" in zusammenfassung
+    assert "srv-sql-01 | Rollen: SQL | Quelle: Discovery | Rollenquelle: automatisch erkannt" in zusammenfassung
 
 
 def test_kurzstatus_und_detailzeilen_rendert_serverbloecke() -> None:
@@ -58,6 +59,21 @@ def test_kurzstatus_und_detailzeilen_rendert_serverbloecke() -> None:
     details = _detailzeilen(ergebnis)
 
     assert "Rollen: SQL" in kurz
+    assert "Quelle:" in kurz
     assert "Offene Ports: 1433" in kurz
     assert any("SQL-Prüfung" in detail for detail in details)
     assert any("Remote-Ziel erkannt" in detail for detail in details)
+
+
+def test_rollenquelle_fuer_discovery_und_manuelle_aenderung() -> None:
+    """Die Rollenquelle soll Discovery und manuelle Anpassung differenzieren."""
+    auto_zeile = ServerTabellenZeile(servername="srv-01", quelle="Discovery", auto_rolle="SQL")
+    geaendert = ServerTabellenZeile(
+        servername="srv-02",
+        quelle="Discovery",
+        auto_rolle="SQL",
+        manuell_ueberschrieben=True,
+    )
+
+    assert _rollenquelle_fuer_zeile(auto_zeile) == "automatisch erkannt"
+    assert _rollenquelle_fuer_zeile(geaendert) == "nachträglich geändert"

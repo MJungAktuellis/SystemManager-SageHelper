@@ -11,7 +11,11 @@ from dataclasses import dataclass
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
-from systemmanager_sagehelper.analyzer import analysiere_mehrere_server, entdecke_server_kandidaten
+from systemmanager_sagehelper.analyzer import (
+    analysiere_mehrere_server,
+    entdecke_server_kandidaten,
+    schlage_rollen_per_portsignatur_vor,
+)
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, hole_lauf_id, konfiguriere_logger, setze_lauf_id
 from systemmanager_sagehelper.models import AnalyseErgebnis, ServerZiel
 from systemmanager_sagehelper.targeting import normalisiere_servernamen, rollen_aus_bool_flags
@@ -27,6 +31,8 @@ class ServerTabellenZeile:
     ctx: bool = False
     quelle: str = "manuell"
     status: str = "neu"
+    auto_rolle: str | None = None
+    manuell_ueberschrieben: bool = False
 
     def rollen(self) -> list[str]:
         """Leitet die Rollenliste aus den gesetzten Checkboxen ab."""
@@ -60,8 +66,27 @@ def _baue_serverziele(zeilen: list[ServerTabellenZeile]) -> list[ServerZiel]:
         name = zeile.servername.strip()
         if not name:
             continue
-        ziele.append(ServerZiel(name=name, rollen=zeile.rollen()))
+        ziele.append(
+            ServerZiel(
+                name=name,
+                rollen=zeile.rollen(),
+                rollenquelle=_rollenquelle_fuer_zeile(zeile),
+                auto_rollen=[zeile.auto_rolle] if zeile.auto_rolle else [],
+                manuell_ueberschrieben=zeile.manuell_ueberschrieben,
+            )
+        )
     return ziele
+
+
+
+
+def _rollenquelle_fuer_zeile(zeile: ServerTabellenZeile) -> str:
+    """Ermittelt die Herkunft der finalen Rollendeklaration für einen Server."""
+    if zeile.quelle.lower() == "discovery" and not zeile.manuell_ueberschrieben:
+        return "automatisch erkannt"
+    if zeile.manuell_ueberschrieben and zeile.auto_rolle:
+        return "nachträglich geändert"
+    return "manuell gesetzt"
 
 
 def _deklarationszusammenfassung(ziele: list[ServerZiel], zeilen: list[ServerTabellenZeile]) -> str:
@@ -71,7 +96,9 @@ def _deklarationszusammenfassung(ziele: list[ServerZiel], zeilen: list[ServerTab
     for index, ziel in enumerate(ziele, start=1):
         rollen = ", ".join(ziel.rollen) if ziel.rollen else "keine Rolle gesetzt"
         quelle = quelle_pro_server.get(normalisiere_servernamen(ziel.name), "unbekannt")
-        zusammenfassung.append(f"{index}. {ziel.name} | Rollen: {rollen} | Quelle: {quelle}")
+        zusammenfassung.append(
+            f"{index}. {ziel.name} | Rollen: {rollen} | Quelle: {quelle} | Rollenquelle: {ziel.rollenquelle or 'unbekannt'}"
+        )
     return "\n".join(zusammenfassung)
 
 
@@ -79,13 +106,15 @@ def _kurzstatus(ergebnis: AnalyseErgebnis) -> str:
     """Erzeugt einen kompakten Statussatz je Server für die aufklappbare Liste."""
     offene_ports = [str(port.port) for port in ergebnis.ports if port.offen]
     rollen = ", ".join(ergebnis.rollen) if ergebnis.rollen else "nicht gesetzt/ermittelt"
-    return f"Rollen: {rollen} | Offene Ports: {', '.join(offene_ports) if offene_ports else 'keine'}"
+    quelle = ergebnis.rollenquelle or "unbekannt"
+    return f"Rollen: {rollen} | Quelle: {quelle} | Offene Ports: {', '.join(offene_ports) if offene_ports else 'keine'}"
 
 
 def _detailzeilen(ergebnis: AnalyseErgebnis) -> list[str]:
     """Liefert strukturierte Detailzeilen je Server für die aufklappbare Ansicht."""
     details: list[str] = [
         f"Betriebssystem: {ergebnis.betriebssystem or 'unbekannt'} ({ergebnis.os_version or 'unbekannt'})",
+        f"Rollenquelle: {ergebnis.rollenquelle or 'unbekannt'}",
         (
             "SQL-Prüfung: "
             + ("erkannt" if ergebnis.rollen_details.sql.erkannt else "nicht erkannt")
@@ -273,6 +302,8 @@ class MehrserverAnalyseGUI:
         attribut = _ROLLEN_SPALTEN[spaltenname]
         neuer_wert = not getattr(zeile, attribut)
         setattr(zeile, attribut, neuer_wert)
+        if zeile.auto_rolle:
+            zeile.manuell_ueberschrieben = True
         self.tree.set(item_id, spaltenname, _checkbox_wert(neuer_wert))
 
     def server_manuell_hinzufuegen(self) -> None:
@@ -320,7 +351,19 @@ class MehrserverAnalyseGUI:
         hinzugefuegt = 0
         for host in hosts:
             vorher = len(self._zeilen_nach_id)
-            self._fuege_zeile_ein(ServerTabellenZeile(servername=host, quelle="Discovery", status="bereit"))
+            auto_rollen = schlage_rollen_per_portsignatur_vor(host)
+            auto_rolle = ", ".join(auto_rollen) if auto_rollen else None
+            self._fuege_zeile_ein(
+                ServerTabellenZeile(
+                    servername=host,
+                    quelle="Discovery",
+                    status="bereit",
+                    sql="SQL" in auto_rollen,
+                    app="APP" in auto_rollen or not auto_rollen,
+                    ctx="CTX" in auto_rollen,
+                    auto_rolle=auto_rolle,
+                )
+            )
             if len(self._zeilen_nach_id) > vorher:
                 hinzugefuegt += 1
 

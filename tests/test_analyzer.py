@@ -10,6 +10,7 @@ from systemmanager_sagehelper.analyzer import (
     _normalisiere_rollen,
     analysiere_server,
     analysiere_mehrere_server,
+    schlage_rollen_per_portsignatur_vor,
 )
 from systemmanager_sagehelper.models import ServerZiel
 
@@ -75,6 +76,30 @@ class TestAnalyzer(unittest.TestCase):
 
         self.assertEqual(2, len(ergebnisse))
         self.assertTrue(all(ergebnis.lauf_id == "lauf-test-001" for ergebnis in ergebnisse))
+
+
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", side_effect=[True, False])
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
+    def test_schnellprofil_liefert_rollenvorschlag(self, _sock_mock, _port_mock) -> None:
+        rollen = schlage_rollen_per_portsignatur_vor("srv-sql")
+        self.assertIn("SQL", rollen)
+
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.0.1"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=False)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[])
+    def test_rollenquelle_aus_serverziel_wird_uebernommen(self, _sock_mock, _port_mock, _dns_mock) -> None:
+        ergebnis = analysiere_server(
+            ServerZiel(
+                name="srv-app-01",
+                rollen=["APP"],
+                rollenquelle="nachträglich geändert",
+                auto_rollen=["SQL"],
+                manuell_ueberschrieben=True,
+            )
+        )
+        self.assertEqual("nachträglich geändert", ergebnis.rollenquelle)
+        self.assertEqual(["SQL"], ergebnis.auto_rollen)
+        self.assertTrue(ergebnis.manuell_ueberschrieben)
 
 
 if __name__ == "__main__":
