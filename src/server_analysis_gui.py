@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
 import tkinter as tk
 from tkinter import simpledialog, ttk
 
@@ -16,6 +18,8 @@ from systemmanager_sagehelper.installation_state import pruefe_installationszust
 from systemmanager_sagehelper.gui_state import GUIStateStore
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 from systemmanager_sagehelper.models import AnalyseErgebnis, DiscoveryErgebnis, ServerZiel
+from systemmanager_sagehelper.config import STANDARD_PORTS
+from systemmanager_sagehelper.report import render_markdown
 from systemmanager_sagehelper.targeting import normalisiere_servernamen, rollen_aus_bool_flags
 
 
@@ -47,6 +51,7 @@ _SPALTEN = (_SPALTE_SERVERNAME, _SPALTE_SQL, _SPALTE_APP, _SPALTE_CTX, _SPALTE_Q
 _ROLLEN_SPALTEN = {_SPALTE_SQL: "sql", _SPALTE_APP: "app", _SPALTE_CTX: "ctx"}
 _CHECK_AN = "☑"
 _CHECK_AUS = "☐"
+_KRITISCHE_PORTS = {port.port for port in STANDARD_PORTS}
 
 
 logger = konfiguriere_logger(__name__, dateiname="server_analysis_gui.log")
@@ -105,6 +110,81 @@ def _kurzstatus(ergebnis: AnalyseErgebnis) -> str:
     quelle = ergebnis.rollenquelle or "unbekannt"
     return f"Rollen: {rollen} | Quelle: {quelle} | Offene Ports: {', '.join(offene_ports) if offene_ports else 'keine'}"
 
+
+def _baue_executive_summary(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
+    """Verdichtet Analyseergebnisse für die Management-Sicht in der GUI."""
+    if not ergebnisse:
+        return ["Keine Analyseergebnisse vorhanden."]
+
+    rollenverteilung = {"SQL": 0, "APP": 0, "CTX": 0}
+    offene_kritische_ports = 0
+    warnungen = 0
+    hinweise = 0
+
+    for ergebnis in ergebnisse:
+        for rolle in ergebnis.rollen:
+            if rolle in rollenverteilung:
+                rollenverteilung[rolle] += 1
+        offene_kritische_ports += sum(1 for port in ergebnis.ports if port.offen and port.port in _KRITISCHE_PORTS)
+        warnungen += sum(1 for port in ergebnis.ports if not port.offen)
+        warnungen += len(ergebnis.hinweise)
+        hinweise += len(ergebnis.hinweise)
+
+    return [
+        f"Analysierte Server: {len(ergebnisse)}",
+        f"Rollenverteilung: SQL={rollenverteilung['SQL']}, APP={rollenverteilung['APP']}, CTX={rollenverteilung['CTX']}",
+        f"Offene kritische Ports: {offene_kritische_ports}",
+        f"Warnungen/Hinweise gesamt: {warnungen} (davon Hinweise: {hinweise})",
+    ]
+
+
+def _baue_report_verweistext(exportpfad: str | None, exportzeitpunkt: str | None, lauf_id: str | None) -> str:
+    """Erzeugt einen klaren Verweistext für die GUI nach Report-Export."""
+    if not exportpfad:
+        return "Kein Analysebericht exportiert."
+    zeit = exportzeitpunkt or "Zeitpunkt unbekannt"
+    lauf = lauf_id or "Lauf-ID unbekannt"
+    return f"Letzter Analysebericht: {exportpfad} | Export: {zeit} | Lauf-ID: {lauf}"
+
+
+def _schreibe_analyse_report(ergebnisse: list[AnalyseErgebnis], ausgabe_pfad: str) -> tuple[str, str]:
+    """Rendert und schreibt den Analysebericht in den gewünschten Dateipfad."""
+    zielpfad = Path(ausgabe_pfad).expanduser()
+    markdown = render_markdown(ergebnisse, berichtsmodus="voll")
+    zielpfad.parent.mkdir(parents=True, exist_ok=True)
+    zielpfad.write_text(markdown, encoding="utf-8")
+    return str(zielpfad), datetime.now().isoformat(timespec="seconds")
+
+
+def _drilldown_knoten(ergebnis: AnalyseErgebnis) -> dict[str, list[str]]:
+    """Bereitet die Drilldown-Hierarchie für die Ergebnisansicht auf."""
+    rollenpruefung = [
+        (
+            "SQL: "
+            + ("erkannt" if ergebnis.rollen_details.sql.erkannt else "nicht erkannt")
+            + f" | Instanzen: {', '.join(ergebnis.rollen_details.sql.instanzen) or 'keine'}"
+        ),
+        (
+            "APP: "
+            + ("erkannt" if ergebnis.rollen_details.app.erkannt else "nicht erkannt")
+            + f" | Sage-Versionen: {', '.join(ergebnis.rollen_details.app.sage_versionen) or 'keine'}"
+        ),
+        (
+            "CTX: "
+            + ("erkannt" if ergebnis.rollen_details.ctx.erkannt else "nicht erkannt")
+            + f" | Session-Indikatoren: {', '.join(ergebnis.rollen_details.ctx.session_indikatoren) or 'keine'}"
+        ),
+    ]
+    ports = [
+        f"Port {port.port} ({port.bezeichnung}): {'offen' if port.offen else 'blockiert/unerreichbar'}" for port in ergebnis.ports
+    ] or ["Keine Portdaten verfügbar"]
+    dienste = [f"Dienst: {dienst.name} ({dienst.status or 'unbekannt'})" for dienst in ergebnis.dienste] or ["Keine Dienste erkannt"]
+    software = [f"Software: {eintrag.name} {eintrag.version or ''}".strip() for eintrag in ergebnis.software] or ["Keine Softwaredaten erkannt"]
+    return {
+        "Rollenprüfung": rollenpruefung,
+        "Ports": ports,
+        "Dienste/Software": [*dienste, *software],
+    }
 
 
 
@@ -287,6 +367,16 @@ class MehrserverAnalyseGUI:
         self._ausgabe_pfad = tk.StringVar(
             value=self.modulzustand.get("ausgabepfade", {}).get("analyse_report", "docs/serverbericht.md")
         )
+        self._letzter_export_pfad = self.modulzustand.get("letzter_exportpfad", "")
+        self._letzter_exportzeitpunkt = self.modulzustand.get("letzter_exportzeitpunkt", "")
+        self._letzte_export_lauf_id = self.modulzustand.get("letzte_export_lauf_id", "")
+        self._report_verweis_var = tk.StringVar(
+            value=_baue_report_verweistext(
+                self._letzter_export_pfad,
+                self._letzter_exportzeitpunkt,
+                self._letzte_export_lauf_id,
+            )
+        )
 
         self._baue_formular(self.shell.content_frame)
         self._baue_tabelle(self.shell.content_frame)
@@ -379,8 +469,16 @@ class MehrserverAnalyseGUI:
         self.btn_analyse.pack(side="right", padx=4)
 
     def _baue_ergebnisbereich(self, parent: ttk.Frame) -> None:
-        frame = ttk.LabelFrame(parent, text="Analyseergebnis je Server (aufklappbar)", style="Section.TLabelframe")
+        frame = ttk.LabelFrame(parent, text="Analyseergebnis je Server (Drilldown)", style="Section.TLabelframe")
         frame.pack(fill="both", expand=True)
+
+        summary_frame = ttk.LabelFrame(frame, text="Executive Summary", style="Section.TLabelframe")
+        summary_frame.pack(fill="x", padx=8, pady=(8, 4))
+        self.lbl_executive_summary = ttk.Label(summary_frame, text="Noch keine Analyse ausgeführt.", justify="left")
+        self.lbl_executive_summary.pack(anchor="w", padx=8, pady=(6, 4))
+        ttk.Label(summary_frame, textvariable=self._report_verweis_var, style="Subheadline.TLabel").pack(
+            anchor="w", padx=8, pady=(0, 6)
+        )
 
         self.tree_ergebnisse = ttk.Treeview(frame, columns=("details",), show="tree headings", height=10)
         self.tree_ergebnisse.heading("#0", text="Server / Kurzstatus")
@@ -555,6 +653,8 @@ class MehrserverAnalyseGUI:
         for item_id in self.tree_ergebnisse.get_children(""):
             self.tree_ergebnisse.delete(item_id)
 
+        self.lbl_executive_summary.configure(text="\n".join(_baue_executive_summary(ergebnisse)))
+
         for ergebnis in ergebnisse:
             server_knoten = self.tree_ergebnisse.insert(
                 "",
@@ -564,7 +664,13 @@ class MehrserverAnalyseGUI:
                 open=False,
             )
             for detail in _detailzeilen(ergebnis):
-                self.tree_ergebnisse.insert(server_knoten, "end", text="", values=(detail,))
+                self.tree_ergebnisse.insert(server_knoten, "end", text="Überblick", values=(detail,))
+
+            drilldown = _drilldown_knoten(ergebnis)
+            for kategorie, eintraege in drilldown.items():
+                kategorie_knoten = self.tree_ergebnisse.insert(server_knoten, "end", text=kategorie, values=("",), open=False)
+                for eintrag in eintraege:
+                    self.tree_ergebnisse.insert(kategorie_knoten, "end", text="", values=(eintrag,))
 
     def _setze_server_status(self, status: str) -> None:
         for item_id, zeile in self._zeilen_nach_id.items():
@@ -605,6 +711,25 @@ class MehrserverAnalyseGUI:
             self.tree.set(item_id, _SPALTE_STATUS, zeile.status)
 
         self._zeige_ergebnisse_aufklappbar(ergebnisse)
+
+        report_pfad = self._ausgabe_pfad.get().strip() or "docs/serverbericht.md"
+        try:
+            export_pfad, export_zeitpunkt = _schreibe_analyse_report(ergebnisse, report_pfad)
+            self._letzter_export_pfad = export_pfad
+            self._letzter_exportzeitpunkt = export_zeitpunkt
+            self._letzte_export_lauf_id = lauf_id
+            self._report_verweis_var.set(
+                _baue_report_verweistext(self._letzter_export_pfad, self._letzter_exportzeitpunkt, self._letzte_export_lauf_id)
+            )
+            self.shell.logge_meldung(f"Analysebericht erzeugt: {export_pfad}")
+        except Exception as exc:  # noqa: BLE001 - Analyseergebnis bleibt nutzbar, auch wenn Export fehlschlägt.
+            logger.exception("Analysebericht konnte nicht geschrieben werden")
+            self.shell.zeige_warnung(
+                "Exportwarnung",
+                f"Analyse war erfolgreich, aber der Report konnte nicht geschrieben werden: {exc}",
+                "Prüfen Sie den Ausgabepfad und Dateiberechtigungen.",
+            )
+
         self.shell.setze_status("Analyse abgeschlossen")
         self.shell.logge_meldung(f"Analyse abgeschlossen. Lauf-ID: {self.shell.lauf_id_var.get()}")
         self.speichern()
@@ -639,6 +764,9 @@ class MehrserverAnalyseGUI:
                 "ausgabepfade": ausgabepfade,
                 "letzte_kerninfos": self._baue_kerninfos(),
                 "bericht_verweise": [ausgabepfade["analyse_report"], ausgabepfade["log_report"]],
+                "letzter_exportpfad": self._letzter_export_pfad,
+                "letzter_exportzeitpunkt": self._letzter_exportzeitpunkt,
+                "letzte_export_lauf_id": self._letzte_export_lauf_id,
             }
         )
         self.state_store.speichere_modulzustand("server_analysis", self.modulzustand)
