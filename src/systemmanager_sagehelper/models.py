@@ -120,6 +120,19 @@ class RollenDetails:
 
 
 @dataclass
+class DiscoveryErgebnis:
+    """Strukturierter Discovery-Treffer mit Qualitäts- und Fehlerhinweisen."""
+
+    hostname: str
+    ip_adresse: str
+    erreichbar: bool
+    erkannte_dienste: list[str] = field(default_factory=list)
+    vertrauensgrad: float = 0.0
+    strategien: list[str] = field(default_factory=list)
+    fehlerursachen: list[str] = field(default_factory=list)
+
+
+@dataclass
 class AnalyseErgebnis:
     """Sammelt alle Informationen zu einem Serverlauf."""
 

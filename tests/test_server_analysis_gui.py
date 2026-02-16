@@ -5,11 +5,13 @@ from __future__ import annotations
 from datetime import datetime
 
 from server_analysis_gui import (
+    DiscoveryTabellenTreffer,
     ServerTabellenZeile,
     _baue_serverziele,
     _deklarationszusammenfassung,
     _detailzeilen,
     _kurzstatus,
+    _rollen_aus_discovery_treffer,
     _rollenquelle_fuer_zeile,
 )
 from systemmanager_sagehelper.models import AnalyseErgebnis, PortStatus
@@ -77,3 +79,24 @@ def test_rollenquelle_fuer_discovery_und_manuelle_aenderung() -> None:
 
     assert _rollenquelle_fuer_zeile(auto_zeile) == "automatisch erkannt"
     assert _rollenquelle_fuer_zeile(geaendert) == "nachträglich geändert"
+
+
+def test_rollenableitung_aus_discovery_diensten() -> None:
+    """Discovery-Dienste sollen eine plausible Rollenvorbelegung liefern."""
+    sql_ctx = DiscoveryTabellenTreffer(
+        hostname="srv-01",
+        ip_adresse="10.0.0.10",
+        erreichbar=True,
+        dienste="1433, 3389",
+        vertrauensgrad=0.9,
+    )
+    nur_app = DiscoveryTabellenTreffer(
+        hostname="srv-02",
+        ip_adresse="10.0.0.11",
+        erreichbar=True,
+        dienste="-",
+        vertrauensgrad=0.2,
+    )
+
+    assert _rollen_aus_discovery_treffer(sql_ctx) == ["SQL", "CTX"]
+    assert _rollen_aus_discovery_treffer(nur_app) == ["APP"]
