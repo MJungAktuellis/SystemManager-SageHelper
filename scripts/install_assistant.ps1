@@ -2,6 +2,9 @@
 [CmdletBinding()]
 Param()
 
+# Hinweis zur Kompatibilität: Alte Windows-Codepages stellen Emojis oft fehlerhaft dar.
+# Deshalb verwenden wir bewusst ASCII-Textpräfixe ([OK], [WARN], [FEHLER], Hinweis:).
+
 function Test-Admin {
     $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
@@ -53,9 +56,9 @@ foreach ($candidate in $PythonCandidates) {
 }
 
 if (-not $launched) {
-    Write-Host "❌ Fehler: Konnte den Python-basierten Installer nicht erfolgreich starten."
-    Write-Host "➡️ Bitte prüfen Sie die Python-Installation oder führen Sie scripts/install.py manuell aus."
+    Write-Host "[FEHLER] Fehler: Konnte den Python-basierten Installer nicht erfolgreich starten."
+    Write-Host "Hinweis: Bitte prüfen Sie die Python-Installation oder führen Sie scripts/install.py manuell aus."
     exit 1
 }
 
-Write-Host "✅ Installationsprozess abgeschlossen."
+Write-Host "[OK] Installationsprozess abgeschlossen."
