@@ -408,6 +408,12 @@ class InstallerWizardGUI:
                     ergebnisse,
                     auswahl,
                     desktop_verknuepfung_status=desktop_verknuepfung_status,
+                    einstiegspfad="gui",
+                    optionen={
+                        "Installationsmarker": "aktiv" if self.option_marker_var.get() else "deaktiviert",
+                        "Installationsreport": "aktiv" if self.option_report_var.get() else "deaktiviert",
+                        "Desktop-Icon": "aktiv" if self.option_desktop_icon_var.get() else "deaktiviert",
+                    },
                 )
 
             self.window.after(0, self._installation_erfolgreich_abschliessen)

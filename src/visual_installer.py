@@ -1,6 +1,8 @@
-"""Legacy-Entry-Point für den visuellen Installer.
+"""Veralteter Legacy-Entry-Point für den visuellen Installer.
 
-Hinweis: Dieser Pfad ist veraltet und delegiert auf ``scripts/install.py``.
+DEPRECATED: Dieser Pfad bleibt nur für die Übergangsphase erhalten und
+wird mittelfristig entfernt. Kanonischer Einstieg ist:
+``scripts/install_assistant.ps1 -> scripts/install.py -> systemmanager_sagehelper.installer``.
 """
 
 from __future__ import annotations
@@ -15,10 +17,10 @@ INSTALL_SCRIPT = REPO_ROOT / "scripts" / "install.py"
 
 
 def visueller_installationsassistent() -> None:
-    """Leitet auf den aktuellen Installationsassistenten weiter."""
-    print("⚠️ Hinweis: 'src/visual_installer.py' ist veraltet.")
-    print("➡️  Starte stattdessen den zentralen Installer aus scripts/install.py ...")
-    subprocess.check_call([sys.executable, str(INSTALL_SCRIPT)])
+    """Leitet auf den zentralen Installer um und kennzeichnet den Legacy-Status."""
+    print("[WARN] DEPRECATED: 'src/visual_installer.py' wird mittelfristig entfernt.")
+    print("[INFO] Starte stattdessen die kanonische Orchestrierung über scripts/install.py.")
+    subprocess.check_call([sys.executable, str(INSTALL_SCRIPT), "--mode", "auto"])
 
 
 if __name__ == "__main__":

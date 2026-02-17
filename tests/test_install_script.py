@@ -27,6 +27,10 @@ class TestInstallScript(unittest.TestCase):
         args = install_script.parse_cli_args(["--non-interactive"])
         self.assertTrue(args.non_interactive)
 
+    def test_parse_cli_args_mode_standard_auto(self) -> None:
+        args = install_script.parse_cli_args([])
+        self.assertEqual("auto", args.mode)
+
     def test_parse_cli_args_desktop_icon_standardmaessig_aktiv(self) -> None:
         args = install_script.parse_cli_args([])
         self.assertTrue(args.desktop_icon)
@@ -99,7 +103,7 @@ class TestInstallScript(unittest.TestCase):
         komponenten = {"kern": SimpleNamespace(default_aktiv=True, name="Kernkomponente")}
 
         with (
-            patch.object(install_script, "parse_cli_args", return_value=SimpleNamespace(non_interactive=True, desktop_icon=False)),
+            patch.object(install_script, "parse_cli_args", return_value=SimpleNamespace(mode="cli", non_interactive=True, desktop_icon=False)),
             patch.object(install_script, "konfiguriere_logging", return_value="install.log"),
             patch.object(install_script, "erstelle_standard_komponenten", return_value=komponenten),
             patch.object(install_script, "drucke_voraussetzungsstatus"),
@@ -116,6 +120,7 @@ class TestInstallScript(unittest.TestCase):
         validiere_mock.assert_called_once_with(komponenten, {"kern": True})
         report_mock.assert_called_once()
         self.assertEqual("Desktop-Verknüpfung: Deaktiviert", report_mock.call_args.kwargs["desktop_verknuepfung_status"])
+        self.assertEqual("cli", report_mock.call_args.kwargs["einstiegspfad"])
         safe_print_mock.assert_any_call("\n[INFO] Non-Interactive-Modus aktiv: Standardauswahl wird verwendet.")
 
 

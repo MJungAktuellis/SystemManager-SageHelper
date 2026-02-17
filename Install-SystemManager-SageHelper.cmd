@@ -39,10 +39,10 @@ if not exist "%PS_SCRIPT%" (
     exit /b 1
 )
 
-echo === Starte Standard-Installer (GUI) ===
+echo === Starte kanonischen Installer-Flow ===
 echo [INFO] Launcher-Log: %LAUNCHER_LOG%
-echo [INFO] Standard: GUI-Installer (mit automatischem CLI-Fallback)
-echo [INFO] Optional: CLI direkt via "python scripts\install.py"
+echo [INFO] Flow: scripts\install_assistant.ps1 -> scripts\install.py -> systemmanager_sagehelper.installer
+echo [INFO] Optional: CLI direkt via "python scripts\install.py --mode cli"
 echo [INFO] Optional: Non-Interactive via "python scripts\install.py --non-interactive"
 echo [INFO] Nutze PowerShell-Skript: %PS_SCRIPT%
 
@@ -58,7 +58,7 @@ if "%EXIT_CODE%"=="0" (
 ) else (
     echo [FEHLER] Installation beendet mit Exit-Code %EXIT_CODE%.
     echo Bitte pruefen Sie die Logdateien unter logs\install_launcher.log,
-    echo logs\install_assistant_ps.log und logs\install_assistant.log.
+    echo logs\install_assistant_ps.log und logs\install_engine.log.
 )
 
 if "%NO_PAUSE%"=="0" pause

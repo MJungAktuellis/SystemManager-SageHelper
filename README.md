@@ -98,11 +98,18 @@ Wenn du das Tool **einfach nur installieren und benutzen** willst, gehe genau so
 
 ### Wenn etwas nicht funktioniert
 
-- Prüfe die Logdateien in `logs/`.
-- Teile bei Supportanfragen idealerweise diese Dateien:
-  - `logs/install_launcher.log`
-  - `logs/install_assistant_ps.log`
-  - `logs/install_assistant.log`
+Bitte für Supportfälle **nur den kanonischen Installer-Flow** verwenden:
+
+1. `Install-SystemManager-SageHelper.cmd`
+2. `scripts/install_assistant.ps1`
+3. `scripts/install.py` (Orchestrierung GUI/CLI)
+4. `src/systemmanager_sagehelper/installer.py` (Kernlogik)
+
+Teile bei Supportanfragen immer diese reproduzierbaren Artefakte aus `logs/`:
+- `logs/install_launcher.log` (CMD-Launcher)
+- `logs/install_assistant_ps.log` (PowerShell-Launcher)
+- `logs/install_engine.log` (Installer-Engine)
+- `logs/install_report.md` (Installationsreport)
 
 > Tipp für Teams: Beim ersten Rollout einmal mit einem Testserver prüfen, dann den gleichen Ablauf für alle weiteren Server nutzen.
 
@@ -110,24 +117,24 @@ Wenn du das Tool **einfach nur installieren und benutzen** willst, gehe genau so
 
 1. Repository als ZIP auf den Zielserver kopieren und entpacken.
 2. `Install-SystemManager-SageHelper.cmd` per Doppelklick ausführen.
-3. Standardpfad: Der Launcher startet den GUI-Installer (`scripts/install_gui.py`).
-4. Falls der GUI-Start fehlschlägt (z. B. fehlendes Tkinter), erfolgt automatisch ein klar geloggter Fallback auf den CLI-Installer im Non-Interactive-Modus.
+3. Der Launcher startet die kanonische Python-Orchestrierung (`scripts/install.py --mode auto`).
+4. Im Modus `auto` wird zuerst GUI versucht und bei Fehlern automatisch auf CLI zurückgefallen.
 5. Im One-Click-/GUI-Flow ist die Option **Desktop-Verknüpfung** standardmäßig aktiviert und wird im Abschluss inkl. Status ausgewiesen.
 6. Der Launcher öffnet bei Doppelklick automatisch ein persistentes CMD-Fenster, damit Meldungen nicht sofort verschwinden.
-7. Bei Fehlern bitte die Logdateien unter `logs/install_launcher.log`, `logs/install_assistant_ps.log` und `logs/install_assistant.log` teilen.
+7. Bei Fehlern bitte die Dateien `logs/install_launcher.log`, `logs/install_assistant_ps.log`, `logs/install_engine.log` und `logs/install_report.md` teilen.
 
 ### Option B: CLI-Installation (optional, plattformübergreifend)
 
 Interaktiver CLI-Modus:
 
 ```bash
-python scripts/install.py
+python scripts/install.py --mode cli
 ```
 
 Non-Interactive CLI-Modus (z. B. für Automatisierung):
 
 ```bash
-python scripts/install.py --non-interactive
+python scripts/install.py --mode cli --non-interactive
 ```
 
 Desktop-Verknüpfung im CLI-Installer:
@@ -139,8 +146,8 @@ Desktop-Verknüpfung im CLI-Installer:
 Beispiele:
 
 ```bash
-python scripts/install.py --non-interactive --desktop-icon
-python scripts/install.py --non-interactive --no-desktop-icon
+python scripts/install.py --mode cli --non-interactive --desktop-icon
+python scripts/install.py --mode cli --non-interactive --no-desktop-icon
 ```
 
 ## Windows-Build & distributierbares Installer-Paket
