@@ -14,7 +14,8 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
 from systemmanager_sagehelper.gui_shell import GuiShell
-from systemmanager_sagehelper.installation_state import schreibe_installations_marker
+from systemmanager_sagehelper.gui_state import GUIStateStore, erstelle_installer_modulzustand
+from systemmanager_sagehelper.installation_state import _ermittle_app_version, schreibe_installations_marker
 from systemmanager_sagehelper.installer import (
     ErgebnisStatus,
     InstallationsErgebnis,
@@ -55,6 +56,7 @@ class InstallerWizardGUI:
     ) -> None:
         self.repo_root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
         self.on_finished = on_finished
+        self.state_store = GUIStateStore()
 
         if isinstance(master, tk.Tk):
             self.window = master
@@ -351,6 +353,15 @@ class InstallerWizardGUI:
                 self.report_datei = schreibe_installationsreport(ziel_root, ergebnisse, auswahl)
             if self.option_marker_var.get():
                 self.marker_datei = schreibe_installations_marker(repo_root=ziel_root)
+
+            # Persistiert den Installer-Zustand zentral, damit Dashboard und weitere GUI-Module
+            # den Erfolg unabhängig vom aktuellen Fenster reproduzierbar auslesen können.
+            installer_status = erstelle_installer_modulzustand(
+                installiert=True,
+                version=_ermittle_app_version(),
+                bericht_pfad=str(self.report_datei) if self.report_datei else "",
+            )
+            self.state_store.speichere_modulzustand("installer", installer_status)
 
             installer_optionen = InstallerOptionen(desktop_icon=self.option_desktop_icon_var.get())
             inno_tasks = mappe_inno_tasks(installer_optionen)

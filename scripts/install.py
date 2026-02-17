@@ -16,7 +16,8 @@ SRC_PATH = REPO_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-from systemmanager_sagehelper.installation_state import schreibe_installations_marker
+from systemmanager_sagehelper.gui_state import GUIStateStore, erstelle_installer_modulzustand
+from systemmanager_sagehelper.installation_state import _ermittle_app_version, schreibe_installations_marker
 from systemmanager_sagehelper.installer import (
     ErgebnisStatus,
     InstallationsFehler,
@@ -153,6 +154,17 @@ def main() -> None:
         ergebnisse = fuehre_installationsplan_aus(komponenten, auswahl)
         report_datei = schreibe_installationsreport(REPO_ROOT, ergebnisse, auswahl)
         marker_datei = schreibe_installations_marker(repo_root=REPO_ROOT)
+
+        # Persistiert den Installer-Status zusätzlich im GUI-State, damit Launcher
+        # und weitere Oberflächen den Zustand ohne Marker-Details auswerten können.
+        GUIStateStore().speichere_modulzustand(
+            "installer",
+            erstelle_installer_modulzustand(
+                installiert=True,
+                version=_ermittle_app_version(),
+                bericht_pfad=str(report_datei),
+            ),
+        )
     except InstallationsFehler as fehler:
         LOGGER.error("Installationsfehler: %s", fehler)
         _safe_print(f"[ERROR] {fehler}")

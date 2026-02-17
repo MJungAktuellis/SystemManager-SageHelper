@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from systemmanager_sagehelper.gui_state import GUIStateStore
+from systemmanager_sagehelper.gui_state import GUIStateStore, erstelle_installer_modulzustand
 
 
 def test_lade_default_ohne_datei(tmp_path: Path) -> None:
@@ -61,3 +61,20 @@ def test_onboarding_status_wird_robust_geladen_und_gespeichert(tmp_path: Path) -
     assert geladen["onboarding_version"] == "1.2.3"
     assert geladen["erststart_zeitpunkt"] == "2026-03-04T12:00:00"
     assert "letzter_abschluss_zeitpunkt" in geladen
+
+
+def test_installer_modulzustand_schema_bleibt_stabil() -> None:
+    """Der Installer-Zustand soll ein klares, erweitertes Basisschema liefern."""
+    zustand = erstelle_installer_modulzustand(
+        installiert=True,
+        version="2.1.0",
+        zeitpunkt="2026-05-06T10:11:12",
+        bericht_pfad="logs/install_report.md",
+    )
+
+    assert zustand == {
+        "installiert": True,
+        "version": "2.1.0",
+        "zeitpunkt": "2026-05-06T10:11:12",
+        "bericht_pfad": "logs/install_report.md",
+    }

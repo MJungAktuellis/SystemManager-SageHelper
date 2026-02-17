@@ -482,8 +482,18 @@ class SystemManagerGUI:
             "dokumentation": "Keine Dokumentation gespeichert",
         }
 
-        if module.get("installer"):
-            status_texte["installation"] = "Bereits konfiguriert"
+        # Primäre Quelle für den Installationsstatus bleibt die technische Installationsprüfung
+        # (Marker + Integrität). Der GUI-State ergänzt diese Information für Bericht/Version.
+        installationspruefung = pruefe_installationszustand()
+        installer_modul = module.get("installer", {}) if isinstance(module.get("installer"), dict) else {}
+        if installationspruefung.installiert:
+            version = installer_modul.get("version") or installationspruefung.erkannte_version or ""
+            status_texte["installation"] = (
+                f"Bereits konfiguriert ({version})" if version else "Bereits konfiguriert"
+            )
+        elif installer_modul.get("installiert"):
+            status_texte["installation"] = "Teilweise konfiguriert (Marker prüfen)"
+
         if module.get("server_analysis", {}).get("letzte_kerninfos"):
             status_texte["serveranalyse"] = "Ergebnisse vorhanden"
         if module.get("folder_manager", {}).get("letzte_kerninfos"):

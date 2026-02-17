@@ -182,3 +182,75 @@ def test_onboarding_guard_ignoriert_abgeschlossenen_status() -> None:
 
     gui.master.after.assert_not_called()
     gui.shell.setze_status.assert_not_called()
+
+
+class _StatusVar:
+    """Leichtgewichtiger Ersatz für tk.StringVar in isolierten Unit-Tests."""
+
+    def __init__(self) -> None:
+        self.value = ""
+
+    def set(self, value: str) -> None:
+        self.value = value
+
+
+def test_dashboard_installationsstatus_nutzt_marker_pruefung_mit_versionsinfo(monkeypatch) -> None:
+    """Dashboard soll primär die Installationsprüfung und ergänzend GUI-State nutzen."""
+    monkeypatch.setattr(
+        gui_manager,
+        "pruefe_installationszustand",
+        lambda: InstallationsPruefung(installiert=True, erkannte_version="1.9.0"),
+    )
+
+    gui = object.__new__(gui_manager.SystemManagerGUI)
+    gui.state_store = SimpleNamespace(
+        lade_gesamtzustand=lambda: {
+            "modules": {
+                "installer": {"installiert": True, "version": "2.0.0"},
+                "server_analysis": {},
+                "folder_manager": {},
+                "doc_generator": {},
+            }
+        }
+    )
+    gui._karten_status = {
+        "installation": _StatusVar(),
+        "serveranalyse": _StatusVar(),
+        "ordnerverwaltung": _StatusVar(),
+        "dokumentation": _StatusVar(),
+    }
+
+    gui._aktualisiere_dashboard_status()
+
+    assert gui._karten_status["installation"].value == "Status: Bereits konfiguriert (2.0.0)"
+
+
+def test_dashboard_installationsstatus_zeigt_teilweise_konfiguration_ohne_marker(monkeypatch) -> None:
+    """Ist nur der GUI-State gesetzt, soll das Dashboard eine Teilkonfiguration signalisieren."""
+    monkeypatch.setattr(
+        gui_manager,
+        "pruefe_installationszustand",
+        lambda: InstallationsPruefung(installiert=False, gruende=["Marker fehlt"]),
+    )
+
+    gui = object.__new__(gui_manager.SystemManagerGUI)
+    gui.state_store = SimpleNamespace(
+        lade_gesamtzustand=lambda: {
+            "modules": {
+                "installer": {"installiert": True, "version": "2.0.0"},
+                "server_analysis": {},
+                "folder_manager": {},
+                "doc_generator": {},
+            }
+        }
+    )
+    gui._karten_status = {
+        "installation": _StatusVar(),
+        "serveranalyse": _StatusVar(),
+        "ordnerverwaltung": _StatusVar(),
+        "dokumentation": _StatusVar(),
+    }
+
+    gui._aktualisiere_dashboard_status()
+
+    assert gui._karten_status["installation"].value == "Status: Teilweise konfiguriert (Marker prüfen)"
