@@ -9,7 +9,8 @@ from tkinter import messagebox, ttk
 
 from systemmanager_sagehelper.gui_shell import GuiShell
 from systemmanager_sagehelper.gui_state import GUIStateStore
-from systemmanager_sagehelper.installation_state import install_workflow_befehl, pruefe_installationszustand
+from systemmanager_sagehelper.installation_state import pruefe_installationszustand
+from systemmanager_sagehelper.installer_gui import InstallerWizardGUI
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 from systemmanager_sagehelper.ui_theme import LAYOUT
 
@@ -234,8 +235,42 @@ class SystemManagerGUI:
             self._aktualisiere_dashboard_status()
 
     def installieren(self) -> None:
-        """Startet den zentralen Installationsworkflow."""
-        self._execute_command("Installation", install_workflow_befehl())
+        """Öffnet den mehrstufigen Installer als Child-Window innerhalb des Launchers."""
+        if not self.shell.bestaetige_aktion(
+            "Installation bestätigen",
+            "Der grafische Installationsassistent wird geöffnet.",
+        ):
+            self.shell.setze_status("Installation abgebrochen")
+            return
+
+        lauf_id = self._starte_neuen_lauf()
+        self.shell.setze_status("Installationsassistent geöffnet")
+        self.shell.logge_meldung(f"[{lauf_id}] Öffne grafischen Installationsassistenten")
+
+        InstallerWizardGUI(
+            self.master,
+            on_finished=lambda erfolgreich: self._nach_installation(erfolgreich, lauf_id),
+        )
+
+    def _nach_installation(self, erfolgreich: bool, lauf_id: str) -> None:
+        """Synchronisiert Dashboard und Status nach Abschluss des Installer-Dialogs."""
+        if erfolgreich:
+            self.shell.zeige_erfolg(
+                "Erfolg",
+                f"Installation abgeschlossen.\nLauf-ID: {lauf_id}",
+                "Prüfen Sie die Übersicht und speichern Sie bei Bedarf den Zustand.",
+            )
+            self.shell.setze_status("Installation abgeschlossen")
+        else:
+            self.shell.zeige_warnung(
+                "Installation unvollständig",
+                f"Die Installation wurde mit Fehlern beendet.\nLauf-ID: {lauf_id}",
+                "Prüfen Sie die Meldungen im Installer-Fenster und wiederholen Sie den Vorgang.",
+            )
+            self.shell.setze_status("Installation mit Warnungen beendet")
+
+        self._lade_uebersichtszeilen()
+        self._aktualisiere_dashboard_status()
 
     def _installation_erforderlich_dialog(self, modulname: str) -> bool:
         """Blockiert Modulstarts ohne valide Installation und bietet direkt die Aktion an."""

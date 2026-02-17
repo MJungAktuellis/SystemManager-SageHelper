@@ -47,7 +47,7 @@ def test_guard_blockiert_und_startet_installation_bei_bestaetigung() -> None:
 
 def test_launcher_guard_zeigt_hinweis_und_startet_installation(monkeypatch) -> None:
     """Der Launcher soll gesperrte Module erklären und die Installation anbieten."""
-    pruefung = InstallationsPruefung(installiert=False, gruende=["Marker fehlt"]) 
+    pruefung = InstallationsPruefung(installiert=False, gruende=["Marker fehlt"])
     monkeypatch.setattr(gui_manager, "pruefe_installationszustand", lambda: pruefung)
     monkeypatch.setattr(gui_manager.messagebox, "askyesno", lambda *args, **kwargs: True)
 
@@ -61,6 +61,28 @@ def test_launcher_guard_zeigt_hinweis_und_startet_installation(monkeypatch) -> N
     assert erlaubt is False
     gui.shell.zeige_warnung.assert_called_once()
     gui.installieren.assert_called_once()
+
+
+def test_launcher_installieren_oeffnet_installer_wizard(monkeypatch) -> None:
+    """Die Installationsaktion im Launcher soll den GUI-Wizard starten."""
+    wizard_start = Mock()
+    monkeypatch.setattr(gui_manager, "InstallerWizardGUI", wizard_start)
+
+    gui = object.__new__(gui_manager.SystemManagerGUI)
+    gui.master = object()
+    gui._starte_neuen_lauf = Mock(return_value="lauf-123")
+    gui._nach_installation = Mock()
+    gui.shell = SimpleNamespace(
+        bestaetige_aktion=Mock(return_value=True),
+        setze_status=Mock(),
+        logge_meldung=Mock(),
+    )
+
+    gui.installieren()
+
+    gui.shell.bestaetige_aktion.assert_called_once()
+    wizard_start.assert_called_once()
+    assert wizard_start.call_args.kwargs["on_finished"] is not None
 
 
 def test_serveranalyse_main_startet_gui_nur_bei_freigabe(monkeypatch) -> None:
