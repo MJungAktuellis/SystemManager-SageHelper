@@ -1,7 +1,8 @@
-"""Legacy-Wrapper für den alten Installationshandler.
+"""Veralteter Legacy-Wrapper für den Installationshandler.
 
-Hinweis: Dieser Pfad bleibt aus Kompatibilitätsgründen bestehen und delegiert
-auf ``scripts/install.py``.
+DEPRECATED: Dieser Pfad bleibt nur temporär aus Kompatibilitätsgründen bestehen
+und wird mittelfristig entfernt. Kanonischer Einstieg ist:
+``scripts/install_assistant.ps1 -> scripts/install.py -> systemmanager_sagehelper.installer``.
 """
 
 from __future__ import annotations
@@ -16,10 +17,10 @@ INSTALL_SCRIPT = REPO_ROOT / "scripts" / "install.py"
 
 
 def verarbeite_installation() -> None:
-    """Leitet den Aufruf auf den neuen Installationsworkflow um."""
-    print("⚠️ Hinweis: 'src/install_handler.py' ist veraltet.")
-    print("➡️  Verwende den zentralen Installer unter scripts/install.py.")
-    subprocess.check_call([sys.executable, str(INSTALL_SCRIPT)])
+    """Delegiert auf den zentralen Installationsflow und markiert Legacy-Nutzung."""
+    print("[WARN] DEPRECATED: 'src/install_handler.py' wird mittelfristig entfernt.")
+    print("[INFO] Verwende den zentralen Installer unter scripts/install_assistant.ps1 oder scripts/install.py.")
+    subprocess.check_call([sys.executable, str(INSTALL_SCRIPT), "--mode", "auto"])
 
 
 if __name__ == "__main__":

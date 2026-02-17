@@ -1,7 +1,8 @@
-"""Geführter Installationsassistent für SystemManager-SageHelper.
+"""Kanonische Python-Orchestrierung für den Installationsassistenten.
 
-Dieses Skript bietet einen interaktiven Auswahlmodus für Installationskomponenten
-und führt die Installation in einer festen, validierten Reihenfolge aus.
+Dieses Skript ist der zentrale Einstieg unterhalb von ``scripts/install_assistant.ps1``
+und orchestriert GUI-/CLI-Installation, während ``systemmanager_sagehelper.installer``
+die gesamte Kernlogik kapselt.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ if str(SRC_PATH) not in sys.path:
 
 from systemmanager_sagehelper.gui_state import GUIStateStore, erstelle_installer_modulzustand
 from systemmanager_sagehelper.installation_state import _ermittle_app_version, schreibe_installations_marker
+from systemmanager_sagehelper.installer_gui import starte_installer_wizard
 from systemmanager_sagehelper.installer import (
     ErgebnisStatus,
     InstallationsFehler,
@@ -124,7 +126,13 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--non-interactive",
         action="store_true",
-        help="Aktiviert alle Standard-Komponenten ohne Eingabeaufforderung.",
+        help="Aktiviert alle Standard-Komponenten ohne Eingabeaufforderung (CLI-Modus).",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["auto", "gui", "cli"],
+        default="auto",
+        help="Installationsmodus: auto (GUI mit CLI-Fallback), gui oder cli.",
     )
     desktop_icon_group = parser.add_mutually_exclusive_group()
     desktop_icon_group.add_argument(
@@ -143,13 +151,42 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _baue_report_optionen(cli_args: argparse.Namespace) -> dict[str, str]:
+    """Bereitet aktive Installer-Optionen für den Installationsreport auf."""
+    return {
+        "Modus": cli_args.mode,
+        "Non-Interactive": "ja" if cli_args.non_interactive else "nein",
+        "Desktop-Icon": "aktiv" if cli_args.desktop_icon else "deaktiviert",
+    }
+
+
+def _starte_gui_modus() -> int:
+    """Startet den GUI-Wizard und liefert einen Exit-Code zurück."""
+    try:
+        starte_installer_wizard()
+        return 0
+    except Exception as fehler:
+        LOGGER.exception("GUI-Installer fehlgeschlagen.")
+        _safe_print(f"[WARN] GUI-Installer fehlgeschlagen: {fehler}")
+        return 1
+
+
 def main() -> None:
-    """Startpunkt des geführten Installationsprozesses."""
+    """Startpunkt der kanonischen Installationsorchestrierung."""
     cli_args = parse_cli_args()
     _safe_print("=== Installation von SystemManager-SageHelper ===")
     log_datei = konfiguriere_logging(REPO_ROOT)
     _safe_print(f"[INFO] Installationslog: {log_datei}")
-    LOGGER.info("Installationslauf gestartet.")
+    LOGGER.info("Installationslauf gestartet (mode=%s).", cli_args.mode)
+
+    if cli_args.mode in {"auto", "gui"}:
+        gui_exit = _starte_gui_modus()
+        if gui_exit == 0:
+            _safe_print("[OK] GUI-Installation beendet.")
+            return
+        if cli_args.mode == "gui":
+            raise SystemExit(1)
+        _safe_print("[INFO] Fallback auf CLI-Orchestrierung.")
 
     komponenten = erstelle_standard_komponenten(REPO_ROOT)
 
@@ -186,6 +223,8 @@ def main() -> None:
             ergebnisse,
             auswahl,
             desktop_verknuepfung_status=desktop_verknuepfung_status,
+            einstiegspfad="cli",
+            optionen=_baue_report_optionen(cli_args),
         )
         marker_datei = schreibe_installations_marker(repo_root=REPO_ROOT)
 

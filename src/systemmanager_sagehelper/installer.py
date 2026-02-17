@@ -20,6 +20,8 @@ from typing import Callable, Sequence
 
 MINDEST_PYTHON_VERSION = (3, 11)
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+INSTALLER_ENGINE_LOGDATEI = "install_engine.log"
+INSTALLER_REPORT_DATEI = "install_report.md"
 STANDARD_REIHENFOLGE = [
     "voraussetzungen",
     "python",
@@ -88,7 +90,7 @@ def ermittle_log_datei(repo_root: Path) -> Path:
     """Liefert den Pfad zur Logdatei und stellt den Zielordner sicher bereit."""
     log_ordner = repo_root / "logs"
     log_ordner.mkdir(parents=True, exist_ok=True)
-    return log_ordner / "install_assistant.log"
+    return log_ordner / INSTALLER_ENGINE_LOGDATEI
 
 
 def konfiguriere_logging(repo_root: Path) -> Path:
@@ -695,20 +697,27 @@ def schreibe_installationsreport(
     ergebnisse: list[InstallationsErgebnis],
     auswahl: dict[str, bool],
     desktop_verknuepfung_status: str | None = None,
+    einstiegspfad: str = "cli",
+    optionen: dict[str, str] | None = None,
 ) -> Path:
     """Schreibt einen konsistenten Installationsbericht im Markdown-Format."""
-    report_datei = repo_root / "logs" / "install_report.md"
+    report_datei = repo_root / "logs" / INSTALLER_REPORT_DATEI
     report_datei.parent.mkdir(parents=True, exist_ok=True)
 
     aktive_komponenten = [komponenten_id for komponenten_id, aktiv in auswahl.items() if aktiv]
     zeitstempel = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    optionen = optionen or {}
+    optionen_markdown = "\n".join([f"  - **{name}:** {wert}" for name, wert in optionen.items()])
 
     zeilen = [
         "# Installationsreport",
         "",
         f"- **Zeitpunkt:** {zeitstempel}",
         f"- **Python:** {sys.version.split()[0]}",
+        f"- **Einstiegspfad:** {einstiegspfad.upper()}",
         f"- **Aktive Komponenten:** {', '.join(aktive_komponenten) if aktive_komponenten else 'keine'}",
+        "- **Aktive Optionen:**",
+        optionen_markdown if optionen_markdown else "  - keine",
         "",
         "## Ergebnis",
         "",

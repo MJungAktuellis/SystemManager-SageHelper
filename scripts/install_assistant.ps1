@@ -1,4 +1,4 @@
-# Installationsassistent – PowerShell dient nur als Launcher für die Python-Kernlogik.
+# Installationsassistent – PowerShell dient als kanonischer Launcher für die Python-Orchestrierung.
 [CmdletBinding()]
 Param()
 
@@ -18,12 +18,18 @@ if (-not (Test-Admin)) {
 }
 
 Write-Host "=== SystemManager-SageHelper: Installations-Launcher ==="
-Write-Host "[INFO] Standardpfad: GUI-Installer (scripts/install_gui.py)."
+Write-Host "[INFO] Kanonischer Einstieg: scripts/install_assistant.ps1 -> scripts/install.py -> systemmanager_sagehelper.installer"
 
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
-$InstallScript = Join-Path $RepoRoot "scripts\install_gui.py"
+$InstallScript = Join-Path $RepoRoot "scripts\install.py"
+$LogDir = Join-Path $RepoRoot "logs"
+if (-not (Test-Path $LogDir)) {
+    New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+}
+$PsLog = Join-Path $LogDir "install_assistant_ps.log"
+Add-Content -Path $PsLog -Value ("==== [" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] Start scripts/install_assistant.ps1 ====")
 
-# Bevorzugte Interpreter-Reihenfolge für den Start der Python-Kernlogik.
+# Bevorzugte Interpreter-Reihenfolge für den Start der Python-Orchestrierung.
 $PythonCandidates = @(
     @("py", "-3"),
     @("python"),
@@ -42,11 +48,13 @@ foreach ($candidate in $PythonCandidates) {
     if ($candidate.Count -gt 1) {
         $arguments += $candidate[1..($candidate.Count - 1)]
     }
+    # Standardmäßig GUI, mit robustem CLI-Fallback innerhalb von scripts/install.py.
     $arguments += @($InstallScript)
 
-    Write-Host "[INFO] Starte Installer mit: $($candidate -join ' ') (GUI-Standard)"
+    Write-Host "[INFO] Starte Installer-Orchestrierung mit: $($candidate -join ' ')"
     & $exe @arguments
     $exitCode = $LASTEXITCODE
+    Add-Content -Path $PsLog -Value ("Interpreter " + ($candidate -join " ") + " ExitCode=" + $exitCode)
     if ($exitCode -eq 0) {
         $launched = $true
         break
@@ -57,8 +65,10 @@ foreach ($candidate in $PythonCandidates) {
 
 if (-not $launched) {
     Write-Host "[FEHLER] Fehler: Konnte den Python-basierten Installer nicht erfolgreich starten."
-    Write-Host "Hinweis: Bitte prüfen Sie die Python-Installation oder führen Sie scripts/install_gui.py bzw. scripts/install.py manuell aus."
+    Write-Host "Hinweis: Bitte prüfen Sie die Python-Installation oder führen Sie scripts/install.py manuell aus."
+    Add-Content -Path $PsLog -Value "[FEHLER] Python-Orchestrierung konnte nicht gestartet werden."
     exit 1
 }
 
+Add-Content -Path $PsLog -Value ("==== [" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] Ende scripts/install_assistant.ps1 ====")
 Write-Host "[OK] Installationsprozess abgeschlossen."

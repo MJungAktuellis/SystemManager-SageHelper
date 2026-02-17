@@ -52,7 +52,7 @@ class TestInstaller(unittest.TestCase):
             repo_root = Path(tmp_dir)
             log_datei = installer.ermittle_log_datei(repo_root)
 
-            self.assertEqual("install_assistant.log", log_datei.name)
+            self.assertEqual("install_engine.log", log_datei.name)
             self.assertEqual("logs", log_datei.parent.name)
             self.assertTrue(log_datei.parent.exists())
 
@@ -169,6 +169,7 @@ class TestInstaller(unittest.TestCase):
 
         self.assertIn("## Desktop-Verknüpfung", report_inhalt)
         self.assertIn("Desktop-Verknüpfung: Erfolgreich erstellt", report_inhalt)
+        self.assertIn("**Einstiegspfad:** CLI", report_inhalt)
 
     def test_mappe_inno_tasks_fuer_desktop_icon(self) -> None:
         optionen = InstallerOptionen(desktop_icon=True)
