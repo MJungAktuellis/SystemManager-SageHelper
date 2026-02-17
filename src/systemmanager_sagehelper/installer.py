@@ -509,6 +509,83 @@ def richte_tool_dateien_und_launcher_ein(repo_root: Path) -> str:
     return "Launcher-Dateien wurden unter scripts/ eingerichtet."
 
 
+def _escape_powershell_literal(text: str) -> str:
+    """Escaped einen String für die sichere Verwendung in PowerShell-Literalen."""
+    return text.replace("'", "''")
+
+
+def erstelle_windows_desktop_verknuepfung(
+    *,
+    ziel_pfad: Path,
+    verknuepfungs_name: str = "SystemManager-SageHelper",
+    arbeitsverzeichnis: Path | None = None,
+) -> Path:
+    """Erstellt eine Desktop-Verknüpfung unter Windows via PowerShell/COM.
+
+    Der Pfad wird nach ``%PUBLIC%\\Desktop`` geschrieben, damit die Verknüpfung
+    für alle Benutzer verfügbar ist. Fehler werden als ``InstallationsFehler``
+    propagiert, damit der Wizard eine präzise Rückmeldung geben kann.
+    """
+    logger = logging.getLogger(__name__)
+    if not ist_windows_system():
+        raise InstallationsFehler("Desktop-Verknüpfungen werden nur unter Windows unterstützt.")
+
+    if not ziel_pfad.exists():
+        raise InstallationsFehler(f"Shortcut-Ziel existiert nicht: {ziel_pfad}")
+
+    desktop_dir = Path(os.environ.get("PUBLIC", r"C:\\Users\\Public")) / "Desktop"
+    desktop_dir.mkdir(parents=True, exist_ok=True)
+    shortcut_pfad = desktop_dir / f"{verknuepfungs_name}.lnk"
+    ziel_str = _escape_powershell_literal(str(ziel_pfad))
+    shortcut_str = _escape_powershell_literal(str(shortcut_pfad))
+    workdir = arbeitsverzeichnis or ziel_pfad.parent
+    workdir_str = _escape_powershell_literal(str(workdir))
+
+    # COM über WScript.Shell ist auf allen unterstützten Windows-Versionen stabil verfügbar.
+    ps_script = (
+        "$ws = New-Object -ComObject WScript.Shell;"
+        f"$shortcut = $ws.CreateShortcut('{shortcut_str}');"
+        f"$shortcut.TargetPath = '{ziel_str}';"
+        f"$shortcut.WorkingDirectory = '{workdir_str}';"
+        "$shortcut.Save();"
+    )
+
+    try:
+        subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                ps_script,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        stderr = ""
+        if isinstance(exc, subprocess.CalledProcessError):
+            stderr = (exc.stderr or exc.stdout or "").strip()
+        logger.exception("Desktop-Verknüpfung konnte nicht erstellt werden.")
+        details = f" Details: {stderr}" if stderr else ""
+        raise InstallationsFehler(f"Desktop-Verknüpfung konnte nicht erstellt werden.{details}") from exc
+
+    logger.info("Desktop-Verknüpfung erstellt: %s", shortcut_pfad)
+    return shortcut_pfad
+
+
+def erstelle_desktop_verknuepfung_fuer_python_installation(repo_root: Path) -> Path:
+    """Erstellt eine Verknüpfung für den direkten Python-Installationspfad."""
+    launcher = repo_root / "scripts" / "start_systemmanager.bat"
+    return erstelle_windows_desktop_verknuepfung(
+        ziel_pfad=launcher,
+        verknuepfungs_name="SystemManager-SageHelper",
+        arbeitsverzeichnis=repo_root,
+    )
+
+
 def erzeuge_installationsbericht() -> list[WerkzeugStatus]:
     """Erzeugt eine kompakte Statusliste für die geführte Ausgabe."""
     return [
