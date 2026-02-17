@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -62,8 +63,35 @@ _STANDARD_ZUSTAND: dict[str, Any] = {
             "letztes_ergebnis": {},
             "laufhistorie": [],
         },
+        "installer": {
+            "installiert": False,
+            "version": "",
+            "zeitpunkt": "",
+            "bericht_pfad": "",
+        },
     }
 }
+
+
+def erstelle_installer_modulzustand(
+    *,
+    installiert: bool,
+    version: str = "",
+    zeitpunkt: str | None = None,
+    bericht_pfad: str = "",
+) -> dict[str, Any]:
+    """Erzeugt ein konsistentes Persistenzobjekt für den Installer-Status.
+
+    Das Schema ist bewusst klein und stabil, damit Launcher, CLI und GUI denselben
+    Datenvertrag verwenden. `zeitpunkt` wird als ISO-8601-String persistiert,
+    falls kein Wert übergeben wurde.
+    """
+    return {
+        "installiert": bool(installiert),
+        "version": version.strip(),
+        "zeitpunkt": zeitpunkt or datetime.now().isoformat(timespec="seconds"),
+        "bericht_pfad": bericht_pfad.strip(),
+    }
 
 
 class GUIStateStore:
