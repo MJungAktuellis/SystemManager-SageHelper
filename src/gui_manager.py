@@ -13,6 +13,7 @@ from systemmanager_sagehelper.analyzer import DiscoveryKonfiguration, analysiere
 from systemmanager_sagehelper.gui_shell import GuiShell
 from systemmanager_sagehelper.gui_state import GUIStateStore
 from systemmanager_sagehelper.installation_state import pruefe_installationszustand
+from systemmanager_sagehelper.folder_gui import FolderWizardGUI
 from systemmanager_sagehelper.installer_gui import InstallerWizardGUI
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 from systemmanager_sagehelper.models import AnalyseErgebnis
@@ -602,7 +603,18 @@ class SystemManagerGUI:
     def ordner_verwalten(self) -> None:
         if not self._installation_erforderlich_dialog("Ordnerverwaltung"):
             return
-        self._execute_command("Ordnerverwaltung", [sys.executable, "src/folder_manager.py"])
+
+        if not self.shell.bestaetige_aktion(
+            "Ordnerverwaltung bestätigen",
+            "Der grafische Ordner-/Freigabeassistent wird geöffnet.",
+        ):
+            self.shell.setze_status("Ordnerverwaltung abgebrochen")
+            return
+
+        lauf_id = self._starte_neuen_lauf()
+        self.shell.setze_status("Ordner-/Freigabeassistent geöffnet")
+        self.shell.logge_meldung(f"[{lauf_id}] Öffne grafischen Ordner-/Freigabeassistenten")
+        FolderWizardGUI(self.master)
 
     def dokumentation_generieren(self) -> None:
         if not self._installation_erforderlich_dialog("Dokumentation"):
