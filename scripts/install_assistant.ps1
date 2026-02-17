@@ -18,10 +18,10 @@ if (-not (Test-Admin)) {
 }
 
 Write-Host "=== SystemManager-SageHelper: Installations-Launcher ==="
-Write-Host "[INFO] Delegiere an scripts/install.py (zentraler Installationspfad)."
+Write-Host "[INFO] Standardpfad: GUI-Installer (scripts/install_gui.py)."
 
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
-$InstallScript = Join-Path $RepoRoot "scripts\install.py"
+$InstallScript = Join-Path $RepoRoot "scripts\install_gui.py"
 
 # Bevorzugte Interpreter-Reihenfolge für den Start der Python-Kernlogik.
 $PythonCandidates = @(
@@ -42,9 +42,9 @@ foreach ($candidate in $PythonCandidates) {
     if ($candidate.Count -gt 1) {
         $arguments += $candidate[1..($candidate.Count - 1)]
     }
-    $arguments += @($InstallScript, "--non-interactive")
+    $arguments += @($InstallScript)
 
-    Write-Host "[INFO] Starte Installer mit: $($candidate -join ' ') (Non-Interactive)"
+    Write-Host "[INFO] Starte Installer mit: $($candidate -join ' ') (GUI-Standard)"
     & $exe @arguments
     $exitCode = $LASTEXITCODE
     if ($exitCode -eq 0) {
@@ -57,7 +57,7 @@ foreach ($candidate in $PythonCandidates) {
 
 if (-not $launched) {
     Write-Host "[FEHLER] Fehler: Konnte den Python-basierten Installer nicht erfolgreich starten."
-    Write-Host "Hinweis: Bitte prüfen Sie die Python-Installation oder führen Sie scripts/install.py manuell aus."
+    Write-Host "Hinweis: Bitte prüfen Sie die Python-Installation oder führen Sie scripts/install_gui.py bzw. scripts/install.py manuell aus."
     exit 1
 }
 
