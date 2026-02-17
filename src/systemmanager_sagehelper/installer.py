@@ -663,6 +663,7 @@ def schreibe_installationsreport(
     repo_root: Path,
     ergebnisse: list[InstallationsErgebnis],
     auswahl: dict[str, bool],
+    desktop_verknuepfung_status: str | None = None,
 ) -> Path:
     """Schreibt einen konsistenten Installationsbericht im Markdown-Format."""
     report_datei = repo_root / "logs" / "install_report.md"
@@ -688,6 +689,10 @@ def schreibe_installationsreport(
 
     if not ergebnisse:
         zeilen.append("- ⚠️ Es wurde keine Komponente ausgeführt.")
+
+    if desktop_verknuepfung_status:
+        # Eigener Abschnitt für die Verknüpfung, damit Supportfälle schneller eingegrenzt werden können.
+        zeilen.extend(["", "## Desktop-Verknüpfung", "", f"- {desktop_verknuepfung_status}"])
 
     report_datei.write_text("\n".join(zeilen) + "\n", encoding="utf-8")
     logging.getLogger(__name__).info("Installationsreport geschrieben: %s", report_datei)

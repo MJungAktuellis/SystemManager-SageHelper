@@ -29,6 +29,7 @@ from systemmanager_sagehelper.installer import (
     pruefe_und_behebe_voraussetzungen,
     schreibe_installationsreport,
     validiere_auswahl_und_abhaengigkeiten,
+    erstelle_desktop_verknuepfung_fuer_python_installation,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -125,6 +126,20 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Aktiviert alle Standard-Komponenten ohne Eingabeaufforderung.",
     )
+    desktop_icon_group = parser.add_mutually_exclusive_group()
+    desktop_icon_group.add_argument(
+        "--desktop-icon",
+        dest="desktop_icon",
+        action="store_true",
+        default=True,
+        help="Erstellt nach erfolgreicher Installation eine Desktop-Verknüpfung (Standard).",
+    )
+    desktop_icon_group.add_argument(
+        "--no-desktop-icon",
+        dest="desktop_icon",
+        action="store_false",
+        help="Unterdrückt die Erstellung einer Desktop-Verknüpfung nach der Installation.",
+    )
     return parser.parse_args(argv)
 
 
@@ -152,7 +167,26 @@ def main() -> None:
         else:
             auswahl = ermittle_interaktive_auswahl(komponenten)
         ergebnisse = fuehre_installationsplan_aus(komponenten, auswahl)
-        report_datei = schreibe_installationsreport(REPO_ROOT, ergebnisse, auswahl)
+
+        desktop_verknuepfung_status = "Desktop-Verknüpfung: Deaktiviert"
+        desktop_verknuepfung_pfad: Path | None = None
+        if cli_args.desktop_icon:
+            try:
+                desktop_verknuepfung_pfad = erstelle_desktop_verknuepfung_fuer_python_installation(REPO_ROOT)
+                desktop_verknuepfung_status = f"Desktop-Verknüpfung: Erfolgreich erstellt ({desktop_verknuepfung_pfad})"
+                LOGGER.info("Desktop-Verknüpfung erfolgreich erstellt: %s", desktop_verknuepfung_pfad)
+            except InstallationsFehler as exc:
+                desktop_verknuepfung_status = f"Desktop-Verknüpfung: Fehler ({exc})"
+                LOGGER.warning("Desktop-Verknüpfung konnte nicht erstellt werden: %s", exc)
+        else:
+            LOGGER.info("Desktop-Verknüpfung wurde per CLI-Option deaktiviert.")
+
+        report_datei = schreibe_installationsreport(
+            REPO_ROOT,
+            ergebnisse,
+            auswahl,
+            desktop_verknuepfung_status=desktop_verknuepfung_status,
+        )
         marker_datei = schreibe_installations_marker(repo_root=REPO_ROOT)
 
         # Persistiert den Installer-Status zusätzlich im GUI-State, damit Launcher
@@ -181,6 +215,13 @@ def main() -> None:
     _safe_print(f"[INFO] Logdatei: {log_datei}")
     _safe_print(f"[INFO] Installationsreport: {report_datei}")
     _safe_print(f"[INFO] Installationsmarker: {marker_datei}")
+    if cli_args.desktop_icon:
+        if desktop_verknuepfung_pfad:
+            _safe_print(f"[INFO] Desktop-Verknüpfung: {desktop_verknuepfung_pfad}")
+        else:
+            _safe_print("[WARN] Desktop-Verknüpfung konnte nicht erstellt werden. Details siehe Installationsreport.")
+    else:
+        _safe_print("[INFO] Desktop-Verknüpfung wurde deaktiviert.")
     _safe_print("Startbeispiel:")
     _safe_print("  python -m systemmanager_sagehelper scan --server localhost --rollen APP --out report.md")
 

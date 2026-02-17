@@ -112,8 +112,9 @@ Wenn du das Tool **einfach nur installieren und benutzen** willst, gehe genau so
 2. `Install-SystemManager-SageHelper.cmd` per Doppelklick ausführen.
 3. Standardpfad: Der Launcher startet den GUI-Installer (`scripts/install_gui.py`).
 4. Falls der GUI-Start fehlschlägt (z. B. fehlendes Tkinter), erfolgt automatisch ein klar geloggter Fallback auf den CLI-Installer im Non-Interactive-Modus.
-5. Der Launcher öffnet bei Doppelklick automatisch ein persistentes CMD-Fenster, damit Meldungen nicht sofort verschwinden.
-6. Bei Fehlern bitte die Logdateien unter `logs/install_launcher.log`, `logs/install_assistant_ps.log` und `logs/install_assistant.log` teilen.
+5. Im One-Click-/GUI-Flow ist die Option **Desktop-Verknüpfung** standardmäßig aktiviert und wird im Abschluss inkl. Status ausgewiesen.
+6. Der Launcher öffnet bei Doppelklick automatisch ein persistentes CMD-Fenster, damit Meldungen nicht sofort verschwinden.
+7. Bei Fehlern bitte die Logdateien unter `logs/install_launcher.log`, `logs/install_assistant_ps.log` und `logs/install_assistant.log` teilen.
 
 ### Option B: CLI-Installation (optional, plattformübergreifend)
 
@@ -127,6 +128,19 @@ Non-Interactive CLI-Modus (z. B. für Automatisierung):
 
 ```bash
 python scripts/install.py --non-interactive
+```
+
+Desktop-Verknüpfung im CLI-Installer:
+
+- Standardmäßig **aktiv** (entspricht One-Click-Verhalten).
+- Explizit aktivieren: `--desktop-icon`
+- Explizit deaktivieren: `--no-desktop-icon`
+
+Beispiele:
+
+```bash
+python scripts/install.py --non-interactive --desktop-icon
+python scripts/install.py --non-interactive --no-desktop-icon
 ```
 
 ## Windows-Build & distributierbares Installer-Paket
