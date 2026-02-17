@@ -7,6 +7,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from systemmanager_sagehelper import installer
+from systemmanager_sagehelper.installer_options import (
+    InstallerOptionen,
+    baue_inno_setup_parameter,
+    mappe_inno_tasks,
+)
 
 
 class TestInstaller(unittest.TestCase):
@@ -137,7 +142,7 @@ class TestInstaller(unittest.TestCase):
             patch("systemmanager_sagehelper.installer.hat_adminrechte", return_value=True),
             patch(
                 "systemmanager_sagehelper.installer.finde_kompatiblen_python_interpreter",
-                return_value=installer.sys.executable,
+                return_value=[installer.sys.executable],
             ),
             patch("systemmanager_sagehelper.installer._pip_verfuegbar_fuer_interpreter", return_value=True),
         ):
@@ -149,6 +154,30 @@ class TestInstaller(unittest.TestCase):
                 for eintrag in statusliste
             )
         )
+
+    def test_mappe_inno_tasks_fuer_desktop_icon(self) -> None:
+        optionen = InstallerOptionen(desktop_icon=True)
+        self.assertEqual(["desktopicon"], mappe_inno_tasks(optionen))
+
+    def test_baue_inno_setup_parameter_ohne_desktop_icon(self) -> None:
+        optionen = InstallerOptionen(desktop_icon=False)
+        self.assertEqual(["/MERGETASKS=!desktopicon"], baue_inno_setup_parameter(optionen))
+
+    def test_erstelle_desktop_verknuepfung_fuer_python_installation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_root = Path(tmp_dir)
+            scripts_dir = repo_root / "scripts"
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+            (scripts_dir / "start_systemmanager.bat").write_text("@echo off\n", encoding="utf-8")
+
+            with patch(
+                "systemmanager_sagehelper.installer.erstelle_windows_desktop_verknuepfung",
+                return_value=Path("C:/Users/Public/Desktop/SystemManager-SageHelper.lnk"),
+            ) as shortcut_mock:
+                shortcut = installer.erstelle_desktop_verknuepfung_fuer_python_installation(repo_root)
+
+        self.assertEqual(Path("C:/Users/Public/Desktop/SystemManager-SageHelper.lnk"), shortcut)
+        shortcut_mock.assert_called_once()
 
 
 if __name__ == "__main__":

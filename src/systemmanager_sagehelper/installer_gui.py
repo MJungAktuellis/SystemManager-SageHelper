@@ -21,10 +21,16 @@ from systemmanager_sagehelper.installer import (
     InstallationsFehler,
     InstallationsKomponente,
     STANDARD_REIHENFOLGE,
+    erstelle_desktop_verknuepfung_fuer_python_installation,
     erstelle_standard_komponenten,
     konfiguriere_logging,
     schreibe_installationsreport,
     validiere_auswahl_und_abhaengigkeiten,
+)
+from systemmanager_sagehelper.installer_options import (
+    InstallerOptionen,
+    baue_inno_setup_parameter,
+    mappe_inno_tasks,
 )
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id
 
@@ -86,12 +92,15 @@ class InstallerWizardGUI:
         self.installationspfad_var = tk.StringVar(value=str(self.repo_root))
         self.option_marker_var = tk.BooleanVar(value=True)
         self.option_report_var = tk.BooleanVar(value=True)
+        self.option_desktop_icon_var = tk.BooleanVar(value=False)
         self.statustext_var = tk.StringVar(value="Noch keine Installation gestartet.")
 
         self.log_datei: Path | None = None
         self.report_datei: Path | None = None
         self.marker_datei: Path | None = None
         self.installationsfehler: str | None = None
+        self.desktop_icon_fehler: str | None = None
+        self.desktop_icon_pfad: Path | None = None
         self.installation_laueft = False
 
         self.komponenten = erstelle_standard_komponenten(self.repo_root)
@@ -131,7 +140,8 @@ class InstallerWizardGUI:
         self.shell.setze_status("Wizard-Optionen übernommen")
         self.shell.logge_meldung(
             f"Optionen übernommen: Pfad={self.installationspfad_var.get()} | "
-            f"Marker={self.option_marker_var.get()} | Report={self.option_report_var.get()}"
+            f"Marker={self.option_marker_var.get()} | Report={self.option_report_var.get()} | "
+            f"DesktopIcon={self.option_desktop_icon_var.get()}"
         )
 
     def _render_schritt(self) -> None:
@@ -210,6 +220,11 @@ class InstallerWizardGUI:
         optionen.pack(fill="x", padx=10, pady=8)
         ttk.Checkbutton(optionen, text="Installationsreport schreiben", variable=self.option_report_var).pack(anchor="w")
         ttk.Checkbutton(optionen, text="Installationsmarker aktualisieren", variable=self.option_marker_var).pack(anchor="w")
+        ttk.Checkbutton(
+            optionen,
+            text="Desktop-Verknüpfung erstellen",
+            variable=self.option_desktop_icon_var,
+        ).pack(anchor="w")
 
         info = (
             "Hinweis: Der Pfad muss eine gültige Projektstruktur enthalten, "
@@ -265,6 +280,10 @@ class InstallerWizardGUI:
             details.append(f"Installationsreport: {self.report_datei}")
         if self.marker_datei:
             details.append(f"Installationsmarker: {self.marker_datei}")
+        if self.desktop_icon_pfad:
+            details.append(f"Desktop-Verknüpfung: {self.desktop_icon_pfad}")
+        if self.desktop_icon_fehler:
+            details.append(f"Desktop-Verknüpfung Fehler: {self.desktop_icon_fehler}")
         if self.installationsfehler:
             details.append(f"Fehler: {self.installationsfehler}")
 
@@ -298,6 +317,8 @@ class InstallerWizardGUI:
 
         self.installation_laueft = True
         self.installationsfehler = None
+        self.desktop_icon_fehler = None
+        self.desktop_icon_pfad = None
         self.report_datei = None
         self.marker_datei = None
         self.statustext_var.set("Installation läuft …")
@@ -330,6 +351,28 @@ class InstallerWizardGUI:
                 self.report_datei = schreibe_installationsreport(ziel_root, ergebnisse, auswahl)
             if self.option_marker_var.get():
                 self.marker_datei = schreibe_installations_marker(repo_root=ziel_root)
+
+            installer_optionen = InstallerOptionen(desktop_icon=self.option_desktop_icon_var.get())
+            inno_tasks = mappe_inno_tasks(installer_optionen)
+            inno_parameter = baue_inno_setup_parameter(installer_optionen)
+            self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Inno-Tasks aus Optionen: {inno_tasks or 'keine'}")
+            self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Inno-Parameter: {' '.join(inno_parameter)}")
+
+            if installer_optionen.desktop_icon:
+                try:
+                    self.desktop_icon_pfad = erstelle_desktop_verknuepfung_fuer_python_installation(ziel_root)
+                    self.window.after(
+                        0,
+                        self._fuege_fortschrittslog_hinzu,
+                        f"Desktop-Verknüpfung erstellt: {self.desktop_icon_pfad}",
+                    )
+                except InstallationsFehler as exc:
+                    self.desktop_icon_fehler = str(exc)
+                    self.window.after(
+                        0,
+                        self._fuege_fortschrittslog_hinzu,
+                        f"[WARN] Desktop-Verknüpfung nicht erstellt: {self.desktop_icon_fehler}",
+                    )
 
             self.window.after(0, self._installation_erfolgreich_abschliessen)
         except InstallationsFehler as exc:
