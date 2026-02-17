@@ -183,7 +183,7 @@ class TestInstaller(unittest.TestCase):
             repo_root = Path(tmp_dir)
             scripts_dir = repo_root / "scripts"
             scripts_dir.mkdir(parents=True, exist_ok=True)
-            (scripts_dir / "start_systemmanager.bat").write_text("@echo off\n", encoding="utf-8")
+            (scripts_dir / "start_systemmanager_gui.bat").write_text("@echo off\n", encoding="utf-8")
 
             with patch(
                 "systemmanager_sagehelper.installer.erstelle_windows_desktop_verknuepfung",
@@ -193,6 +193,23 @@ class TestInstaller(unittest.TestCase):
 
         self.assertEqual(Path("C:/Users/Public/Desktop/SystemManager-SageHelper.lnk"), shortcut)
         shortcut_mock.assert_called_once()
+
+    def test_richte_tool_dateien_und_launcher_ein_erstellt_gui_und_cli_launcher(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_root = Path(tmp_dir)
+            installer.richte_tool_dateien_und_launcher_ein(repo_root)
+
+            gui_launcher = repo_root / "scripts" / "start_systemmanager_gui.bat"
+            cli_launcher = repo_root / "scripts" / "start_systemmanager_cli.bat"
+            kompat_launcher = repo_root / "scripts" / "start_systemmanager.bat"
+
+            self.assertTrue(gui_launcher.exists())
+            self.assertTrue(cli_launcher.exists())
+            self.assertTrue(kompat_launcher.exists())
+
+            self.assertIn("python src\\gui_manager.py", gui_launcher.read_text(encoding="utf-8"))
+            self.assertIn("python -m systemmanager_sagehelper %*", cli_launcher.read_text(encoding="utf-8"))
+            self.assertIn("start_systemmanager.bat gui", kompat_launcher.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

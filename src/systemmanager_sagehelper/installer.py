@@ -487,14 +487,45 @@ def installiere_python_pakete(repo_root: Path, python_executable: str | None = N
 
 
 def richte_tool_dateien_und_launcher_ein(repo_root: Path) -> str:
-    """Erstellt einfache Starter-Dateien für Windows und Shell-Umgebungen."""
+    """Erstellt separate Starter für GUI und CLI inkl. Kompatibilitäts-Wrapper."""
     script_ordner = repo_root / "scripts"
     script_ordner.mkdir(parents=True, exist_ok=True)
 
+    gui_launcher = script_ordner / "start_systemmanager_gui.bat"
+    gui_launcher.write_text(
+        "@echo off\r\n"
+        "python src\\gui_manager.py\r\n",
+        encoding="utf-8",
+    )
+
+    cli_launcher = script_ordner / "start_systemmanager_cli.bat"
+    cli_launcher.write_text(
+        "@echo off\r\n"
+        "python -m systemmanager_sagehelper %*\r\n",
+        encoding="utf-8",
+    )
+
+    # Kompatibilitäts-Launcher: bietet klare Auswahl und delegiert robust.
     windows_launcher = script_ordner / "start_systemmanager.bat"
     windows_launcher.write_text(
         "@echo off\r\n"
-        "python -m systemmanager_sagehelper %*\r\n",
+        "setlocal\r\n"
+        "if /I \"%~1\"==\"gui\" goto start_gui\r\n"
+        "if /I \"%~1\"==\"cli\" goto start_cli\r\n"
+        "echo Bitte Startmodus waehlen:\r\n"
+        "echo   - GUI: start_systemmanager.bat gui\r\n"
+        "echo   - CLI: start_systemmanager.bat cli [Argumente]\r\n"
+        "echo\r\n"
+        "echo Starte standardmaessig die GUI ...\r\n"
+        "goto start_gui\r\n"
+        ":start_gui\r\n"
+        "call \"%~dp0start_systemmanager_gui.bat\"\r\n"
+        "goto ende\r\n"
+        ":start_cli\r\n"
+        "shift\r\n"
+        "call \"%~dp0start_systemmanager_cli.bat\" %*\r\n"
+        ":ende\r\n"
+        "endlocal\r\n",
         encoding="utf-8",
     )
 
@@ -506,7 +537,7 @@ def richte_tool_dateien_und_launcher_ein(repo_root: Path) -> str:
     )
     shell_launcher.chmod(0o755)
 
-    return "Launcher-Dateien wurden unter scripts/ eingerichtet."
+    return "Launcher-Dateien (GUI/CLI + Kompatibilität) wurden unter scripts/ eingerichtet."
 
 
 def _escape_powershell_literal(text: str) -> str:
@@ -578,7 +609,7 @@ def erstelle_windows_desktop_verknuepfung(
 
 def erstelle_desktop_verknuepfung_fuer_python_installation(repo_root: Path) -> Path:
     """Erstellt eine Verknüpfung für den direkten Python-Installationspfad."""
-    launcher = repo_root / "scripts" / "start_systemmanager.bat"
+    launcher = repo_root / "scripts" / "start_systemmanager_gui.bat"
     return erstelle_windows_desktop_verknuepfung(
         ziel_pfad=launcher,
         verknuepfungs_name="SystemManager-SageHelper",
@@ -775,7 +806,9 @@ def erstelle_standard_komponenten(repo_root: Path) -> dict[str, InstallationsKom
             abhaengigkeiten=("abhaengigkeiten",),
             install_fn=lambda: richte_tool_dateien_und_launcher_ein(repo_root),
             verify_fn=lambda: (
-                (repo_root / "scripts" / "start_systemmanager.bat").exists()
+                (repo_root / "scripts" / "start_systemmanager_gui.bat").exists()
+                and (repo_root / "scripts" / "start_systemmanager_cli.bat").exists()
+                and (repo_root / "scripts" / "start_systemmanager.bat").exists()
                 and (repo_root / "scripts" / "start_systemmanager.sh").exists(),
                 "Launcher-Dateien vorhanden.",
             ),
