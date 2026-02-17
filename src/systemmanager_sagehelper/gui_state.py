@@ -17,6 +17,12 @@ logger = konfiguriere_logger(__name__, dateiname="gui_state.log")
 
 
 _STANDARD_ZUSTAND: dict[str, Any] = {
+    "onboarding": {
+        "onboarding_abgeschlossen": False,
+        "onboarding_version": "1.0.0",
+        "erststart_zeitpunkt": "",
+        "letzter_abschluss_zeitpunkt": "",
+    },
     "modules": {
         "gui_manager": {
             "serverlisten": [],
@@ -71,6 +77,10 @@ class GUIStateStore:
         # Defensiv zusammenführen, damit neue Felder bei Altdateien ergänzt werden.
         zustand = deepcopy(_STANDARD_ZUSTAND)
         if isinstance(inhalt, dict):
+            onboarding = inhalt.get("onboarding")
+            if isinstance(onboarding, dict):
+                zustand["onboarding"].update(onboarding)
+
             module = inhalt.get("modules")
             if isinstance(module, dict):
                 for modulname, modulwerte in module.items():
@@ -97,4 +107,21 @@ class GUIStateStore:
         """Speichert den Zustand eines Moduls zurück in die JSON-Datei."""
         gesamtzustand = self.lade_gesamtzustand()
         gesamtzustand.setdefault("modules", {})[modulname] = modulzustand
+        self.speichere_gesamtzustand(gesamtzustand)
+
+    def lade_onboarding_status(self) -> dict[str, Any]:
+        """Lädt den Onboarding-Zustand mit vollständigem Fallback auf Standardwerte."""
+        gesamtzustand = self.lade_gesamtzustand()
+        onboarding_standard = deepcopy(_STANDARD_ZUSTAND["onboarding"])
+        onboarding_datei = gesamtzustand.get("onboarding")
+        if isinstance(onboarding_datei, dict):
+            onboarding_standard.update(onboarding_datei)
+        return onboarding_standard
+
+    def speichere_onboarding_status(self, onboarding_status: dict[str, Any]) -> None:
+        """Persistiert den Onboarding-Status im Gesamtzustand."""
+        gesamtzustand = self.lade_gesamtzustand()
+        combined_status = self.lade_onboarding_status()
+        combined_status.update(onboarding_status)
+        gesamtzustand["onboarding"] = combined_status
         self.speichere_gesamtzustand(gesamtzustand)

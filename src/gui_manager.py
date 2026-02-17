@@ -1,20 +1,307 @@
-"""Tkinter-basierte Startoberfläche mit Dashboard und Karten-Navigation."""
+"""Tkinter-basierte Startoberfläche mit Dashboard und geführtem Onboarding."""
 
 from __future__ import annotations
 
+from datetime import datetime
 import subprocess
 import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
+from typing import Callable
 
+from systemmanager_sagehelper.analyzer import DiscoveryKonfiguration, analysiere_mehrere_server, entdecke_server_ergebnisse
 from systemmanager_sagehelper.gui_shell import GuiShell
 from systemmanager_sagehelper.gui_state import GUIStateStore
 from systemmanager_sagehelper.installation_state import pruefe_installationszustand
 from systemmanager_sagehelper.installer_gui import InstallerWizardGUI
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
+from systemmanager_sagehelper.models import AnalyseErgebnis
+from systemmanager_sagehelper.targeting import normalisiere_servernamen
 from systemmanager_sagehelper.ui_theme import LAYOUT
+from server_analysis_gui import MehrserverAnalyseGUI, ServerTabellenZeile, _baue_serverziele
 
 logger = konfiguriere_logger(__name__, dateiname="gui_manager.log")
+
+_ONBOARDING_VERSION = "1.0.0"
+
+
+class OnboardingController:
+    """Kapselt den Erststart-Workflow strikt getrennt vom regulären Dashboard-Betrieb.
+
+    Die Klasse orchestriert bewusst nur den Onboarding-Pfad und nutzt dafür
+    etablierte Bausteine aus der Serveranalyse-GUI (Tabellenmodell + Persistenz),
+    damit keine Logik doppelt implementiert werden muss.
+    """
+
+    def __init__(self, gui: "SystemManagerGUI") -> None:
+        self.gui = gui
+        self.state_store = gui.state_store
+        self.server_zeilen: list[ServerTabellenZeile] = []
+        self.analyse_ergebnisse: list[AnalyseErgebnis] = []
+
+        # Interner UI-Status für den Wizard.
+        self._window: tk.Toplevel | None = None
+        self._status_var: tk.StringVar | None = None
+        self._analyse_pfad_var: tk.StringVar | None = None
+
+    def starte_wizard(self) -> None:
+        """Öffnet den geführten Onboarding-Wizard als modalen Dialog."""
+        if self._window and self._window.winfo_exists():
+            self._window.lift()
+            return
+
+        self._window = tk.Toplevel(self.gui.master)
+        self._window.title("Erststart-Wizard")
+        self._window.geometry("760x460")
+        self._window.transient(self.gui.master)
+        self._window.grab_set()
+        self._window.protocol("WM_DELETE_WINDOW", self._abbrechen)
+
+        self._status_var = tk.StringVar(value="Bereit: Schritt 1 starten (Netzwerk-Discovery).")
+        self._analyse_pfad_var = tk.StringVar(value="docs/serverbericht.md")
+
+        rahmen = ttk.Frame(self._window, padding=16)
+        rahmen.pack(fill="both", expand=True)
+
+        ttk.Label(
+            rahmen,
+            text="Geführtes Onboarding",
+            style="Headline.TLabel",
+        ).pack(anchor="w")
+        ttk.Label(
+            rahmen,
+            text=(
+                "Folgen Sie den 4 Schritten: Discovery → Rollen prüfen → Analyse → Daten speichern.\n"
+                "Der Wizard bleibt getrennt vom normalen Dashboard-Betrieb."
+            ),
+            justify="left",
+        ).pack(anchor="w", pady=(4, 14))
+
+        ttk.Label(rahmen, text="Discovery-Range (CIDR oder Basis wie 192.168.178):").pack(anchor="w")
+        self._discovery_entry = ttk.Entry(rahmen, width=40)
+        self._discovery_entry.insert(0, "192.168.178")
+        self._discovery_entry.pack(anchor="w", pady=(2, 10))
+
+        ttk.Label(rahmen, text="Analyse-Reportpfad:").pack(anchor="w")
+        ttk.Entry(rahmen, textvariable=self._analyse_pfad_var, width=55).pack(anchor="w", pady=(2, 10))
+
+        schritte = ttk.Frame(rahmen)
+        schritte.pack(fill="x", pady=(6, 10))
+        schritte.columnconfigure((0, 1), weight=1)
+
+        ttk.Button(schritte, text="1) Discovery ausführen", command=self.schritt_discovery).grid(
+            row=0, column=0, sticky="ew", padx=(0, 6), pady=4
+        )
+        ttk.Button(schritte, text="2) Rollen prüfen/anpassen", command=self.schritt_rollen_pruefen).grid(
+            row=0, column=1, sticky="ew", padx=(6, 0), pady=4
+        )
+        ttk.Button(schritte, text="3) Analyse ausführen", command=self.schritt_analyse).grid(
+            row=1, column=0, sticky="ew", padx=(0, 6), pady=4
+        )
+        ttk.Button(schritte, text="4) Daten speichern & abschließen", command=self.schritt_speichern_und_abschliessen).grid(
+            row=1, column=1, sticky="ew", padx=(6, 0), pady=4
+        )
+
+        ttk.Label(rahmen, textvariable=self._status_var, wraplength=700, justify="left").pack(anchor="w", pady=(8, 0))
+
+    def schritt_discovery(self) -> None:
+        """Schritt 1: Führt die Discovery durch und befüllt das Tabellenmodell."""
+        discovery_basis = self._discovery_entry.get().strip() if self._window else ""
+        if not discovery_basis:
+            self._setze_status("Bitte zuerst eine gültige Discovery-Range eintragen.")
+            return
+
+        self._setze_status("Discovery läuft …")
+        try:
+            ergebnisse = entdecke_server_ergebnisse(discovery_basis, konfiguration=DiscoveryKonfiguration())
+        except Exception as exc:  # noqa: BLE001 - Wizard soll robust weiterlaufen.
+            logger.exception("Discovery im Onboarding fehlgeschlagen")
+            self._setze_status(f"Discovery fehlgeschlagen: {exc}")
+            return
+
+        self.server_zeilen = []
+        for treffer in ergebnisse:
+            rollen = ["APP"]
+            if "1433" in treffer.erkannte_dienste:
+                rollen = ["SQL"]
+            elif "3389" in treffer.erkannte_dienste:
+                rollen = ["CTX"]
+
+            self.server_zeilen.append(
+                ServerTabellenZeile(
+                    servername=treffer.hostname,
+                    sql="SQL" in rollen,
+                    app="APP" in rollen,
+                    ctx="CTX" in rollen,
+                    quelle="discovery",
+                    status="entdeckt",
+                    auto_rolle=rollen[0],
+                )
+            )
+
+        self.gui.modulzustand["letzte_discovery_range"] = discovery_basis
+        self._setze_status(f"Discovery abgeschlossen: {len(self.server_zeilen)} Server übernommen.")
+
+    def schritt_rollen_pruefen(self) -> None:
+        """Schritt 2: Ermöglicht eine einfache Rollenanpassung pro gefundenem Server."""
+        if not self.server_zeilen:
+            self._setze_status("Keine Discovery-Daten vorhanden. Bitte zuerst Schritt 1 ausführen.")
+            return
+
+        dialog = tk.Toplevel(self._window)
+        dialog.title("Rollenprüfung")
+        dialog.geometry("700x420")
+        dialog.transient(self._window)
+        dialog.grab_set()
+
+        tree = ttk.Treeview(dialog, columns=("server", "rolle", "quelle"), show="headings", height=14)
+        tree.pack(fill="both", expand=True, padx=10, pady=(10, 6))
+        tree.heading("server", text="Server")
+        tree.heading("rolle", text="Rolle")
+        tree.heading("quelle", text="Quelle")
+        tree.column("server", width=280)
+        tree.column("rolle", width=120, anchor="center")
+        tree.column("quelle", width=180)
+
+        for index, zeile in enumerate(self.server_zeilen):
+            rolle = "SQL" if zeile.sql else "CTX" if zeile.ctx else "APP"
+            tree.insert("", "end", iid=str(index), values=(zeile.servername, rolle, zeile.quelle))
+
+        def rolle_setzen(rolle: str) -> None:
+            for item_id in tree.selection():
+                zeile = self.server_zeilen[int(item_id)]
+                vorher = "SQL" if zeile.sql else "CTX" if zeile.ctx else "APP"
+                zeile.sql = rolle == "SQL"
+                zeile.app = rolle == "APP"
+                zeile.ctx = rolle == "CTX"
+                zeile.manuell_ueberschrieben = vorher != rolle
+                zeile.status = "rolle geprüft"
+                tree.set(item_id, "rolle", rolle)
+                if zeile.manuell_ueberschrieben:
+                    tree.set(item_id, "quelle", "onboarding-manuell")
+
+        button_rahmen = ttk.Frame(dialog)
+        button_rahmen.pack(fill="x", padx=10, pady=(0, 10))
+        for rolle in ("SQL", "APP", "CTX"):
+            ttk.Button(button_rahmen, text=f"Als {rolle} markieren", command=lambda r=rolle: rolle_setzen(r)).pack(
+                side="left", padx=4
+            )
+        ttk.Button(button_rahmen, text="Fertig", command=dialog.destroy).pack(side="right", padx=4)
+
+        self._setze_status("Rollenprüfung geöffnet: Auswahl prüfen und ggf. anpassen.")
+
+    def schritt_analyse(self) -> None:
+        """Schritt 3: Startet die Analyse auf Basis der bestätigten Rollen."""
+        if not self.server_zeilen:
+            self._setze_status("Keine Server vorhanden. Discovery und Rollenprüfung zuerst ausführen.")
+            return
+
+        ziele = _baue_serverziele(self.server_zeilen)
+        if not ziele:
+            self._setze_status("Es konnten keine gültigen Analyseziele aus dem Tabellenmodell erzeugt werden.")
+            return
+
+        self._setze_status("Analyse läuft …")
+        try:
+            self.analyse_ergebnisse = analysiere_mehrere_server(ziele)
+        except Exception as exc:  # noqa: BLE001 - Wizard zeigt Fehler im UI an.
+            logger.exception("Analyse im Onboarding fehlgeschlagen")
+            self._setze_status(f"Analyse fehlgeschlagen: {exc}")
+            return
+
+        status_index = {normalisiere_servernamen(e.server): "analysiert" for e in self.analyse_ergebnisse}
+        for zeile in self.server_zeilen:
+            zeile.status = status_index.get(normalisiere_servernamen(zeile.servername), "nicht analysiert")
+
+        self._setze_status(f"Analyse abgeschlossen: {len(self.analyse_ergebnisse)} Server analysiert.")
+
+    def schritt_speichern_und_abschliessen(self) -> None:
+        """Schritt 4: Persistiert Moduldaten + Onboarding-Status atomar im Gesamtzustand."""
+        if not self.server_zeilen:
+            self._setze_status("Es gibt keine Daten zum Speichern. Bitte vorher Schritt 1 ausführen.")
+            return
+
+        # Persistenzlogik der Serveranalyse-GUI wiederverwenden, um Datenmodell konsistent zu halten.
+        self._speichere_serveranalyse_zustand_ueber_gui_methode()
+
+        onboarding_status = self.state_store.lade_onboarding_status()
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        onboarding_status.update(
+            {
+                "onboarding_abgeschlossen": True,
+                "onboarding_version": _ONBOARDING_VERSION,
+                "erststart_zeitpunkt": onboarding_status.get("erststart_zeitpunkt") or now_iso,
+                "letzter_abschluss_zeitpunkt": now_iso,
+            }
+        )
+
+        gesamtzustand = self.state_store.lade_gesamtzustand()
+        gesamtzustand["onboarding"] = onboarding_status
+        self.state_store.speichere_gesamtzustand(gesamtzustand)
+
+        self.gui.modulzustand = self.state_store.lade_modulzustand("gui_manager")
+        self.gui._lade_uebersichtszeilen()
+        self.gui._aktualisiere_dashboard_status()
+
+        self._setze_status("Onboarding abgeschlossen und vollständig gespeichert.")
+        messagebox.showinfo(
+            "Onboarding abgeschlossen",
+            "Der Erststart wurde erfolgreich abgeschlossen. Das Dashboard kann jetzt regulär genutzt werden.",
+            parent=self._window,
+        )
+        if self._window:
+            self._window.destroy()
+
+    def _speichere_serveranalyse_zustand_ueber_gui_methode(self) -> None:
+        """Nutzt `MehrserverAnalyseGUI.speichern()`, ohne die gesamte GUI zu öffnen.
+
+        Damit bleibt die bestehende Persistenzstruktur zentral an einer Stelle,
+        und der Onboarding-Controller muss diese Logik nicht duplizieren.
+        """
+
+        adapter = object.__new__(MehrserverAnalyseGUI)
+        adapter.state_store = self.state_store
+        adapter.modulzustand = self.state_store.lade_modulzustand("server_analysis")
+        adapter._zeilen_nach_id = {f"row-{index}": zeile for index, zeile in enumerate(self.server_zeilen, start=1)}
+        adapter._letzte_ergebnisse = self.analyse_ergebnisse
+        adapter._letzte_discovery_range = tk.StringVar(value=self.gui.modulzustand.get("letzte_discovery_range", ""))
+        adapter._ausgabe_pfad = tk.StringVar(value=(self._analyse_pfad_var.get().strip() if self._analyse_pfad_var else "docs/serverbericht.md"))
+        adapter._letzter_export_pfad = adapter.modulzustand.get("letzter_exportpfad", "")
+        adapter._letzter_exportzeitpunkt = adapter.modulzustand.get("letzter_exportzeitpunkt", "")
+        adapter._letzte_export_lauf_id = adapter.modulzustand.get("letzte_export_lauf_id", "")
+        adapter.shell = type(
+            "OnboardingShell",
+            (),
+            {
+                "setze_status": lambda _self, _status: None,
+                "logge_meldung": lambda _self, _meldung: None,
+            },
+        )()
+
+        MehrserverAnalyseGUI.speichern(adapter)
+
+        # Synchronisiere die wichtigsten Übersichtsdaten zusätzlich mit dem Launcher-Modul.
+        self.gui.modulzustand.setdefault("letzte_kerninfos", [])
+        self.gui.modulzustand["letzte_kerninfos"] = [
+            f"Onboarding abgeschlossen: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            f"Server in Ersterfassung: {len(self.server_zeilen)}",
+        ]
+        self.gui.modulzustand.setdefault("bericht_verweise", [])
+        analyse_report = adapter._ausgabe_pfad.get().strip() or "docs/serverbericht.md"
+        self.gui.modulzustand["bericht_verweise"] = [analyse_report]
+        self.state_store.speichere_modulzustand("gui_manager", self.gui.modulzustand)
+
+    def _abbrechen(self) -> None:
+        """Schließt den Wizard ohne Abschlussflag und markiert den Zustand klar."""
+        self._setze_status("Onboarding abgebrochen: Dashboard bleibt im eingeschränkten Erststartmodus.")
+        if self._window:
+            self._window.destroy()
+
+    def _setze_status(self, text: str) -> None:
+        """Aktualisiert die Wizard-Statuszeile zentral und robust."""
+        if self._status_var is not None:
+            self._status_var.set(text)
+        logger.info("[Onboarding] %s", text)
 
 
 class SystemManagerGUI:
@@ -38,6 +325,20 @@ class SystemManagerGUI:
 
         self._karten_status: dict[str, tk.StringVar] = {}
         self._baue_dashboard()
+        self._onboarding_controller = OnboardingController(self)
+        self._pruefe_onboarding_guard()
+
+    def _pruefe_onboarding_guard(self) -> None:
+        """Startet beim Erststart automatisch den geführten Wizard."""
+        onboarding_status = self.state_store.lade_onboarding_status()
+        if not onboarding_status.get("erststart_zeitpunkt"):
+            onboarding_status["erststart_zeitpunkt"] = datetime.now().isoformat(timespec="seconds")
+            onboarding_status["onboarding_version"] = onboarding_status.get("onboarding_version") or _ONBOARDING_VERSION
+            self.state_store.speichere_onboarding_status(onboarding_status)
+
+        if not onboarding_status.get("onboarding_abgeschlossen", False):
+            self.shell.setze_status("Erststart erkannt: Onboarding-Wizard wird geöffnet")
+            self.master.after(150, self._onboarding_controller.starte_wizard)
 
     def _baue_dashboard(self) -> None:
         """Erzeugt die Startseite mit klaren Modul-Cards inklusive Statusanzeige."""
@@ -111,7 +412,7 @@ class SystemManagerGUI:
         spalte: int,
         titel: str,
         beschreibung: str,
-        command,
+        command: Callable[[], None],
         status_key: str,
         button_text: str,
     ) -> None:

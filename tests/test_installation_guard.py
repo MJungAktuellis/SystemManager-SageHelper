@@ -124,3 +124,61 @@ def test_folder_und_doku_main_respektieren_guard(monkeypatch) -> None:
 
     ordner_start.assert_called_once()
     doku_start.assert_called_once()
+
+
+def test_onboarding_guard_startet_wizard_bei_offenem_status(monkeypatch) -> None:
+    """Beim Erststart soll der Launcher den Onboarding-Wizard automatisch planen."""
+
+    class _Store:
+        def __init__(self) -> None:
+            self.gespeichert = None
+
+        def lade_onboarding_status(self):
+            return {
+                "onboarding_abgeschlossen": False,
+                "onboarding_version": "1.0.0",
+                "erststart_zeitpunkt": "",
+            }
+
+        def speichere_onboarding_status(self, status):
+            self.gespeichert = status
+
+    aufrufe: list[tuple[int, object]] = []
+
+    gui = object.__new__(gui_manager.SystemManagerGUI)
+    gui.state_store = _Store()
+    gui.shell = SimpleNamespace(setze_status=Mock())
+    gui._onboarding_controller = SimpleNamespace(starte_wizard=Mock())
+    gui.master = SimpleNamespace(after=lambda delay, callback: aufrufe.append((delay, callback)))
+
+    gui._pruefe_onboarding_guard()
+
+    assert gui.state_store.gespeichert is not None
+    assert gui.state_store.gespeichert["erststart_zeitpunkt"]
+    assert len(aufrufe) == 1
+
+
+def test_onboarding_guard_ignoriert_abgeschlossenen_status() -> None:
+    """Ist das Onboarding abgeschlossen, darf kein Wizard geplant werden."""
+
+    class _Store:
+        def lade_onboarding_status(self):
+            return {
+                "onboarding_abgeschlossen": True,
+                "onboarding_version": "1.0.0",
+                "erststart_zeitpunkt": "2026-01-01T00:00:00",
+            }
+
+        def speichere_onboarding_status(self, status):
+            raise AssertionError("Speichern darf hier nicht ausgelöst werden")
+
+    gui = object.__new__(gui_manager.SystemManagerGUI)
+    gui.state_store = _Store()
+    gui.shell = SimpleNamespace(setze_status=Mock())
+    gui._onboarding_controller = SimpleNamespace(starte_wizard=Mock())
+    gui.master = SimpleNamespace(after=Mock())
+
+    gui._pruefe_onboarding_guard()
+
+    gui.master.after.assert_not_called()
+    gui.shell.setze_status.assert_not_called()
