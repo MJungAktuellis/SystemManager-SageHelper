@@ -5,8 +5,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+import re
 import tkinter as tk
-from tkinter import simpledialog, ttk
+from tkinter import ttk
 
 from systemmanager_sagehelper.analyzer import (
     analysiere_mehrere_server,
@@ -55,6 +56,8 @@ _KRITISCHE_PORTS = {port.port for port in STANDARD_PORTS}
 
 
 logger = konfiguriere_logger(__name__, dateiname="server_analysis_gui.log")
+
+_IPV4_BASIS_REGEX = re.compile(r"^(?:25[0-5]|2[0-4]\d|1?\d?\d)\.(?:25[0-5]|2[0-4]\d|1?\d?\d)\.(?:25[0-5]|2[0-4]\d|1?\d?\d)$")
 
 
 def _checkbox_wert(aktiv: bool) -> str:
@@ -364,6 +367,11 @@ class MehrserverAnalyseGUI:
         self._zeilen_nach_id: dict[str, ServerTabellenZeile] = {}
         self._letzte_ergebnisse: list[AnalyseErgebnis] = []
         self._letzte_discovery_range = tk.StringVar(value=self.modulzustand.get("letzte_discovery_range", ""))
+        letzte_discovery_eingabe = self.modulzustand.get("letzte_discovery_eingabe", {})
+        self._discovery_basis_var = tk.StringVar(value=str(letzte_discovery_eingabe.get("basis", "")))
+        self._discovery_start_var = tk.StringVar(value=str(letzte_discovery_eingabe.get("start", "")))
+        self._discovery_ende_var = tk.StringVar(value=str(letzte_discovery_eingabe.get("ende", "")))
+        self._discovery_validierung_hinweis_var = tk.StringVar(value="")
         self._ausgabe_pfad = tk.StringVar(
             value=self.modulzustand.get("ausgabepfade", {}).get("analyse_report", "docs/serverbericht.md")
         )
@@ -411,11 +419,40 @@ class MehrserverAnalyseGUI:
         )
         self.btn_hinzufuegen.grid(row=0, column=5, padx=8)
 
-        ttk.Label(form_frame, text="Letzte Discovery-Range:").grid(row=1, column=0, sticky="w", padx=8, pady=(2, 8))
-        ttk.Entry(form_frame, textvariable=self._letzte_discovery_range, width=30).grid(row=1, column=1, padx=6)
+        ttk.Label(form_frame, text="IPv4-Basis (z. B. 192.168.178):").grid(row=1, column=0, sticky="w", padx=8, pady=(2, 4))
+        self.entry_discovery_basis = ttk.Entry(form_frame, textvariable=self._discovery_basis_var, width=24)
+        self.entry_discovery_basis.grid(row=1, column=1, padx=6, sticky="w")
 
-        ttk.Label(form_frame, text="Analyse-Ausgabepfad:").grid(row=1, column=2, sticky="w", padx=8)
-        ttk.Entry(form_frame, textvariable=self._ausgabe_pfad, width=45).grid(row=1, column=3, columnspan=3, padx=6)
+        ttk.Label(form_frame, text="Start-Host (0–255):").grid(row=1, column=2, sticky="w", padx=8)
+        self.entry_discovery_start = ttk.Entry(form_frame, textvariable=self._discovery_start_var, width=12)
+        self.entry_discovery_start.grid(row=1, column=3, padx=6, sticky="w")
+
+        ttk.Label(form_frame, text="End-Host (0–255):").grid(row=1, column=4, sticky="w", padx=8)
+        self.entry_discovery_ende = ttk.Entry(form_frame, textvariable=self._discovery_ende_var, width=12)
+        self.entry_discovery_ende.grid(row=1, column=5, padx=6, sticky="w")
+
+        for feld in (self.entry_discovery_basis, self.entry_discovery_start, self.entry_discovery_ende):
+            feld.bind("<FocusIn>", self._entferne_fehler_markierung)
+
+        ttk.Label(
+            form_frame,
+            text="Beispiel: IPv4-Basis 192.168.178, Start-Host 1, End-Host 30",
+            foreground="#6B7280",
+        ).grid(row=2, column=0, columnspan=6, sticky="w", padx=8, pady=(0, 4))
+        ttk.Label(form_frame, textvariable=self._discovery_validierung_hinweis_var, foreground="#B91C1C").grid(
+            row=3,
+            column=0,
+            columnspan=6,
+            sticky="w",
+            padx=8,
+            pady=(0, 6),
+        )
+
+        ttk.Label(form_frame, text="Letzte Discovery-Range:").grid(row=4, column=0, sticky="w", padx=8, pady=(2, 8))
+        ttk.Entry(form_frame, textvariable=self._letzte_discovery_range, width=30).grid(row=4, column=1, padx=6, sticky="w")
+
+        ttk.Label(form_frame, text="Analyse-Ausgabepfad:").grid(row=4, column=2, sticky="w", padx=8)
+        ttk.Entry(form_frame, textvariable=self._ausgabe_pfad, width=45).grid(row=4, column=3, columnspan=3, padx=6, sticky="w")
 
     def _baue_tabelle(self, parent: ttk.Frame) -> None:
         table_frame = ttk.LabelFrame(parent, text="Serverliste", style="Section.TLabelframe")
@@ -578,20 +615,76 @@ class MehrserverAnalyseGUI:
         self.shell.setze_status("Server wurde hinzugefügt")
         self._aktualisiere_button_zustaende()
 
+    def _entferne_fehler_markierung(self, event: tk.Event[tk.Misc]) -> None:
+        """Setzt die Standarddarstellung eines zuvor als fehlerhaft markierten Feldes zurück."""
+        event.widget.configure(highlightthickness=0)
+
+    def _markiere_fehlerhaftes_feld(self, feld: ttk.Entry) -> None:
+        """Hebt ein Eingabefeld visuell hervor, damit der Anwender die Ursache schnell erkennt."""
+        feld.configure(highlightbackground="#DC2626", highlightcolor="#DC2626", highlightthickness=2)
+
+    def _validiere_discovery_eingaben(self) -> tuple[str, int, int] | None:
+        """Validiert Discovery-Parameter und liefert bei Erfolg normalisierte Werte zurück."""
+        self._discovery_validierung_hinweis_var.set("")
+        for feld in (self.entry_discovery_basis, self.entry_discovery_start, self.entry_discovery_ende):
+            feld.configure(highlightthickness=0)
+
+        basis = self._discovery_basis_var.get().strip()
+        start_text = self._discovery_start_var.get().strip()
+        ende_text = self._discovery_ende_var.get().strip()
+
+        if not _IPV4_BASIS_REGEX.fullmatch(basis):
+            self._markiere_fehlerhaftes_feld(self.entry_discovery_basis)
+            self._discovery_validierung_hinweis_var.set("Ungültige IPv4-Basis. Erwartetes Format: z. B. 192.168.178")
+            return None
+
+        try:
+            startwert = int(start_text)
+        except ValueError:
+            self._markiere_fehlerhaftes_feld(self.entry_discovery_start)
+            self._discovery_validierung_hinweis_var.set("Start-Host muss eine Zahl zwischen 0 und 255 sein.")
+            return None
+
+        try:
+            endwert = int(ende_text)
+        except ValueError:
+            self._markiere_fehlerhaftes_feld(self.entry_discovery_ende)
+            self._discovery_validierung_hinweis_var.set("End-Host muss eine Zahl zwischen 0 und 255 sein.")
+            return None
+
+        if not 0 <= startwert <= 255:
+            self._markiere_fehlerhaftes_feld(self.entry_discovery_start)
+            self._discovery_validierung_hinweis_var.set("Start-Host liegt außerhalb des gültigen Bereichs (0–255).")
+            return None
+
+        if not 0 <= endwert <= 255:
+            self._markiere_fehlerhaftes_feld(self.entry_discovery_ende)
+            self._discovery_validierung_hinweis_var.set("End-Host liegt außerhalb des gültigen Bereichs (0–255).")
+            return None
+
+        if startwert > endwert:
+            self._markiere_fehlerhaftes_feld(self.entry_discovery_start)
+            self._markiere_fehlerhaftes_feld(self.entry_discovery_ende)
+            self._discovery_validierung_hinweis_var.set("Start-Host darf nicht größer als End-Host sein.")
+            return None
+
+        return basis, startwert, endwert
+
     def discovery_starten(self) -> None:
         if not self.shell.bestaetige_aktion("Discovery bestätigen", "Die Netzwerk-Discovery wird gestartet."):
             return
 
-        basis = simpledialog.askstring("Discovery", "IPv4-Basis eingeben (z. B. 192.168.178):", parent=self.master)
-        if not basis:
+        validierte_eingabe = self._validiere_discovery_eingaben()
+        if not validierte_eingabe:
+            self.shell.zeige_warnung(
+                "Ungültige Discovery-Eingaben",
+                "Bitte korrigieren Sie die markierten Felder.",
+                "Nutzen Sie das Beispiel unter den Feldern als Eingabehilfe.",
+            )
             return
 
-        startwert = simpledialog.askinteger("Discovery", "Startbereich (z. B. 1):", parent=self.master)
-        endwert = simpledialog.askinteger("Discovery", "Endbereich (z. B. 30):", parent=self.master)
-        if startwert is None or endwert is None:
-            return
-
-        self._letzte_discovery_range.set(f"{basis.strip()}.{startwert}-{endwert}")
+        basis, startwert, endwert = validierte_eingabe
+        self._letzte_discovery_range.set(f"{basis}.{startwert}-{endwert}")
         self.shell.setze_status("Discovery läuft")
         self.master.update_idletasks()
 
@@ -761,6 +854,11 @@ class MehrserverAnalyseGUI:
                 "serverlisten": serverlisten,
                 "rollen": rollen,
                 "letzte_discovery_range": self._letzte_discovery_range.get().strip(),
+                "letzte_discovery_eingabe": {
+                    "basis": self._discovery_basis_var.get().strip(),
+                    "start": self._discovery_start_var.get().strip(),
+                    "ende": self._discovery_ende_var.get().strip(),
+                },
                 "ausgabepfade": ausgabepfade,
                 "letzte_kerninfos": self._baue_kerninfos(),
                 "bericht_verweise": [ausgabepfade["analyse_report"], ausgabepfade["log_report"]],
