@@ -104,7 +104,7 @@ def test_folder_und_doku_main_respektieren_guard(monkeypatch) -> None:
     ordner_start = Mock()
     doku_start = Mock()
 
-    monkeypatch.setattr(folder_manager, "pruefe_und_erstelle_struktur", ordner_start)
+    monkeypatch.setattr(folder_manager, "start_gui", ordner_start)
     monkeypatch.setattr(doc_generator, "erstelle_dokumentation", doku_start)
 
     monkeypatch.setattr(folder_manager, "verarbeite_installations_guard", lambda *args, **kwargs: False)

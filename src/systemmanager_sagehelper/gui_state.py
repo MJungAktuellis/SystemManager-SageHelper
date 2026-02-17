@@ -52,6 +52,16 @@ _STANDARD_ZUSTAND: dict[str, Any] = {
             "letzter_exportzeitpunkt": "",
             "letzte_export_lauf_id": "",
         },
+        "folder_manager": {
+            "ausgabepfade": {
+                "basis_pfad": "",
+                "letztes_protokoll": "",
+            },
+            "letzte_kerninfos": [],
+            "bericht_verweise": [],
+            "letztes_ergebnis": {},
+            "laufhistorie": [],
+        },
     }
 }
 

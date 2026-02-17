@@ -1,25 +1,26 @@
-"""Legacy-Wrapper auf ``systemmanager_sagehelper.share_manager``.
+"""Legacy-Wrapper auf ``systemmanager_sagehelper``-Module.
 
-Single Source of Truth für Ordner/Freigaben liegt im Paketmodul.
-Dieses Legacy-Modul bleibt nur für bestehende Imports erhalten.
+Für bestehende Imports werden die Kernfunktionen aus ``share_manager`` exportiert.
+Der direkte Einstieg startet jedoch den neuen GUI-Assistenten statt eines
+harten Legacy-Aufrufs mit festem Pfad.
 """
 
 from __future__ import annotations
 
-import subprocess
-
 from systemmanager_sagehelper.installation_state import pruefe_installationszustand, verarbeite_installations_guard
-from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, setze_lauf_id
 from systemmanager_sagehelper.share_manager import (
     FreigabeErgebnis,
     erstelle_ordnerstruktur,
+    plane_freigabeaenderungen,
     pruefe_und_erstelle_struktur,
     setze_freigaben,
 )
+from systemmanager_sagehelper.folder_gui import start_gui
 
 __all__ = [
     "FreigabeErgebnis",
     "erstelle_ordnerstruktur",
+    "plane_freigabeaenderungen",
     "setze_freigaben",
     "pruefe_und_erstelle_struktur",
 ]
@@ -44,8 +45,7 @@ def main() -> None:
     if not freigegeben:
         return
 
-    setze_lauf_id(erstelle_lauf_id())
-    pruefe_und_erstelle_struktur("C:/SystemAG")
+    start_gui()
 
 
 if __name__ == "__main__":
