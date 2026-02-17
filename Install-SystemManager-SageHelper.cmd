@@ -39,8 +39,11 @@ if not exist "%PS_SCRIPT%" (
     exit /b 1
 )
 
-echo === Starte One-Click-Installer ===
+echo === Starte Standard-Installer (GUI) ===
 echo [INFO] Launcher-Log: %LAUNCHER_LOG%
+echo [INFO] Standard: GUI-Installer (mit automatischem CLI-Fallback)
+echo [INFO] Optional: CLI direkt via "python scripts\install.py"
+echo [INFO] Optional: Non-Interactive via "python scripts\install.py --non-interactive"
 echo [INFO] Nutze PowerShell-Skript: %PS_SCRIPT%
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" >>"%LAUNCHER_LOG%" 2>&1

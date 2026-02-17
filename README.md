@@ -82,7 +82,7 @@ Wenn du das Tool **einfach nur installieren und benutzen** willst, gehe genau so
    - Lege den Ordner z. B. auf dem Desktop ab.
 2. **Installer starten**
    - Öffne den entpackten Ordner.
-   - Starte `Install-SystemManager-SageHelper.cmd` mit Doppelklick.
+   - Starte `Install-SystemManager-SageHelper.cmd` mit Doppelklick (Standard: GUI-Installer).
 3. **Rückfragen bestätigen**
    - Windows kann nach Admin-Rechten fragen (UAC) → mit **Ja** bestätigen.
 4. **Warten, bis "Fertig" erscheint**
@@ -106,18 +106,27 @@ Wenn du das Tool **einfach nur installieren und benutzen** willst, gehe genau so
 
 > Tipp für Teams: Beim ersten Rollout einmal mit einem Testserver prüfen, dann den gleichen Ablauf für alle weiteren Server nutzen.
 
-### Option A: One-Click-Installer unter Windows (empfohlen)
+### Option A: GUI-Installer unter Windows (Standard, empfohlen)
 
 1. Repository als ZIP auf den Zielserver kopieren und entpacken.
 2. `Install-SystemManager-SageHelper.cmd` per Doppelklick ausführen.
-3. Der Assistent installiert bei Bedarf Python/Git und richtet anschließend alle Abhängigkeiten ein.
-4. Der Launcher öffnet bei Doppelklick automatisch ein persistentes CMD-Fenster, damit Meldungen nicht sofort verschwinden.
-5. Bei Fehlern bitte die Logdateien unter `logs/install_launcher.log`, `logs/install_assistant_ps.log` und `logs/install_assistant.log` teilen.
+3. Standardpfad: Der Launcher startet den GUI-Installer (`scripts/install_gui.py`).
+4. Falls der GUI-Start fehlschlägt (z. B. fehlendes Tkinter), erfolgt automatisch ein klar geloggter Fallback auf den CLI-Installer im Non-Interactive-Modus.
+5. Der Launcher öffnet bei Doppelklick automatisch ein persistentes CMD-Fenster, damit Meldungen nicht sofort verschwinden.
+6. Bei Fehlern bitte die Logdateien unter `logs/install_launcher.log`, `logs/install_assistant_ps.log` und `logs/install_assistant.log` teilen.
 
-### Option B: CLI-Installation (plattformübergreifend)
+### Option B: CLI-Installation (optional, plattformübergreifend)
+
+Interaktiver CLI-Modus:
 
 ```bash
 python scripts/install.py
+```
+
+Non-Interactive CLI-Modus (z. B. für Automatisierung):
+
+```bash
+python scripts/install.py --non-interactive
 ```
 
 ## Windows-Build & distributierbares Installer-Paket
