@@ -15,6 +15,7 @@ def test_lade_default_ohne_datei(tmp_path: Path) -> None:
 
     assert "modules" in zustand
     assert "server_analysis" in zustand["modules"]
+    assert zustand["onboarding"]["onboarding_abgeschlossen"] is False
 
 
 def test_speichere_und_lade_modulzustand(tmp_path: Path) -> None:
@@ -40,3 +41,23 @@ def test_speichere_und_lade_modulzustand(tmp_path: Path) -> None:
     assert geladen["ausgabepfade"]["analyse_report"] == "docs/a.md"
     assert geladen["letzter_exportpfad"] == "docs/a.md"
     assert geladen["letzte_export_lauf_id"] == "lauf-001"
+
+
+def test_onboarding_status_wird_robust_geladen_und_gespeichert(tmp_path: Path) -> None:
+    """Onboarding-Status soll inklusive neuer Felder kompatibel persistiert werden."""
+    store = GUIStateStore(tmp_path / "gui_state.json")
+
+    store.speichere_onboarding_status(
+        {
+            "onboarding_abgeschlossen": True,
+            "onboarding_version": "1.2.3",
+            "erststart_zeitpunkt": "2026-03-04T12:00:00",
+        }
+    )
+
+    geladen = store.lade_onboarding_status()
+
+    assert geladen["onboarding_abgeschlossen"] is True
+    assert geladen["onboarding_version"] == "1.2.3"
+    assert geladen["erststart_zeitpunkt"] == "2026-03-04T12:00:00"
+    assert "letzter_abschluss_zeitpunkt" in geladen
