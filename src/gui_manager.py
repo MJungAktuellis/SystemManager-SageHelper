@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 import subprocess
 import sys
 import tkinter as tk
@@ -83,6 +84,17 @@ class OnboardingController:
         self._discovery_entry.insert(0, "192.168.178")
         self._discovery_entry.pack(anchor="w", pady=(2, 10))
 
+        start_ende_rahmen = ttk.Frame(rahmen)
+        start_ende_rahmen.pack(anchor="w", pady=(0, 10))
+        ttk.Label(start_ende_rahmen, text="Start:").pack(side="left")
+        self._discovery_start_entry = ttk.Entry(start_ende_rahmen, width=6)
+        self._discovery_start_entry.insert(0, "1")
+        self._discovery_start_entry.pack(side="left", padx=(4, 12))
+        ttk.Label(start_ende_rahmen, text="Ende:").pack(side="left")
+        self._discovery_ende_entry = ttk.Entry(start_ende_rahmen, width=6)
+        self._discovery_ende_entry.insert(0, "30")
+        self._discovery_ende_entry.pack(side="left", padx=(4, 0))
+
         ttk.Label(rahmen, text="Analyse-Reportpfad:").pack(anchor="w")
         ttk.Entry(rahmen, textvariable=self._analyse_pfad_var, width=55).pack(anchor="w", pady=(2, 10))
 
@@ -107,14 +119,24 @@ class OnboardingController:
 
     def schritt_discovery(self) -> None:
         """Schritt 1: Führt die Discovery durch und befüllt das Tabellenmodell."""
-        discovery_basis = self._discovery_entry.get().strip() if self._window else ""
-        if not discovery_basis:
-            self._setze_status("Bitte zuerst eine gültige Discovery-Range eintragen.")
+        discovery_eingabe = self._discovery_entry.get().strip() if self._window else ""
+        start_eingabe = self._discovery_start_entry.get().strip() if self._window else ""
+        ende_eingabe = self._discovery_ende_entry.get().strip() if self._window else ""
+
+        try:
+            discovery_basis, start, ende = self._parse_discovery_eingabe(discovery_eingabe, start_eingabe, ende_eingabe)
+        except ValueError as exc:
+            self._setze_status(str(exc))
             return
 
         self._setze_status("Discovery läuft …")
         try:
-            ergebnisse = entdecke_server_ergebnisse(discovery_basis, konfiguration=DiscoveryKonfiguration())
+            ergebnisse = entdecke_server_ergebnisse(
+                basis=discovery_basis,
+                start=start,
+                ende=ende,
+                konfiguration=DiscoveryKonfiguration(),
+            )
         except Exception as exc:  # noqa: BLE001 - Wizard soll robust weiterlaufen.
             logger.exception("Discovery im Onboarding fehlgeschlagen")
             self._setze_status(f"Discovery fehlgeschlagen: {exc}")
@@ -140,8 +162,48 @@ class OnboardingController:
                 )
             )
 
-        self.gui.modulzustand["letzte_discovery_range"] = discovery_basis
+        self.gui.modulzustand["letzte_discovery_range"] = f"{discovery_basis}.{start}-{ende}"
         self._setze_status(f"Discovery abgeschlossen: {len(self.server_zeilen)} Server übernommen.")
+
+    @staticmethod
+    def _parse_discovery_eingabe(discovery_eingabe: str, start_eingabe: str, ende_eingabe: str) -> tuple[str, int, int]:
+        """Parst Discovery-Eingaben robust für Basis + Start/Ende inklusive Kurzformat.
+
+        Unterstützte Eingaben:
+        * Basis + getrennte Start/Ende-Felder (z. B. 192.168.0 + 1/30)
+        * Kurzformat in einem Feld (z. B. 192.168.0.1-30)
+        """
+
+        beispiel = "192.168.0 + Start=1 und Ende=30 oder 192.168.0.1-30"
+        if not discovery_eingabe:
+            raise ValueError(f"Ungültige Discovery-Eingabe. Beispiele: {beispiel}")
+
+        kurzformat = re.fullmatch(r"(?P<basis>(?:\d{1,3}\.){2}\d{1,3})\.(?P<start>\d{1,3})-(?P<ende>\d{1,3})", discovery_eingabe)
+        if kurzformat:
+            basis = kurzformat.group("basis")
+            start = int(kurzformat.group("start"))
+            ende = int(kurzformat.group("ende"))
+        else:
+            basis = discovery_eingabe
+            if not re.fullmatch(r"(?:\d{1,3}\.){2}\d{1,3}", basis):
+                raise ValueError(f"Ungültiges Discovery-Format. Beispiele: {beispiel}")
+            if not start_eingabe or not ende_eingabe:
+                raise ValueError(f"Start und Ende müssen gesetzt sein. Beispiele: {beispiel}")
+            try:
+                start = int(start_eingabe)
+                ende = int(ende_eingabe)
+            except ValueError as exc:
+                raise ValueError(f"Start und Ende müssen ganze Zahlen sein. Beispiele: {beispiel}") from exc
+
+        oktette = [int(wert) for wert in basis.split(".")]
+        if any(oktett < 0 or oktett > 255 for oktett in oktette):
+            raise ValueError(f"Ungültige IPv4-Basis. Beispiele: {beispiel}")
+        if not (1 <= start <= 254 and 1 <= ende <= 254):
+            raise ValueError(f"Start und Ende müssen zwischen 1 und 254 liegen. Beispiele: {beispiel}")
+        if start > ende:
+            raise ValueError(f"Start darf nicht größer als Ende sein. Beispiele: {beispiel}")
+
+        return basis, start, ende
 
     def schritt_rollen_pruefen(self) -> None:
         """Schritt 2: Ermöglicht eine einfache Rollenanpassung pro gefundenem Server."""
