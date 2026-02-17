@@ -155,6 +155,21 @@ class TestInstaller(unittest.TestCase):
             )
         )
 
+    def test_schreibe_installationsreport_enthaelt_desktop_status_abschnitt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_root = Path(tmp_dir)
+            report_datei = installer.schreibe_installationsreport(
+                repo_root,
+                ergebnisse=[],
+                auswahl={"voraussetzungen": True},
+                desktop_verknuepfung_status="Desktop-Verknüpfung: Erfolgreich erstellt (C:/Users/Public/Desktop/SystemManager-SageHelper.lnk)",
+            )
+
+            report_inhalt = report_datei.read_text(encoding="utf-8")
+
+        self.assertIn("## Desktop-Verknüpfung", report_inhalt)
+        self.assertIn("Desktop-Verknüpfung: Erfolgreich erstellt", report_inhalt)
+
     def test_mappe_inno_tasks_fuer_desktop_icon(self) -> None:
         optionen = InstallerOptionen(desktop_icon=True)
         self.assertEqual(["desktopicon"], mappe_inno_tasks(optionen))

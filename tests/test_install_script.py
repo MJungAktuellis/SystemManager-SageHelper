@@ -27,6 +27,14 @@ class TestInstallScript(unittest.TestCase):
         args = install_script.parse_cli_args(["--non-interactive"])
         self.assertTrue(args.non_interactive)
 
+    def test_parse_cli_args_desktop_icon_standardmaessig_aktiv(self) -> None:
+        args = install_script.parse_cli_args([])
+        self.assertTrue(args.desktop_icon)
+
+    def test_parse_cli_args_deaktiviert_desktop_icon_per_flag(self) -> None:
+        args = install_script.parse_cli_args(["--no-desktop-icon"])
+        self.assertFalse(args.desktop_icon)
+
     def test_frage_ja_nein_nutzt_standardwert_bei_eof_true(self) -> None:
         with patch.object(builtins, "input", side_effect=EOFError):
             self.assertTrue(install_script._frage_ja_nein("Test", standard=True))
@@ -91,7 +99,7 @@ class TestInstallScript(unittest.TestCase):
         komponenten = {"kern": SimpleNamespace(default_aktiv=True, name="Kernkomponente")}
 
         with (
-            patch.object(install_script, "parse_cli_args", return_value=SimpleNamespace(non_interactive=True)),
+            patch.object(install_script, "parse_cli_args", return_value=SimpleNamespace(non_interactive=True, desktop_icon=False)),
             patch.object(install_script, "konfiguriere_logging", return_value="install.log"),
             patch.object(install_script, "erstelle_standard_komponenten", return_value=komponenten),
             patch.object(install_script, "drucke_voraussetzungsstatus"),
@@ -99,13 +107,15 @@ class TestInstallScript(unittest.TestCase):
             patch.object(install_script, "STANDARD_REIHENFOLGE", ["kern"]),
             patch.object(install_script, "validiere_auswahl_und_abhaengigkeiten") as validiere_mock,
             patch.object(install_script, "fuehre_installationsplan_aus", return_value=[]),
-            patch.object(install_script, "schreibe_installationsreport", return_value="report.md"),
+            patch.object(install_script, "schreibe_installationsreport", return_value="report.md") as report_mock,
             patch.object(install_script, "schreibe_installations_marker", return_value="installed.marker"),
             patch.object(install_script, "_safe_print") as safe_print_mock,
         ):
             install_script.main()
 
         validiere_mock.assert_called_once_with(komponenten, {"kern": True})
+        report_mock.assert_called_once()
+        self.assertEqual("Desktop-Verknüpfung: Deaktiviert", report_mock.call_args.kwargs["desktop_verknuepfung_status"])
         safe_print_mock.assert_any_call("\n[INFO] Non-Interactive-Modus aktiv: Standardauswahl wird verwendet.")
 
 

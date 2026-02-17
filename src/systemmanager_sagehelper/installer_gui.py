@@ -7,6 +7,7 @@ Installer-Kernlogik wie die CLI, ohne Benutzereingaben via ``input()``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 import threading
 import tkinter as tk
@@ -34,6 +35,9 @@ from systemmanager_sagehelper.installer_options import (
     mappe_inno_tasks,
 )
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -94,7 +98,8 @@ class InstallerWizardGUI:
         self.installationspfad_var = tk.StringVar(value=str(self.repo_root))
         self.option_marker_var = tk.BooleanVar(value=True)
         self.option_report_var = tk.BooleanVar(value=True)
-        self.option_desktop_icon_var = tk.BooleanVar(value=False)
+        # One-Click-Installationen sollen standardmäßig eine Desktop-Verknüpfung anlegen.
+        self.option_desktop_icon_var = tk.BooleanVar(value=True)
         self.statustext_var = tk.StringVar(value="Noch keine Installation gestartet.")
 
         self.log_datei: Path | None = None
@@ -224,9 +229,15 @@ class InstallerWizardGUI:
         ttk.Checkbutton(optionen, text="Installationsmarker aktualisieren", variable=self.option_marker_var).pack(anchor="w")
         ttk.Checkbutton(
             optionen,
-            text="Desktop-Verknüpfung erstellen",
+            text="Desktop-Verknüpfung erstellen (empfohlen)",
             variable=self.option_desktop_icon_var,
         ).pack(anchor="w")
+        ttk.Label(
+            optionen,
+            text="Standard für One-Click: aktiv. Im Abschluss wird der Status separat ausgewiesen.",
+            style="Muted.TLabel",
+            wraplength=840,
+        ).pack(anchor="w", pady=(2, 0))
 
         info = (
             "Hinweis: Der Pfad muss eine gültige Projektstruktur enthalten, "
@@ -349,8 +360,8 @@ class InstallerWizardGUI:
             auswahl = {komp_id: var.get() for komp_id, var in self.komponenten_vars.items()}
 
             ergebnisse = self._fuehre_komponenten_mit_fortschritt_aus(self.komponenten, auswahl)
-            if self.option_report_var.get():
-                self.report_datei = schreibe_installationsreport(ziel_root, ergebnisse, auswahl)
+            desktop_verknuepfung_status = "Desktop-Verknüpfung: Deaktiviert"
+
             if self.option_marker_var.get():
                 self.marker_datei = schreibe_installations_marker(repo_root=ziel_root)
 
@@ -372,6 +383,8 @@ class InstallerWizardGUI:
             if installer_optionen.desktop_icon:
                 try:
                     self.desktop_icon_pfad = erstelle_desktop_verknuepfung_fuer_python_installation(ziel_root)
+                    desktop_verknuepfung_status = f"Desktop-Verknüpfung: Erfolgreich erstellt ({self.desktop_icon_pfad})"
+                    LOGGER.info("Desktop-Verknüpfung erfolgreich erstellt: %s", self.desktop_icon_pfad)
                     self.window.after(
                         0,
                         self._fuege_fortschrittslog_hinzu,
@@ -379,11 +392,23 @@ class InstallerWizardGUI:
                     )
                 except InstallationsFehler as exc:
                     self.desktop_icon_fehler = str(exc)
+                    desktop_verknuepfung_status = f"Desktop-Verknüpfung: Fehler ({self.desktop_icon_fehler})"
+                    LOGGER.warning("Desktop-Verknüpfung nicht erstellt: %s", self.desktop_icon_fehler)
                     self.window.after(
                         0,
                         self._fuege_fortschrittslog_hinzu,
                         f"[WARN] Desktop-Verknüpfung nicht erstellt: {self.desktop_icon_fehler}",
                     )
+            else:
+                LOGGER.info("Desktop-Verknüpfung wurde im GUI-Wizard deaktiviert.")
+
+            if self.option_report_var.get():
+                self.report_datei = schreibe_installationsreport(
+                    ziel_root,
+                    ergebnisse,
+                    auswahl,
+                    desktop_verknuepfung_status=desktop_verknuepfung_status,
+                )
 
             self.window.after(0, self._installation_erfolgreich_abschliessen)
         except InstallationsFehler as exc:
