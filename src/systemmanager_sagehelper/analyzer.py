@@ -769,6 +769,18 @@ def _resolve_reverse_dns(ip_adresse: str) -> str | None:
     return hostname.strip() or None
 
 
+def _normalisiere_hostname(hostname: str) -> str:
+    """Normalisiert Hostnamen stabil für Vergleich und Deduplizierung.
+
+    Die Normalisierung reduziert FQDN und Kurzname auf denselben Kernwert,
+    damit z. B. ``srv-01`` und ``srv-01.domain.local`` zusammengeführt werden.
+    """
+    bereinigt = hostname.strip().lower().rstrip(".")
+    if not bereinigt:
+        return ""
+    return bereinigt.split(".", maxsplit=1)[0]
+
+
 def _ad_ldap_hinweis() -> str | None:
     """Liefert optionalen AD/LDAP-Hinweis, sofern Domänenumfeld erkannt wird."""
     import os
@@ -794,11 +806,13 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
     else:
         fehlerursachen.append("dns_auflosung")
 
+    # Aufnahme-Kriterium 1: Der Host ist per ICMP erreichbar.
     if _ping_host(host, konfiguration.ping_timeout):
         strategien.append("icmp")
         erreichbar = True
         vertrauensgrad += 0.45
 
+    # Aufnahme-Kriterium 2: Mindestens ein relevanter TCP-Port antwortet.
     for port in konfiguration.tcp_ports:
         kandidaten = _ermittle_socket_kandidaten(host, port)
         if kandidaten and pruefe_tcp_port(kandidaten, timeout=konfiguration.tcp_timeout):
@@ -828,6 +842,7 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
         else:
             fehlerursachen.append("ad_ldap_nicht_verfuegbar")
 
+    # Ohne Erreichbarkeit und ohne Reverse-DNS gibt es keinen verwertbaren Treffer.
     if not erreichbar and "reverse_dns" not in strategien:
         return None
 
@@ -864,7 +879,9 @@ def entdecke_server_ergebnisse(
 
     dedupliziert: dict[tuple[str, str], DiscoveryErgebnis] = {}
     for item in sorted(ergebnisse, key=lambda eintrag: (eintrag.hostname.lower(), -eintrag.vertrauensgrad)):
-        schluessel = (item.hostname.lower(), item.ip_adresse)
+        # Deduplizierung erfolgt über normalisierten Hostnamen + IP,
+        # um FQDN-/Kurzname-Varianten robust zusammenzuführen.
+        schluessel = (_normalisiere_hostname(item.hostname), item.ip_adresse)
         if schluessel in dedupliziert:
             bestehend = dedupliziert[schluessel]
             bestehend.erkannte_dienste = _normalisiere_liste_ohne_duplikate(bestehend.erkannte_dienste + item.erkannte_dienste)

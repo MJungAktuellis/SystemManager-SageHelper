@@ -10,6 +10,7 @@ from server_analysis_gui import (
     _baue_serverziele,
     _deklarationszusammenfassung,
     _detailzeilen,
+    _filter_discovery_treffer,
     _kurzstatus,
     _rollen_aus_discovery_treffer,
     _rollenquelle_fuer_zeile,
@@ -236,3 +237,37 @@ def test_analyse_starten_erzeugt_report_und_zeigt_verweis(monkeypatch) -> None:
     assert "Lauf-ID: lauf-001" in gui._report_verweis_var.get()
     assert gui.shell.erfolg_anzeigen is True
     assert any("Analysebericht erzeugt: docs/test_report.md" in eintrag for eintrag in gui.shell.logs)
+
+
+def test_filter_discovery_treffer_mit_standardfilter_auf_erreichbarkeit() -> None:
+    """Nicht erreichbare (inkl. Reverse-only) Treffer bleiben standardmäßig ausgeblendet."""
+    treffer = [
+        DiscoveryTabellenTreffer(
+            hostname="srv-app-01",
+            ip_adresse="10.0.0.21",
+            erreichbar=True,
+            dienste="1433",
+            vertrauensgrad=0.9,
+        ),
+        DiscoveryTabellenTreffer(
+            hostname="srv-rdns-only",
+            ip_adresse="10.0.0.22",
+            erreichbar=False,
+            dienste="-",
+            vertrauensgrad=0.1,
+            nur_reverse_dns=True,
+        ),
+        DiscoveryTabellenTreffer(
+            hostname="srv-offline",
+            ip_adresse="10.0.0.23",
+            erreichbar=False,
+            dienste="3389",
+            vertrauensgrad=0.3,
+        ),
+    ]
+
+    nur_erreichbare = _filter_discovery_treffer(treffer, filtertext="", nur_erreichbare=True)
+    alle = _filter_discovery_treffer(treffer, filtertext="", nur_erreichbare=False)
+
+    assert [item.hostname for item in nur_erreichbare] == ["srv-app-01"]
+    assert [item.hostname for item in alle] == ["srv-app-01", "srv-rdns-only", "srv-offline"]
