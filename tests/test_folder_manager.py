@@ -36,7 +36,7 @@ def test_setze_freigaben_ohne_aenderungsbedarf_verzichtet_auf_update_befehl() ->
         if cmd[:2] == ["net", "share"] and len(cmd) == 3:
             name = cmd[2]
             if name == "SystemAG$":
-                return _cp(cmd, stdout=_net_share_detail(name, "C:/SystemAG", "Everyone", "READ"))
+                return _cp(cmd, stdout=_net_share_detail(name, "C:/SystemAG", "Everyone", "CHANGE"))
             if name == "AddinsOL$":
                 return _cp(cmd, stdout=_net_share_detail(name, "C:/SystemAG/AddinsOL", "Everyone", "CHANGE"))
             if name == "LiveupdateOL$":
