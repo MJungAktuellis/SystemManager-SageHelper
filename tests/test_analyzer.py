@@ -176,6 +176,30 @@ class TestAnalyzer(unittest.TestCase):
         self.assertEqual(1, len(ergebnisse))
         self.assertEqual("srv-duplikat.local", ergebnisse[0].hostname)
 
+
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", side_effect=["srv-10", "srv-10.domain.local"])
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.2.10"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=True)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=True)
+    def test_discovery_dedupliziert_nach_normalisiertem_hostname_und_ip(
+        self,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _reverse_mock,
+    ) -> None:
+        ergebnisse = entdecke_server_ergebnisse(
+            basis="10.0.2",
+            start=10,
+            ende=11,
+            konfiguration=DiscoveryKonfiguration(max_worker=2),
+        )
+
+        self.assertEqual(1, len(ergebnisse))
+        self.assertEqual("10.0.2.10", ergebnisse[0].ip_adresse)
+
     @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value=None)
     @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.1.7"])
     @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=False)

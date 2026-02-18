@@ -200,7 +200,31 @@ class DiscoveryTabellenTreffer:
     erreichbar: bool
     dienste: str
     vertrauensgrad: float
+    nur_reverse_dns: bool = False
 
+
+
+
+def _filter_discovery_treffer(
+    treffer_liste: list[DiscoveryTabellenTreffer],
+    *,
+    filtertext: str,
+    nur_erreichbare: bool,
+) -> list[DiscoveryTabellenTreffer]:
+    """Filtert Discovery-Treffer nach Suchtext und Erreichbarkeit.
+
+    Nicht erreichbare Treffer (insb. reine Reverse-DNS-Treffer) werden standardmäßig
+    ausgeblendet, wenn ``nur_erreichbare`` aktiv ist.
+    """
+    suchbegriff = filtertext.strip().lower()
+    gefiltert: list[DiscoveryTabellenTreffer] = []
+    for treffer in treffer_liste:
+        if nur_erreichbare and not treffer.erreichbar:
+            continue
+        if suchbegriff and suchbegriff not in treffer.hostname.lower() and suchbegriff not in treffer.ip_adresse.lower():
+            continue
+        gefiltert.append(treffer)
+    return gefiltert
 
 class DiscoveryTrefferDialog:
     """Dialog zur Auswahl, Filterung und Korrektur von Discovery-Treffern."""
@@ -213,6 +237,7 @@ class DiscoveryTrefferDialog:
                 erreichbar=item.erreichbar,
                 dienste=", ".join(item.erkannte_dienste) or "-",
                 vertrauensgrad=item.vertrauensgrad,
+                nur_reverse_dns=(not item.erreichbar and "reverse_dns" in item.strategien),
             )
             for item in treffer
         ]
@@ -226,11 +251,19 @@ class DiscoveryTrefferDialog:
 
         self.filter_var = tk.StringVar(value="")
         self.filter_var.trace_add("write", lambda *_: self._render_treffer())
+        # Standardfilter: Fokus auf tatsächlich erreichbare Systeme.
+        self.nur_erreichbare_var = tk.BooleanVar(value=True)
 
         kopf = ttk.Frame(self.window)
         kopf.pack(fill="x", padx=8, pady=8)
         ttk.Label(kopf, text="Filter (Hostname/IP):").pack(side="left")
         ttk.Entry(kopf, textvariable=self.filter_var, width=30).pack(side="left", padx=6)
+        ttk.Checkbutton(
+            kopf,
+            text="Nur erreichbare Server anzeigen",
+            variable=self.nur_erreichbare_var,
+            command=self._render_treffer,
+        ).pack(side="left", padx=(8, 4))
         ttk.Button(kopf, text="Alle auswählen", command=self._waehle_alle).pack(side="left", padx=4)
         ttk.Button(kopf, text="Auswahl übernehmen", command=self._uebernehmen).pack(side="right", padx=4)
 
@@ -262,10 +295,12 @@ class DiscoveryTrefferDialog:
             self.tree.delete(item_id)
         self._id_zu_treffer.clear()
 
-        filtertext = self.filter_var.get().strip().lower()
-        for treffer in self._treffer:
-            if filtertext and filtertext not in treffer.hostname.lower() and filtertext not in treffer.ip_adresse.lower():
-                continue
+        gefilterte_treffer = _filter_discovery_treffer(
+            self._treffer,
+            filtertext=self.filter_var.get(),
+            nur_erreichbare=self.nur_erreichbare_var.get(),
+        )
+        for treffer in gefilterte_treffer:
             item_id = self.tree.insert(
                 "",
                 "end",
