@@ -13,6 +13,12 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Callable
 
+from systemmanager_sagehelper.texte import (
+    BUTTON_BEENDEN,
+    BUTTON_SPEICHERN,
+    BUTTON_ZURUECK,
+    STATUS_HINWEIS,
+)
 from systemmanager_sagehelper.ui_theme import LAYOUT, PALETTE, TYPO, ThemeManager
 
 
@@ -34,7 +40,7 @@ class GuiShell:
         self.theme = ThemeManager(master)
         self.theme.anwenden()
 
-        self.status_var = tk.StringVar(value="Bereit")
+        self.status_var = tk.StringVar(value=f"{STATUS_HINWEIS} Bereit")
         self.lauf_id_var = tk.StringVar(value="-")
 
         container = ttk.Frame(master, padding=LAYOUT.padding_gesamt)
@@ -71,9 +77,9 @@ class GuiShell:
         leiste = ttk.Frame(parent)
         leiste.pack(fill="x", pady=(10, 4))
 
-        ttk.Button(leiste, text="Speichern", style="Secondary.TButton", command=on_save).pack(side="left", padx=(0, 8))
-        ttk.Button(leiste, text="Zurück", style="Secondary.TButton", command=on_back).pack(side="left")
-        ttk.Button(leiste, text="Beenden", style="Secondary.TButton", command=on_exit).pack(side="right")
+        ttk.Button(leiste, text=BUTTON_SPEICHERN, style="Secondary.TButton", command=on_save).pack(side="left", padx=(0, 8))
+        ttk.Button(leiste, text=BUTTON_ZURUECK, style="Secondary.TButton", command=on_back).pack(side="left")
+        ttk.Button(leiste, text=BUTTON_BEENDEN, style="Secondary.TButton", command=on_exit).pack(side="right")
 
     def _baue_statusbereich(self, parent: ttk.Frame) -> None:
         rahmen = ttk.LabelFrame(parent, text="Status / Meldungen", style="Section.TLabelframe")

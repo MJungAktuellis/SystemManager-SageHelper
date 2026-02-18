@@ -1,4 +1,4 @@
-"""Erzeugung standardisierter Markdown-Berichte für Microsoft Loop oder technische Reviews."""
+"""Erzeugung standardisierter Markdown-Berichte für Microsoft Loop oder technische Prüfungen."""
 
 from __future__ import annotations
 
@@ -6,32 +6,39 @@ from datetime import datetime
 from typing import Literal
 
 from .models import AnalyseErgebnis
+from .texte import (
+    BERICHT_KOPFBEREICH,
+    BERICHT_MANAGEMENT_ZUSAMMENFASSUNG,
+    BERICHT_MASSNAHMEN,
+    BERICHT_SERVERLISTE,
+    BERICHT_TITEL,
+    STATUS_ERFOLG,
+    STATUS_HINWEIS,
+    STATUS_WARNUNG,
+)
 
 # Statische Versionskennung des Templates, damit Berichtsinhalte revisionssicher bleiben.
 TEMPLATE_VERSION = "1.0"
 Berichtsmodus = Literal["voll", "kurz"]
 
-_STATUS_OK = "✅ OK"
-_STATUS_WARNUNG = "⚠️ WARNUNG"
-_STATUS_INFO = "ℹ️ INFO"
 
 
 def _render_bullet_liste(eintraege: list[str], limit: int = 15) -> list[str]:
     """Formatiert eine Liste als konsistente Markdown-Aufzählung mit optionaler Begrenzung."""
     if not eintraege:
-        return [f"- {_STATUS_INFO}: keine Einträge gefunden"]
+        return [f"- {STATUS_HINWEIS}: keine Einträge gefunden"]
 
     zeilen = [f"- {eintrag}" for eintrag in eintraege[:limit]]
     rest = len(eintraege) - limit
     if rest > 0:
-        zeilen.append(f"- {_STATUS_INFO}: ... sowie {rest} weitere Einträge")
+        zeilen.append(f"- {STATUS_HINWEIS}: ... sowie {rest} weitere Einträge")
     return zeilen
 
 
 def _render_tabelle(ueberschriften: list[str], zeilen: list[list[str]]) -> list[str]:
     """Erstellt eine Markdown-Tabelle in einheitlicher Formatierung."""
     if not zeilen:
-        return ["| Hinweis |", "| --- |", f"| {_STATUS_INFO}: keine Daten vorhanden |"]
+        return ["| Hinweis |", "| --- |", f"| {STATUS_HINWEIS}: keine Daten vorhanden |"]
 
     kopf = "| " + " | ".join(ueberschriften) + " |"
     trenner = "| " + " | ".join("---" for _ in ueberschriften) + " |"
@@ -48,7 +55,7 @@ def _ermittle_lauf_id(ergebnisse: list[AnalyseErgebnis]) -> str:
 
 
 def _baue_executive_summary(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
-    """Verdichtet die wichtigsten Kennzahlen als Executive Summary."""
+    """Verdichtet die wichtigsten Kennzahlen als Management-Zusammenfassung."""
     gesamt = len(ergebnisse)
     server_mit_warnungen = 0
     offene_ports = 0
@@ -66,10 +73,10 @@ def _baue_executive_summary(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
             server_mit_warnungen += 1
 
     return [
-        f"- {_STATUS_INFO}: Analysierte Server: {gesamt}",
-        f"- {_STATUS_OK}: Offene Ports (gesamt): {offene_ports}",
-        f"- {_STATUS_WARNUNG}: Blockierte/unerreichbare Ports (gesamt): {blockierte_ports}",
-        f"- {_STATUS_WARNUNG}: Server mit offenen Punkten: {server_mit_warnungen}",
+        f"- {STATUS_HINWEIS}: Analysierte Server: {gesamt}",
+        f"- {STATUS_ERFOLG}: Offene Ports (gesamt): {offene_ports}",
+        f"- {STATUS_WARNUNG}: Blockierte/unerreichbare Ports (gesamt): {blockierte_ports}",
+        f"- {STATUS_WARNUNG}: Server mit offenen Punkten: {server_mit_warnungen}",
     ]
 
 
@@ -78,7 +85,7 @@ def _baue_serverliste_tabelle(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
     tabellenzeilen: list[list[str]] = []
     for ergebnis in ergebnisse:
         blockierte_ports = sum(1 for port in ergebnis.ports if not port.offen)
-        status = _STATUS_WARNUNG if blockierte_ports or ergebnis.hinweise else _STATUS_OK
+        status = STATUS_WARNUNG if blockierte_ports or ergebnis.hinweise else STATUS_ERFOLG
         tabellenzeilen.append(
             [
                 ergebnis.server,
@@ -90,7 +97,7 @@ def _baue_serverliste_tabelle(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
             ]
         )
     return _render_tabelle(
-        ["Server", "Rollen", "Betriebssystem", "Sage-Version", "Blockierte Ports", "Status"],
+        ["Server", "Rollen", "Betriebssystem", "Sage-Version", "Blockierte Ports", "Bewertung"],
         tabellenzeilen,
     )
 
@@ -102,13 +109,13 @@ def _baue_massnahmen(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
         for port in ergebnis.ports:
             if not port.offen:
                 massnahmen.append(
-                    f"{_STATUS_WARNUNG}: {ergebnis.server} - Port {port.port} ({port.bezeichnung}) prüfen/freischalten"
+                    f"{STATUS_WARNUNG}: {ergebnis.server} - Port {port.port} ({port.bezeichnung}) prüfen/freischalten"
                 )
         for hinweis in ergebnis.hinweise:
-            massnahmen.append(f"{_STATUS_WARNUNG}: {ergebnis.server} - {hinweis}")
+            massnahmen.append(f"{STATUS_WARNUNG}: {ergebnis.server} - {hinweis}")
 
     if not massnahmen:
-        return [f"- {_STATUS_OK}: Keine offenen Punkte erkannt."]
+        return [f"- {STATUS_ERFOLG}: Keine offenen Punkte erkannt."]
     return _render_bullet_liste(massnahmen, limit=200)
 
 
@@ -172,11 +179,11 @@ def _render_detailblock(ergebnis: AnalyseErgebnis) -> list[str]:
     ]
 
     for port in ergebnis.ports:
-        status = f"{_STATUS_OK}: offen" if port.offen else f"{_STATUS_WARNUNG}: blockiert/unerreichbar"
+        status = f"{STATUS_ERFOLG}: offen" if port.offen else f"{STATUS_WARNUNG}: blockiert/unerreichbar"
         zeilen.append(f"- {port.port} ({port.bezeichnung}): {status}")
 
     zeilen.extend(["", "### Freigegebene/relevante Ports"])
-    offene_ports = [f"{_STATUS_OK}: {port.port} ({port.bezeichnung})" for port in ergebnis.ports if port.offen]
+    offene_ports = [f"{STATUS_ERFOLG}: {port.port} ({port.bezeichnung})" for port in ergebnis.ports if port.offen]
     zeilen.extend(_render_bullet_liste(offene_ports))
 
     zeilen.extend(["", "### Dienste (Auszug)"])
@@ -200,7 +207,7 @@ def _render_detailblock(ergebnis: AnalyseErgebnis) -> list[str]:
 
     if ergebnis.hinweise:
         zeilen.extend(["", "### Hinweise"])
-        zeilen.extend(f"- {_STATUS_WARNUNG}: {hinweis}" for hinweis in ergebnis.hinweise)
+        zeilen.extend(f"- {STATUS_WARNUNG}: {hinweis}" for hinweis in ergebnis.hinweise)
 
     zeilen.append("")
     return zeilen
@@ -225,9 +232,9 @@ def render_markdown(
     modus_name = "Vollbericht technisch" if berichtsmodus == "voll" else "Kurzbericht für Loop"
 
     zeilen: list[str] = [
-        "# Serverdokumentation",
+        f"# {BERICHT_TITEL}",
         "",
-        "## Kopfbereich",
+        f"## {BERICHT_KOPFBEREICH}",
         f"- Kunde: {kunde}",
         f"- Umgebung: {umgebung}",
         f"- Datum: {erzeugt_am}",
@@ -235,10 +242,10 @@ def render_markdown(
         f"- Berichtstyp: {modus_name}",
         f"- Template-Version: {template_version}",
         "",
-        "## Executive Summary",
+        f"## {BERICHT_MANAGEMENT_ZUSAMMENFASSUNG}",
         *_baue_executive_summary(ergebnisse),
         "",
-        "## Serverliste",
+        f"## {BERICHT_SERVERLISTE}",
         *_baue_serverliste_tabelle(ergebnisse),
         "",
     ]
@@ -249,5 +256,5 @@ def render_markdown(
         for ergebnis in ergebnisse:
             zeilen.extend(_render_detailblock(ergebnis))
 
-    zeilen.extend(["## Maßnahmen/Offene Punkte", *_baue_massnahmen(ergebnisse), ""])
+    zeilen.extend([f"## {BERICHT_MASSNAHMEN}", *_baue_massnahmen(ergebnisse), ""])
     return "\n".join(zeilen).strip() + "\n"

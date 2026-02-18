@@ -19,6 +19,9 @@ from systemmanager_sagehelper.installer_gui import InstallerWizardGUI
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 from systemmanager_sagehelper.models import AnalyseErgebnis
 from systemmanager_sagehelper.targeting import normalisiere_servernamen
+from systemmanager_sagehelper.texte import (
+    STATUS_PREFIX,
+)
 from systemmanager_sagehelper.ui_theme import LAYOUT
 from server_analysis_gui import MehrserverAnalyseGUI, ServerTabellenZeile, _baue_serverziele
 
@@ -53,13 +56,13 @@ class OnboardingController:
             return
 
         self._window = tk.Toplevel(self.gui.master)
-        self._window.title("Erststart-Wizard")
+        self._window.title("Erststart-Assistent")
         self._window.geometry("760x460")
         self._window.transient(self.gui.master)
         self._window.grab_set()
         self._window.protocol("WM_DELETE_WINDOW", self._abbrechen)
 
-        self._status_var = tk.StringVar(value="Bereit: Schritt 1 starten (Netzwerk-Discovery).")
+        self._status_var = tk.StringVar(value="Bereit: Schritt 1 starten (Netzwerkerkennung).")
         self._analyse_pfad_var = tk.StringVar(value="docs/serverbericht.md")
 
         rahmen = ttk.Frame(self._window, padding=16)
@@ -73,13 +76,13 @@ class OnboardingController:
         ttk.Label(
             rahmen,
             text=(
-                "Folgen Sie den 4 Schritten: Discovery → Rollen prüfen → Analyse → Daten speichern.\n"
-                "Der Wizard bleibt getrennt vom normalen Dashboard-Betrieb."
+                "Folgen Sie den 4 Schritten: Netzwerkerkennung → Rollen prüfen → Analyse → Daten speichern.\n"
+                "Der Assistent bleibt getrennt vom normalen Dashboard-Betrieb."
             ),
             justify="left",
         ).pack(anchor="w", pady=(4, 14))
 
-        ttk.Label(rahmen, text="Discovery-Range (CIDR oder Basis wie 192.168.178):").pack(anchor="w")
+        ttk.Label(rahmen, text="Netzwerkerkennungs-Bereich (CIDR oder Basis wie 192.168.178):").pack(anchor="w")
         self._discovery_entry = ttk.Entry(rahmen, width=40)
         self._discovery_entry.insert(0, "192.168.178")
         self._discovery_entry.pack(anchor="w", pady=(2, 10))
@@ -102,7 +105,7 @@ class OnboardingController:
         schritte.pack(fill="x", pady=(6, 10))
         schritte.columnconfigure((0, 1), weight=1)
 
-        ttk.Button(schritte, text="1) Discovery ausführen", command=self.schritt_discovery).grid(
+        ttk.Button(schritte, text="1) Netzwerkerkennung starten", command=self.schritt_discovery).grid(
             row=0, column=0, sticky="ew", padx=(0, 6), pady=4
         )
         ttk.Button(schritte, text="2) Rollen prüfen/anpassen", command=self.schritt_rollen_pruefen).grid(
@@ -129,7 +132,7 @@ class OnboardingController:
             self._setze_status(str(exc))
             return
 
-        self._setze_status("Discovery läuft …")
+        self._setze_status("Netzwerkerkennung läuft …")
         try:
             ergebnisse = entdecke_server_ergebnisse(
                 basis=discovery_basis,
@@ -138,8 +141,8 @@ class OnboardingController:
                 konfiguration=DiscoveryKonfiguration(),
             )
         except Exception as exc:  # noqa: BLE001 - Wizard soll robust weiterlaufen.
-            logger.exception("Discovery im Onboarding fehlgeschlagen")
-            self._setze_status(f"Discovery fehlgeschlagen: {exc}")
+            logger.exception("Netzwerkerkennung im Onboarding fehlgeschlagen")
+            self._setze_status(f"Netzwerkerkennung fehlgeschlagen: {exc}")
             return
 
         self.server_zeilen = []
@@ -163,11 +166,11 @@ class OnboardingController:
             )
 
         self.gui.modulzustand["letzte_discovery_range"] = f"{discovery_basis}.{start}-{ende}"
-        self._setze_status(f"Discovery abgeschlossen: {len(self.server_zeilen)} Server übernommen.")
+        self._setze_status(f"Netzwerkerkennung abgeschlossen: {len(self.server_zeilen)} Server übernommen.")
 
     @staticmethod
     def _parse_discovery_eingabe(discovery_eingabe: str, start_eingabe: str, ende_eingabe: str) -> tuple[str, int, int]:
-        """Parst Discovery-Eingaben robust für Basis + Start/Ende inklusive Kurzformat.
+        """Parst Eingaben der Netzwerkerkennung robust für Basis + Start/Ende inklusive Kurzformat.
 
         Unterstützte Eingaben:
         * Basis + getrennte Start/Ende-Felder (z. B. 192.168.0 + 1/30)
@@ -176,7 +179,7 @@ class OnboardingController:
 
         beispiel = "192.168.0 + Start=1 und Ende=30 oder 192.168.0.1-30"
         if not discovery_eingabe:
-            raise ValueError(f"Ungültige Discovery-Eingabe. Beispiele: {beispiel}")
+            raise ValueError(f"Ungültige Eingabe für die Netzwerkerkennung. Beispiele: {beispiel}")
 
         kurzformat = re.fullmatch(r"(?P<basis>(?:\d{1,3}\.){2}\d{1,3})\.(?P<start>\d{1,3})-(?P<ende>\d{1,3})", discovery_eingabe)
         if kurzformat:
@@ -186,7 +189,7 @@ class OnboardingController:
         else:
             basis = discovery_eingabe
             if not re.fullmatch(r"(?:\d{1,3}\.){2}\d{1,3}", basis):
-                raise ValueError(f"Ungültiges Discovery-Format. Beispiele: {beispiel}")
+                raise ValueError(f"Ungültiges Format für die Netzwerkerkennung (ehemals Discovery-Format). Beispiele: {beispiel}")
             if not start_eingabe or not ende_eingabe:
                 raise ValueError(f"Start und Ende müssen gesetzt sein. Beispiele: {beispiel}")
             try:
@@ -208,7 +211,7 @@ class OnboardingController:
     def schritt_rollen_pruefen(self) -> None:
         """Schritt 2: Ermöglicht eine einfache Rollenanpassung pro gefundenem Server."""
         if not self.server_zeilen:
-            self._setze_status("Keine Discovery-Daten vorhanden. Bitte zuerst Schritt 1 ausführen.")
+            self._setze_status("Keine Daten aus der Netzwerkerkennung vorhanden. Bitte zuerst Schritt 1 ausführen.")
             return
 
         dialog = tk.Toplevel(self._window)
@@ -256,7 +259,7 @@ class OnboardingController:
     def schritt_analyse(self) -> None:
         """Schritt 3: Startet die Analyse auf Basis der bestätigten Rollen."""
         if not self.server_zeilen:
-            self._setze_status("Keine Server vorhanden. Discovery und Rollenprüfung zuerst ausführen.")
+            self._setze_status("Keine Server vorhanden. Netzwerkerkennung und Rollenprüfung zuerst ausführen.")
             return
 
         ziele = _baue_serverziele(self.server_zeilen)
@@ -308,7 +311,7 @@ class OnboardingController:
 
         self._setze_status("Onboarding abgeschlossen und vollständig gespeichert.")
         messagebox.showinfo(
-            "Onboarding abgeschlossen",
+            "Erststart abgeschlossen",
             "Der Erststart wurde erfolgreich abgeschlossen. Das Dashboard kann jetzt regulär genutzt werden.",
             parent=self._window,
         )
@@ -356,7 +359,7 @@ class OnboardingController:
 
     def _abbrechen(self) -> None:
         """Schließt den Wizard ohne Abschlussflag und markiert den Zustand klar."""
-        self._setze_status("Onboarding abgebrochen: Dashboard bleibt im eingeschränkten Erststartmodus.")
+        self._setze_status("Erststart abgebrochen: Startübersicht bleibt im eingeschränkten Erststartmodus.")
         if self._window:
             self._window.destroy()
 
@@ -406,7 +409,7 @@ class SystemManagerGUI:
 
     def _baue_dashboard(self) -> None:
         """Erzeugt die Startseite mit klaren Modul-Cards inklusive Statusanzeige."""
-        dashboard = ttk.LabelFrame(self.shell.content_frame, text="Dashboard", style="Section.TLabelframe")
+        dashboard = ttk.LabelFrame(self.shell.content_frame, text="Startübersicht", style="Section.TLabelframe")
         dashboard.pack(fill="x", pady=(0, LAYOUT.padding_block))
 
         ttk.Label(
@@ -489,7 +492,7 @@ class SystemManagerGUI:
             anchor="w", pady=(6, 10)
         )
 
-        status_var = tk.StringVar(value="Status: unbekannt")
+        status_var = tk.StringVar(value=f"{STATUS_PREFIX} unbekannt")
         self._karten_status[status_key] = status_var
         ttk.Label(card, textvariable=status_var, style="Card.TLabel").pack(anchor="w", pady=(0, 10))
 
@@ -572,7 +575,7 @@ class SystemManagerGUI:
             status_texte["dokumentation"] = "Dokumentation vorhanden"
 
         for key, var in self._karten_status.items():
-            var.set(f"Status: {status_texte.get(key, 'unbekannt')}")
+            var.set(f"{STATUS_PREFIX} {status_texte.get(key, 'unbekannt')}")
 
         self._aktualisiere_installationskarte(installationspruefung.installiert)
 
@@ -582,7 +585,8 @@ class SystemManagerGUI:
         Bei bestehender Installation wird die Aktion klar als Prüf-/Aktualisierungspfad
         gekennzeichnet, damit keine unbeabsichtigte Vollinstallation gestartet wird.
         """
-        installations_button = self._karten_buttons.get("installation")
+        karten_buttons = getattr(self, "_karten_buttons", {})
+        installations_button = karten_buttons.get("installation")
         if installations_button is None:
             return
 

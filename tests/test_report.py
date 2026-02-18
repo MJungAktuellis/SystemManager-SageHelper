@@ -39,7 +39,7 @@ class TestReport(unittest.TestCase):
         self.assertIn("## Serverliste", md)
         self.assertIn("## Detailblöcke je Server", md)
         self.assertIn("## Server: srv-app-01", md)
-        self.assertIn("3389 (RDP): ✅ OK: offen", md)
+        self.assertIn("3389 (RDP): ✅ Erfolg: offen", md)
         self.assertIn("CPU (logische Kerne): 8", md)
         self.assertIn("Sage-Version: Sage 100 9.0", md)
         self.assertIn("Lauf-ID: lauf-20260101-103000-abcd1234", md)
@@ -60,7 +60,7 @@ class TestReport(unittest.TestCase):
 
         self.assertIn("- Berichtstyp: Kurzbericht für Loop", md)
         self.assertNotIn("## Detailblöcke je Server", md)
-        self.assertIn("## Maßnahmen/Offene Punkte", md)
+        self.assertIn("## Maßnahmen und offene Punkte", md)
         self.assertIn("Port 1433 (MSSQL)", md)
 
 
