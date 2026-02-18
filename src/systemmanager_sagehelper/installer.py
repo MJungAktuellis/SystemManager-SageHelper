@@ -27,8 +27,11 @@ STANDARD_REIHENFOLGE = [
     "python",
     "pip_venv",
     "abhaengigkeiten",
+    "laufzeitordner",
     "tool_dateien",
 ]
+
+STANDARD_LAUFZEITORDNER = ("logs", "docs", "config")
 
 
 @dataclass(frozen=True)
@@ -488,6 +491,41 @@ def installiere_python_pakete(repo_root: Path, python_executable: str | None = N
     )
 
 
+def initialisiere_laufzeitordner(
+    repo_root: Path,
+    ordnernamen: Sequence[str] = STANDARD_LAUFZEITORDNER,
+) -> list[Path]:
+    """Legt die benötigten Laufzeitordner an und liefert deren Pfade zurück."""
+    angelegte_ordner: list[Path] = []
+    for ordnername in ordnernamen:
+        # Laufzeitordner werden idempotent erstellt, damit Wiederholungen stabil bleiben.
+        ordnerpfad = repo_root / ordnername
+        ordnerpfad.mkdir(parents=True, exist_ok=True)
+        angelegte_ordner.append(ordnerpfad)
+    return angelegte_ordner
+
+
+def verifiziere_laufzeitordner(
+    repo_root: Path,
+    ordnernamen: Sequence[str] = STANDARD_LAUFZEITORDNER,
+) -> tuple[bool, str]:
+    """Prüft Existenz und Schreibrechte der Laufzeitordner."""
+    fehler: list[str] = []
+
+    for ordnername in ordnernamen:
+        ordnerpfad = repo_root / ordnername
+        if not ordnerpfad.exists() or not ordnerpfad.is_dir():
+            fehler.append(f"{ordnername}: fehlt")
+            continue
+        if not os.access(ordnerpfad, os.W_OK):
+            fehler.append(f"{ordnername}: nicht beschreibbar")
+
+    if fehler:
+        return False, f"Laufzeitordner unvollständig/gesperrt ({'; '.join(fehler)})."
+
+    return True, "Laufzeitordner vorhanden und beschreibbar (logs, docs, config)."
+
+
 def richte_tool_dateien_und_launcher_ein(repo_root: Path) -> str:
     """Erstellt separate Starter für GUI und CLI inkl. Kompatibilitäts-Wrapper."""
     script_ordner = repo_root / "scripts"
@@ -776,6 +814,11 @@ def erstelle_standard_komponenten(repo_root: Path) -> dict[str, InstallationsKom
         installiere_python_pakete(repo_root)
         return "Python-Abhängigkeiten aus requirements.txt verarbeitet."
 
+    def install_laufzeitordner() -> str:
+        ordner = initialisiere_laufzeitordner(repo_root)
+        # Die Rückmeldung bleibt kompakt, enthält aber alle relevanten Ordnernamen.
+        return "Laufzeitordner initialisiert: " + ", ".join(pfad.name for pfad in ordner)
+
     komponenten = {
         "voraussetzungen": InstallationsKomponente(
             id="voraussetzungen",
@@ -808,11 +851,19 @@ def erstelle_standard_komponenten(repo_root: Path) -> dict[str, InstallationsKom
             install_fn=install_abhaengigkeiten,
             verify_fn=lambda: (True, "Abhängigkeiten wurden installiert (oder waren nicht vorhanden)."),
         ),
+        "laufzeitordner": InstallationsKomponente(
+            id="laufzeitordner",
+            name="Laufzeitordner initialisieren",
+            default_aktiv=True,
+            abhaengigkeiten=("abhaengigkeiten",),
+            install_fn=install_laufzeitordner,
+            verify_fn=lambda: verifiziere_laufzeitordner(repo_root),
+        ),
         "tool_dateien": InstallationsKomponente(
             id="tool_dateien",
             name="Tool-Dateien/Launcher einrichten",
             default_aktiv=True,
-            abhaengigkeiten=("abhaengigkeiten",),
+            abhaengigkeiten=("laufzeitordner",),
             install_fn=lambda: richte_tool_dateien_und_launcher_ein(repo_root),
             verify_fn=lambda: (
                 (repo_root / "scripts" / "start_systemmanager_gui.bat").exists()

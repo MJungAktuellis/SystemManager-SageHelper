@@ -212,6 +212,17 @@ class TestInstaller(unittest.TestCase):
             self.assertIn("python -m systemmanager_sagehelper %*", cli_launcher.read_text(encoding="utf-8"))
             self.assertIn("start_systemmanager.bat gui", kompat_launcher.read_text(encoding="utf-8"))
 
+    def test_initialisiere_laufzeitordner_legt_standardordner_an_und_verifiziert_schreibbarkeit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_root = Path(tmp_dir)
+
+            angelegte_ordner = installer.initialisiere_laufzeitordner(repo_root)
+            erfolgreich, nachricht = installer.verifiziere_laufzeitordner(repo_root)
+
+        self.assertEqual({"logs", "docs", "config"}, {pfad.name for pfad in angelegte_ordner})
+        self.assertTrue(erfolgreich)
+        self.assertIn("vorhanden und beschreibbar", nachricht)
+
 
 if __name__ == "__main__":
     unittest.main()
