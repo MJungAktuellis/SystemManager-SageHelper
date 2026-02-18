@@ -106,6 +106,25 @@ def _normalisiere_recht(recht: str) -> str:
     return mapping.get(wert, wert)
 
 
+def _normalisiere_principal(principal: str) -> str:
+    """Normalisiert Principal-Namen für robuste Vergleiche über Lokalisierungen.
+
+    Hintergrund: ``net share`` kann je nach Systemsprache unterschiedliche Namen
+    für die gleiche Gruppe liefern (z. B. ``Everyone``/``Jeder``). Für den
+    Soll/Ist-Vergleich wird daher auf ein kanonisches Alias abgebildet.
+    """
+    bereinigt = principal.strip().lower()
+    alias_mapping = {
+        "everyone": "everyone",
+        "jeder": "everyone",
+    }
+
+    # Domänen-/Maschinenpräfixe ausblenden, damit auch "BUILTIN\\Users" oder
+    # "DOMAIN\\Jeder" verlässlich erkannt werden.
+    kurzname = bereinigt.split("\\")[-1]
+    return alias_mapping.get(kurzname, kurzname)
+
+
 def _rechte_level(recht: str) -> int:
     """Liefert ein ordinales Rechteniveau für Vergleichslogik."""
     return {"READ": 1, "CHANGE": 2, "FULL": 3}.get(_normalisiere_recht(recht), 0)
@@ -186,8 +205,12 @@ def _run_share_befehl(befehl: list[str], aktion: str) -> subprocess.CompletedPro
 def _hat_erforderliche_rechte(ist: FreigabeIstZustand, principal_kandidaten: list[str], mindest_recht: str) -> bool:
     """Prüft, ob ein zulässiger Principal bereits ausreichende Rechte besitzt."""
     erforderliches_level = _rechte_level(mindest_recht)
-    for principal in principal_kandidaten:
-        for recht in ist.rechte.get(principal, set()):
+    normalisierte_kandidaten = {_normalisiere_principal(principal) for principal in principal_kandidaten}
+
+    for principal, rechte in ist.rechte.items():
+        if _normalisiere_principal(principal) not in normalisierte_kandidaten:
+            continue
+        for recht in rechte:
             if _rechte_level(recht) >= erforderliches_level:
                 return True
     return False
@@ -196,7 +219,7 @@ def _hat_erforderliche_rechte(ist: FreigabeIstZustand, principal_kandidaten: lis
 def _formatiere_diff(soll: SollFreigabe, ist: FreigabeIstZustand, aktion: str, begruendung: str) -> str:
     """Erzeugt eine menschenlesbare Diff-Zeile für CLI/GUI-Bestätigung."""
     rechte_ist = ", ".join(f"{p}:{'/'.join(sorted(r))}" for p, r in sorted(ist.rechte.items())) or "(keine)"
-    rechte_soll = f"<Principal-Kandidat>:{_normalisiere_recht(soll.rechte)}"
+    rechte_soll = f"Everyone/Jeder:{_normalisiere_recht(soll.rechte)}"
     ist_pfad = ist.pfad or "(nicht gesetzt)"
     return (
         f"[{aktion.upper()}] {soll.name}\n"
@@ -209,7 +232,7 @@ def _formatiere_diff(soll: SollFreigabe, ist: FreigabeIstZustand, aktion: str, b
 def plane_freigabeaenderungen(basis_pfad: str, principal_kandidaten: list[str] | None = None) -> list[FreigabeAenderung]:
     """Plant notwendige Share-Anpassungen anhand eines Ist/Soll-Vergleichs."""
     soll_freigaben = [
-        SollFreigabe(ordner=basis_pfad, name="SystemAG$", rechte="READ"),
+        SollFreigabe(ordner=basis_pfad, name="SystemAG$", rechte="CHANGE"),
         SollFreigabe(ordner=f"{basis_pfad}/AddinsOL", name="AddinsOL$", rechte="CHANGE"),
         SollFreigabe(ordner=f"{basis_pfad}/LiveupdateOL", name="LiveupdateOL$", rechte="CHANGE"),
     ]
@@ -312,7 +335,10 @@ def _fuehre_aenderung_aus(aenderung: FreigabeAenderung, principal_kandidaten: li
 
         if ergebnis.returncode == 0:
             ist_nachher = _ermittle_ist_zustand(soll.name)
-            meldung = f"Freigabe {aenderung.aktion} erfolgreich: {soll.name} -> {principal} ({soll.rechte})"
+            meldung = (
+                f"Freigabe {aenderung.aktion} erfolgreich: {soll.name} -> "
+                f"{principal} mit Recht {_normalisiere_recht(soll.rechte)}"
+            )
             logger.info(
                 "%s | vorher=%s | nachher=%s",
                 meldung,
