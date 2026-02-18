@@ -387,6 +387,7 @@ class SystemManagerGUI:
         )
 
         self._karten_status: dict[str, tk.StringVar] = {}
+        self._karten_buttons: dict[str, ttk.Button] = {}
         self._baue_dashboard()
         self._onboarding_controller = OnboardingController(self)
         self._pruefe_onboarding_guard()
@@ -492,9 +493,16 @@ class SystemManagerGUI:
         self._karten_status[status_key] = status_var
         ttk.Label(card, textvariable=status_var, style="Card.TLabel").pack(anchor="w", pady=(0, 10))
 
-        ttk.Button(card, text=button_text, style="Primary.TButton", width=LAYOUT.button_breite, command=command).pack(
-            anchor="w"
+        # Der Button wird je nach Installationszustand dynamisch umbenannt bzw. deaktiviert.
+        primar_button = ttk.Button(
+            card,
+            text=button_text,
+            style="Primary.TButton",
+            width=LAYOUT.button_breite,
+            command=command,
         )
+        primar_button.pack(anchor="w")
+        self._karten_buttons[status_key] = primar_button
 
     def _baue_uebersichtsseite(self) -> None:
         """Stellt je Modul Kerninfos und Berichtverweise aus der Persistenz dar."""
@@ -538,10 +546,10 @@ class SystemManagerGUI:
         """Berechnet den Status je Modul für die Dashboard-Cards."""
         module = self.state_store.lade_gesamtzustand().get("modules", {})
         status_texte = {
-            "installation": "Nicht ausgeführt",
-            "serveranalyse": "Keine Analyse gespeichert",
-            "ordnerverwaltung": "Keine Ordnerprüfung gespeichert",
-            "dokumentation": "Keine Dokumentation gespeichert",
+            "installation": "Noch nicht installiert",
+            "serveranalyse": "Noch keine Analyse durchgeführt",
+            "ordnerverwaltung": "Noch keine Ordnerprüfung durchgeführt",
+            "dokumentation": "Noch keine Dokumentation erstellt",
         }
 
         # Primäre Quelle für den Installationsstatus bleibt die technische Installationsprüfung
@@ -551,20 +559,37 @@ class SystemManagerGUI:
         if installationspruefung.installiert:
             version = installer_modul.get("version") or installationspruefung.erkannte_version or ""
             status_texte["installation"] = (
-                f"Bereits konfiguriert ({version})" if version else "Bereits konfiguriert"
+                f"Installiert ({version})" if version else "Installiert"
             )
         elif installer_modul.get("installiert"):
-            status_texte["installation"] = "Teilweise konfiguriert (Marker prüfen)"
+            status_texte["installation"] = "Teilweise installiert (Prüfung erforderlich)"
 
         if module.get("server_analysis", {}).get("letzte_kerninfos"):
-            status_texte["serveranalyse"] = "Ergebnisse vorhanden"
+            status_texte["serveranalyse"] = "Analyseergebnisse vorhanden"
         if module.get("folder_manager", {}).get("letzte_kerninfos"):
-            status_texte["ordnerverwaltung"] = "Ergebnisse vorhanden"
+            status_texte["ordnerverwaltung"] = "Ordnerprüfung abgeschlossen"
         if module.get("doc_generator", {}).get("letzte_kerninfos"):
-            status_texte["dokumentation"] = "Ergebnisse vorhanden"
+            status_texte["dokumentation"] = "Dokumentation vorhanden"
 
         for key, var in self._karten_status.items():
             var.set(f"Status: {status_texte.get(key, 'unbekannt')}")
+
+        self._aktualisiere_installationskarte(installationspruefung.installiert)
+
+    def _aktualisiere_installationskarte(self, installiert: bool) -> None:
+        """Aktualisiert den Primärbutton der Installationskarte abhängig vom Zustand.
+
+        Bei bestehender Installation wird die Aktion klar als Prüf-/Aktualisierungspfad
+        gekennzeichnet, damit keine unbeabsichtigte Vollinstallation gestartet wird.
+        """
+        installations_button = self._karten_buttons.get("installation")
+        if installations_button is None:
+            return
+
+        if installiert:
+            installations_button.configure(text="Installation prüfen/aktualisieren")
+        else:
+            installations_button.configure(text="Installation starten")
 
     def _starte_neuen_lauf(self) -> str:
         """Erzeugt pro Aktion eine neue Lauf-ID für konsistente Korrelation."""
@@ -608,14 +633,29 @@ class SystemManagerGUI:
             self._lade_uebersichtszeilen()
             self._aktualisiere_dashboard_status()
 
-    def installieren(self) -> None:
-        """Öffnet den mehrstufigen Installer als Child-Window innerhalb des Launchers."""
-        if not self.shell.bestaetige_aktion(
-            "Installation bestätigen",
-            "Der grafische Installationsassistent wird geöffnet.",
-        ):
-            self.shell.setze_status("Installation abgebrochen")
-            return
+    def installieren(self, *, bestaetigung_erforderlich: bool = True, expertenmodus: bool = False) -> None:
+        """Öffnet den Installationsassistenten mit Guard gegen unbeabsichtigte Vollinstallationen."""
+        installationspruefung = pruefe_installationszustand()
+
+        if installationspruefung.installiert and not expertenmodus:
+            if bestaetigung_erforderlich and not self.shell.bestaetige_aktion(
+                "Installation prüfen oder aktualisieren",
+                "Das System ist bereits installiert. Es wird keine Vollinstallation gestartet.",
+            ):
+                self.shell.setze_status("Prüfung/Aktualisierung abgebrochen")
+                return
+            self.shell.setze_status("Installationsprüfung/Aktualisierung wird geöffnet")
+        else:
+            if bestaetigung_erforderlich and not self.shell.bestaetige_aktion(
+                "Installation bestätigen",
+                "Der grafische Installationsassistent wird geöffnet.",
+            ):
+                self.shell.setze_status("Installation abgebrochen")
+                return
+
+            if installationspruefung.installiert and expertenmodus:
+                self.shell.logge_meldung("Vollinstallation im Expertenmodus angefordert.")
+            self.shell.setze_status("Installationsassistent wird geöffnet")
 
         lauf_id = self._starte_neuen_lauf()
         self.shell.setze_status("Installationsassistent geöffnet")
@@ -647,24 +687,21 @@ class SystemManagerGUI:
         self._aktualisiere_dashboard_status()
 
     def _installation_erforderlich_dialog(self, modulname: str) -> bool:
-        """Blockiert Modulstarts ohne valide Installation und bietet direkt die Aktion an."""
+        """Blockiert Modulstarts ohne valide Installation und nutzt genau einen Bestätigungsdialog."""
         pruefung = pruefe_installationszustand()
         if pruefung.installiert:
             return True
 
         gruende = "\n- " + "\n- ".join(pruefung.gruende) if pruefung.gruende else ""
-        self.shell.zeige_warnung(
-            "Installation erforderlich",
-            f"{modulname} ist noch nicht freigeschaltet.{gruende}",
-            "Wählen Sie 'Ja', um jetzt den Installationsworkflow zu starten.",
-        )
         if messagebox.askyesno(
             "Installation starten",
-            f"{modulname} kann erst nach erfolgreicher Installation genutzt werden.\n\n"
-            "Jetzt Installation starten?",
+            f"{modulname} ist noch nicht freigeschaltet.{gruende}\n\n"
+            "Jetzt den Installationsassistenten öffnen?",
             parent=self.master,
         ):
-            self.installieren()
+            self.installieren(bestaetigung_erforderlich=False)
+        else:
+            self.shell.setze_status(f"{modulname}: Installation vor Nutzung erforderlich")
         return False
 
     def serveranalyse(self) -> None:
