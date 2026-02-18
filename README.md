@@ -120,8 +120,27 @@ Teile bei Supportanfragen immer diese reproduzierbaren Artefakte aus `logs/`:
 3. Der Launcher startet die kanonische Python-Orchestrierung (`scripts/install.py --mode auto`).
 4. Im Modus `auto` wird zuerst GUI versucht und bei Fehlern automatisch auf CLI zurückgefallen.
 5. Im One-Click-/GUI-Flow ist die Option **Desktop-Verknüpfung** standardmäßig aktiviert und wird im Abschluss inkl. Status ausgewiesen.
-6. Der Launcher öffnet bei Doppelklick automatisch ein persistentes CMD-Fenster, damit Meldungen nicht sofort verschwinden.
+6. Standardmäßig schließt sich das Fenster nach erfolgreicher Installation automatisch (keine unnötig offene Konsole).
 7. Bei Fehlern bitte die Dateien `logs/install_launcher.log`, `logs/install_assistant_ps.log`, `logs/install_engine.log` und `logs/install_report.md` teilen.
+
+#### CMD-Launcher: Konsole/Debug steuern
+
+Der Launcher `Install-SystemManager-SageHelper.cmd` unterstützt folgende Schalter:
+
+- `--persist-console`: Öffnet den Installer in einer persistenten `cmd /k`-Konsole (Support-/Debug-Modus).
+- `--pause`: Erzwingt ein `pause` am Ende, auch bei erfolgreichem Lauf.
+- `--nopause`: Unterdrückt das `pause` (außer wenn `--pause` explizit gesetzt ist).
+
+Standardlogik ohne Schalter:
+
+- **Erfolg (`Exit-Code 0`)**: Konsole schließt automatisch.
+- **Fehler (`Exit-Code != 0`)**: Konsole pausiert, damit Fehlermeldungen sichtbar bleiben.
+
+Beispiel für Supportfälle:
+
+```cmd
+Install-SystemManager-SageHelper.cmd --persist-console --pause
+```
 
 ### Option B: CLI-Installation (optional, plattformübergreifend)
 
