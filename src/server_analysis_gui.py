@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 import re
 import tkinter as tk
-from tkinter import ttk
+from tkinter import simpledialog, ttk
 
 from systemmanager_sagehelper.analyzer import (
     analysiere_mehrere_server,
@@ -203,6 +203,66 @@ class DiscoveryTabellenTreffer:
     nur_reverse_dns: bool = False
 
 
+def _bewerte_vertrauen_als_sterne(vertrauensgrad: float) -> str:
+    """Wandelt den Rohwert (0.0-1.0) in eine 5-Sterne-Skala um."""
+    begrenzt = max(0.0, min(1.0, vertrauensgrad))
+    aktive_sterne = round(begrenzt * 5)
+    return "★" * aktive_sterne + "☆" * (5 - aktive_sterne)
+
+
+def _formatiere_vertrauensanzeige(vertrauensgrad: float, *, zeige_rohwert: bool) -> str:
+    """Erzeugt den Anzeige-Text für die Vertrauensspalte."""
+    sterne = _bewerte_vertrauen_als_sterne(vertrauensgrad)
+    if not zeige_rohwert:
+        return sterne
+    return f"{sterne} ({vertrauensgrad:.2f})"
+
+
+_VERTRAUENS_TOOLTIP_TEXT = (
+    "Bewertungslogik des Vertrauensgrads:\n"
+    "• ICMP-Erreichbarkeit: +0,45\n"
+    "• TCP-Anteil: +0,10 je erkanntem Dienst (max. +0,40)\n"
+    "• Reverse-DNS-Anteil: +0,10\n"
+    "• AD-Anteil (LDAP-Hinweis): +0,05\n"
+    "• Gesamtwert wird auf 1,00 begrenzt"
+)
+
+
+class _TooltipHelfer:
+    """Einfacher Tooltip-Helfer für Widgets ohne eingebauten Tooltip-Support."""
+
+    def __init__(self, parent: tk.Misc) -> None:
+        self._parent = parent
+        self._tooltip: tk.Toplevel | None = None
+        self._label: ttk.Label | None = None
+
+    def zeige(self, *, x: int, y: int, text: str) -> None:
+        """Blendet den Tooltip an den übergebenen Bildschirmkoordinaten ein."""
+        if self._tooltip is None:
+            self._tooltip = tk.Toplevel(self._parent)
+            self._tooltip.wm_overrideredirect(True)
+            self._label = ttk.Label(
+                self._tooltip,
+                text=text,
+                justify="left",
+                relief="solid",
+                borderwidth=1,
+                padding=(8, 6),
+            )
+            self._label.pack()
+        elif self._label is not None:
+            self._label.configure(text=text)
+
+        # Leichter Versatz, damit der Cursor den Tooltip nicht direkt überdeckt.
+        self._tooltip.wm_geometry(f"+{x + 14}+{y + 16}")
+        self._tooltip.deiconify()
+
+    def ausblenden(self) -> None:
+        """Versteckt den Tooltip, falls er aktuell sichtbar ist."""
+        if self._tooltip is not None:
+            self._tooltip.withdraw()
+
+
 
 
 def _filter_discovery_treffer(
@@ -253,6 +313,8 @@ class DiscoveryTrefferDialog:
         self.filter_var.trace_add("write", lambda *_: self._render_treffer())
         # Standardfilter: Fokus auf tatsächlich erreichbare Systeme.
         self.nur_erreichbare_var = tk.BooleanVar(value=True)
+        self.zeige_rohwert_var = tk.BooleanVar(value=False)
+        self._tooltip_helfer = _TooltipHelfer(self.window)
 
         kopf = ttk.Frame(self.window)
         kopf.pack(fill="x", padx=8, pady=8)
@@ -264,6 +326,17 @@ class DiscoveryTrefferDialog:
             variable=self.nur_erreichbare_var,
             command=self._render_treffer,
         ).pack(side="left", padx=(8, 4))
+        ttk.Checkbutton(
+            kopf,
+            text="Rohwert zusätzlich anzeigen",
+            variable=self.zeige_rohwert_var,
+            command=self._render_treffer,
+        ).pack(side="left", padx=(4, 4))
+        hinweis_label = ttk.Label(kopf, text="ℹ Bewertungslogik", cursor="hand2")
+        hinweis_label.pack(side="left", padx=(6, 4))
+        hinweis_label.bind("<Enter>", self._zeige_vertrauenstooltip)
+        hinweis_label.bind("<Leave>", lambda *_: self._tooltip_helfer.ausblenden())
+        hinweis_label.bind("<Motion>", self._bewege_vertrauenstooltip)
         ttk.Button(kopf, text="Alle auswählen", command=self._waehle_alle).pack(side="left", padx=4)
         ttk.Button(kopf, text="Auswahl übernehmen", command=self._uebernehmen).pack(side="right", padx=4)
 
@@ -284,7 +357,7 @@ class DiscoveryTrefferDialog:
         self.tree.column("ip", width=150)
         self.tree.column("erreichbar", width=90, anchor="center")
         self.tree.column("dienste", width=260)
-        self.tree.column("vertrauen", width=100, anchor="e")
+        self.tree.column("vertrauen", width=150, anchor="center")
         self.tree.bind("<Double-1>", self._bearbeite_hostname)
 
         self._id_zu_treffer: dict[str, DiscoveryTabellenTreffer] = {}
@@ -309,10 +382,22 @@ class DiscoveryTrefferDialog:
                     treffer.ip_adresse,
                     "ja" if treffer.erreichbar else "nein",
                     treffer.dienste,
-                    f"{treffer.vertrauensgrad:.2f}",
+                    _formatiere_vertrauensanzeige(
+                        treffer.vertrauensgrad,
+                        zeige_rohwert=self.zeige_rohwert_var.get(),
+                    ),
                 ),
             )
             self._id_zu_treffer[item_id] = treffer
+
+
+    def _zeige_vertrauenstooltip(self, event: tk.Event[tk.Misc]) -> None:
+        """Zeigt den Tooltip zur Vertrauensbewertung an."""
+        self._tooltip_helfer.zeige(x=event.x_root, y=event.y_root, text=_VERTRAUENS_TOOLTIP_TEXT)
+
+    def _bewege_vertrauenstooltip(self, event: tk.Event[tk.Misc]) -> None:
+        """Aktualisiert die Tooltip-Position während der Mausbewegung."""
+        self._tooltip_helfer.zeige(x=event.x_root, y=event.y_root, text=_VERTRAUENS_TOOLTIP_TEXT)
 
     def _waehle_alle(self) -> None:
         self.tree.selection_set(self.tree.get_children(""))
