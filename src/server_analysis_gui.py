@@ -22,6 +22,11 @@ from systemmanager_sagehelper.models import AnalyseErgebnis, DiscoveryErgebnis, 
 from systemmanager_sagehelper.config import STANDARD_PORTS
 from systemmanager_sagehelper.report import render_markdown
 from systemmanager_sagehelper.targeting import normalisiere_servernamen, rollen_aus_bool_flags
+from systemmanager_sagehelper.texte import (
+    BERICHT_MANAGEMENT_ZUSAMMENFASSUNG,
+    BUTTON_ANALYSE_STARTEN,
+    BUTTON_NETZWERKERKENNUNG_STARTEN,
+)
 
 
 @dataclass
@@ -86,7 +91,7 @@ def _baue_serverziele(zeilen: list[ServerTabellenZeile]) -> list[ServerZiel]:
 
 def _rollenquelle_fuer_zeile(zeile: ServerTabellenZeile) -> str:
     """Ermittelt die Herkunft der finalen Rollendeklaration für einen Server."""
-    if zeile.quelle.lower() == "discovery" and not zeile.manuell_ueberschrieben:
+    if zeile.quelle.lower() in {"discovery", "netzwerkerkennung"} and not zeile.manuell_ueberschrieben:
         return "automatisch erkannt"
     if zeile.manuell_ueberschrieben and zeile.auto_rolle:
         return "nachträglich geändert"
@@ -99,7 +104,8 @@ def _deklarationszusammenfassung(ziele: list[ServerZiel], zeilen: list[ServerTab
     zusammenfassung = ["So wurden die Server deklariert:"]
     for index, ziel in enumerate(ziele, start=1):
         rollen = ", ".join(ziel.rollen) if ziel.rollen else "keine Rolle gesetzt"
-        quelle = quelle_pro_server.get(normalisiere_servernamen(ziel.name), "unbekannt")
+        quelle_roh = quelle_pro_server.get(normalisiere_servernamen(ziel.name), "unbekannt")
+        quelle = "Netzwerkerkennung" if quelle_roh.lower() == "discovery" else quelle_roh
         zusammenfassung.append(
             f"{index}. {ziel.name} | Rollen: {rollen} | Quelle: {quelle} | Rollenquelle: {ziel.rollenquelle or 'unbekannt'}"
         )
@@ -142,12 +148,12 @@ def _baue_executive_summary(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
 
 
 def _baue_report_verweistext(exportpfad: str | None, exportzeitpunkt: str | None, lauf_id: str | None) -> str:
-    """Erzeugt einen klaren Verweistext für die GUI nach Report-Export."""
+    """Erzeugt einen klaren Verweistext für die GUI nach Bericht-Export."""
     if not exportpfad:
-        return "Kein Analysebericht exportiert."
+        return "Kein Analysebericht erstellt."
     zeit = exportzeitpunkt or "Zeitpunkt unbekannt"
     lauf = lauf_id or "Lauf-ID unbekannt"
-    return f"Letzter Analysebericht: {exportpfad} | Export: {zeit} | Lauf-ID: {lauf}"
+    return f"Letzter Analysebericht: {exportpfad} | Exportzeit: {zeit} | Lauf-ID: {lauf}"
 
 
 def _schreibe_analyse_report(ergebnisse: list[AnalyseErgebnis], ausgabe_pfad: str) -> tuple[str, str]:
@@ -478,7 +484,7 @@ class MehrserverAnalyseGUI:
         self.shell = GuiShell(
             master,
             titel="SystemManager-SageHelper – Mehrserveranalyse",
-            untertitel="Erfassung, Discovery, Rollenpflege und Analyse auf mehreren Zielservern",
+            untertitel="Erfassung, Netzwerkerkennung, Rollenpflege und Analyse auf mehreren Zielservern",
             on_save=self.speichern,
             on_back=self._zurueck,
             on_exit=self.master.destroy,
@@ -568,7 +574,7 @@ class MehrserverAnalyseGUI:
             pady=(0, 6),
         )
 
-        ttk.Label(form_frame, text="Letzte Discovery-Range:").grid(row=4, column=0, sticky="w", padx=8, pady=(2, 8))
+        ttk.Label(form_frame, text="Letzter Netzwerkerkennungs-Bereich:").grid(row=4, column=0, sticky="w", padx=8, pady=(2, 8))
         ttk.Entry(form_frame, textvariable=self._letzte_discovery_range, width=30).grid(row=4, column=1, padx=6, sticky="w")
 
         ttk.Label(form_frame, text="Analyse-Ausgabepfad:").grid(row=4, column=2, sticky="w", padx=8)
@@ -609,7 +615,7 @@ class MehrserverAnalyseGUI:
         action_frame.pack(fill="x", pady=(0, 8))
 
         self.btn_discovery = ttk.Button(
-            action_frame, text="Discovery", style="Secondary.TButton", command=self.discovery_starten
+            action_frame, text=BUTTON_NETZWERKERKENNUNG_STARTEN, style="Secondary.TButton", command=self.discovery_starten
         )
         self.btn_discovery.pack(side="left", padx=4)
         self.btn_loeschen = ttk.Button(
@@ -621,7 +627,7 @@ class MehrserverAnalyseGUI:
         )
         self.btn_loeschen.pack(side="left", padx=4)
         self.btn_analyse = ttk.Button(
-            action_frame, text="Analyse starten", style="Primary.TButton", command=self.analyse_starten, state="disabled"
+            action_frame, text=BUTTON_ANALYSE_STARTEN, style="Primary.TButton", command=self.analyse_starten, state="disabled"
         )
         self.btn_analyse.pack(side="right", padx=4)
 
@@ -629,16 +635,16 @@ class MehrserverAnalyseGUI:
         frame = ttk.LabelFrame(parent, text="Analyseergebnis je Server (Drilldown)", style="Section.TLabelframe")
         frame.pack(fill="both", expand=True)
 
-        summary_frame = ttk.LabelFrame(frame, text="Executive Summary", style="Section.TLabelframe")
+        summary_frame = ttk.LabelFrame(frame, text=BERICHT_MANAGEMENT_ZUSAMMENFASSUNG, style="Section.TLabelframe")
         summary_frame.pack(fill="x", padx=8, pady=(8, 4))
-        self.lbl_executive_summary = ttk.Label(summary_frame, text="Noch keine Analyse ausgeführt.", justify="left")
+        self.lbl_executive_summary = ttk.Label(summary_frame, text="Noch keine Analyse durchgeführt.", justify="left")
         self.lbl_executive_summary.pack(anchor="w", padx=8, pady=(6, 4))
         ttk.Label(summary_frame, textvariable=self._report_verweis_var, style="Subheadline.TLabel").pack(
             anchor="w", padx=8, pady=(0, 6)
         )
 
         self.tree_ergebnisse = ttk.Treeview(frame, columns=("details",), show="tree headings", height=10)
-        self.tree_ergebnisse.heading("#0", text="Server / Kurzstatus")
+        self.tree_ergebnisse.heading("#0", text="Server / Kurzüberblick")
         self.tree_ergebnisse.heading("details", text="Detailansicht")
         self.tree_ergebnisse.column("#0", width=320)
         self.tree_ergebnisse.column("details", width=720)
@@ -791,13 +797,13 @@ class MehrserverAnalyseGUI:
         return basis, startwert, endwert
 
     def discovery_starten(self) -> None:
-        if not self.shell.bestaetige_aktion("Discovery bestätigen", "Die Netzwerk-Discovery wird gestartet."):
+        if not self.shell.bestaetige_aktion("Netzwerkerkennung bestätigen", "Die Netzwerkerkennung wird gestartet."):
             return
 
         validierte_eingabe = self._validiere_discovery_eingaben()
         if not validierte_eingabe:
             self.shell.zeige_warnung(
-                "Ungültige Discovery-Eingaben",
+                "Ungültige Eingaben zur Netzwerkerkennung",
                 "Bitte korrigieren Sie die markierten Felder.",
                 "Nutzen Sie das Beispiel unter den Feldern als Eingabehilfe.",
             )
@@ -805,7 +811,7 @@ class MehrserverAnalyseGUI:
 
         basis, startwert, endwert = validierte_eingabe
         self._letzte_discovery_range.set(f"{basis}.{startwert}-{endwert}")
-        self.shell.setze_status("Discovery läuft")
+        self.shell.setze_status("Netzwerkerkennung läuft")
         self.master.update_idletasks()
 
         try:
@@ -816,9 +822,9 @@ class MehrserverAnalyseGUI:
                 konfiguration=DiscoveryKonfiguration(nutze_reverse_dns=True, nutze_ad_ldap=True),
             )
         except Exception as exc:  # noqa: BLE001 - robuste GUI-Fehlerbehandlung.
-            logger.exception("Discovery fehlgeschlagen")
-            self.shell.zeige_fehler("Discovery-Fehler", f"Discovery konnte nicht ausgeführt werden: {exc}", "Prüfen Sie Netzwerkbereich und Berechtigungen.")
-            self.shell.setze_status("Discovery fehlgeschlagen")
+            logger.exception("Netzwerkerkennung fehlgeschlagen")
+            self.shell.zeige_fehler("Fehler bei der Netzwerkerkennung", f"Die Netzwerkerkennung konnte nicht ausgeführt werden: {exc}", "Prüfen Sie Netzwerkbereich und Berechtigungen.")
+            self.shell.setze_status("Netzwerkerkennung fehlgeschlagen")
             return
 
         dialog = DiscoveryTrefferDialog(self.master, treffer)
@@ -844,11 +850,11 @@ class MehrserverAnalyseGUI:
                 hinzugefuegt += 1
 
         self.shell.zeige_erfolg(
-            "Discovery abgeschlossen",
+            "Netzwerkerkennung abgeschlossen",
             f"Gefundene Treffer: {len(treffer)}\nAusgewählt: {len(dialog.ausgewaehlt)}\nNeu übernommen: {hinzugefuegt}",
             "Prüfen Sie die Serverliste und passen Sie Rollen bei Bedarf an.",
         )
-        self.shell.setze_status("Discovery abgeschlossen")
+        self.shell.setze_status("Netzwerkerkennung abgeschlossen")
         self._aktualisiere_button_zustaende()
 
     def eintrag_loeschen(self) -> None:
@@ -934,12 +940,12 @@ class MehrserverAnalyseGUI:
             self._report_verweis_var.set(
                 _baue_report_verweistext(self._letzter_export_pfad, self._letzter_exportzeitpunkt, self._letzte_export_lauf_id)
             )
-            self.shell.logge_meldung(f"Analysebericht erzeugt: {export_pfad}")
+            self.shell.logge_meldung(f"Analysebericht erstellt: {export_pfad}")
         except Exception as exc:  # noqa: BLE001 - Analyseergebnis bleibt nutzbar, auch wenn Export fehlschlägt.
             logger.exception("Analysebericht konnte nicht geschrieben werden")
             self.shell.zeige_warnung(
                 "Exportwarnung",
-                f"Analyse war erfolgreich, aber der Report konnte nicht geschrieben werden: {exc}",
+                f"Analyse war erfolgreich, aber der Bericht konnte nicht geschrieben werden: {exc}",
                 "Prüfen Sie den Ausgabepfad und Dateiberechtigungen.",
             )
 
@@ -957,7 +963,7 @@ class MehrserverAnalyseGUI:
         return [
             f"Analysierte Server: {len(self._letzte_ergebnisse)}",
             f"Beispiele: {servernamen}",
-            f"Discovery-Range: {self._letzte_discovery_range.get() or 'nicht gesetzt'}",
+            f"Netzwerkerkennungs-Bereich: {self._letzte_discovery_range.get() or 'nicht gesetzt'}",
         ]
 
     def speichern(self) -> None:

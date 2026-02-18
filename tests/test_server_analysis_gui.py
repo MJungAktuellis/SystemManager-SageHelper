@@ -45,7 +45,7 @@ def test_deklarationszusammenfassung_enthaelt_quelle_und_rollen() -> None:
 
     assert "So wurden die Server deklariert:" in zusammenfassung
     assert "srv-app-01 | Rollen: APP | Quelle: manuell | Rollenquelle: manuell gesetzt" in zusammenfassung
-    assert "srv-sql-01 | Rollen: SQL | Quelle: Discovery | Rollenquelle: automatisch erkannt" in zusammenfassung
+    assert "srv-sql-01 | Rollen: SQL | Quelle: Netzwerkerkennung | Rollenquelle: automatisch erkannt" in zusammenfassung
 
 
 def test_kurzstatus_und_detailzeilen_rendert_serverbloecke() -> None:
@@ -135,8 +135,8 @@ def test_executive_summary_aggregiert_rollen_ports_und_warnungen() -> None:
     assert any("Warnungen/Hinweise gesamt: 2" in zeile for zeile in summary)
 
 
-def test_analyse_starten_erzeugt_report_und_zeigt_verweis(monkeypatch) -> None:
-    """Nach erfolgreicher Analyse soll ein Report erzeugt und als Verweis sichtbar werden."""
+def test_analyse_starten_erzeugt_bericht_und_zeigt_verweis(monkeypatch) -> None:
+    """Nach erfolgreicher Analyse soll ein Bericht erzeugt und als Verweis sichtbar werden."""
     from server_analysis_gui import MehrserverAnalyseGUI
 
     class _FakeVar:
@@ -236,7 +236,7 @@ def test_analyse_starten_erzeugt_report_und_zeigt_verweis(monkeypatch) -> None:
     assert gui._report_verweis_var.get().startswith("Letzter Analysebericht: docs/test_report.md")
     assert "Lauf-ID: lauf-001" in gui._report_verweis_var.get()
     assert gui.shell.erfolg_anzeigen is True
-    assert any("Analysebericht erzeugt: docs/test_report.md" in eintrag for eintrag in gui.shell.logs)
+    assert any("Analysebericht erstellt: docs/test_report.md" in eintrag for eintrag in gui.shell.logs)
 
 
 def test_filter_discovery_treffer_mit_standardfilter_auf_erreichbarkeit() -> None:

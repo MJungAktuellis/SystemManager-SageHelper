@@ -54,12 +54,12 @@ def test_launcher_guard_zeigt_hinweis_und_startet_installation(monkeypatch) -> N
     gui = object.__new__(gui_manager.SystemManagerGUI)
     gui.master = object()
     gui.installieren = Mock()
-    gui.shell = SimpleNamespace(zeige_warnung=Mock())
+    gui.shell = SimpleNamespace(zeige_warnung=Mock(), setze_status=Mock())
 
     erlaubt = gui._installation_erforderlich_dialog("Serveranalyse")
 
     assert erlaubt is False
-    gui.shell.zeige_warnung.assert_called_once()
+    gui.shell.zeige_warnung.assert_not_called()
     gui.installieren.assert_called_once()
 
 
@@ -222,7 +222,7 @@ def test_dashboard_installationsstatus_nutzt_marker_pruefung_mit_versionsinfo(mo
 
     gui._aktualisiere_dashboard_status()
 
-    assert gui._karten_status["installation"].value == "Status: Bereits konfiguriert (2.0.0)"
+    assert gui._karten_status["installation"].value == "Status: Installiert (2.0.0)"
 
 
 def test_dashboard_installationsstatus_zeigt_teilweise_konfiguration_ohne_marker(monkeypatch) -> None:
@@ -253,7 +253,7 @@ def test_dashboard_installationsstatus_zeigt_teilweise_konfiguration_ohne_marker
 
     gui._aktualisiere_dashboard_status()
 
-    assert gui._karten_status["installation"].value == "Status: Teilweise konfiguriert (Marker prüfen)"
+    assert gui._karten_status["installation"].value == "Status: Teilweise installiert (Prüfung erforderlich)"
 
 
 def test_onboarding_discovery_parse_gueltiger_bereich() -> None:
@@ -286,5 +286,5 @@ def test_onboarding_discovery_parse_ungueltiges_format() -> None:
         gui_manager.OnboardingController._parse_discovery_eingabe("192.168", "1", "30")
         raise AssertionError("Es hätte eine ValueError ausgelöst werden müssen")
     except ValueError as exc:
-        assert "Ungültiges Discovery-Format" in str(exc)
+        assert "Ungültiges Format für die Netzwerkerkennung" in str(exc)
         assert "192.168.0.1-30" in str(exc)
