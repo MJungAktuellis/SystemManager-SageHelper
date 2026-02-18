@@ -41,6 +41,14 @@ class FolderWizardGUI:
         self._basis_pfad_var = tk.StringVar(value=self._initialer_basis_pfad())
         self._status_var = tk.StringVar(value="Bereit: Basispfad wählen und Diff laden.")
         self._plan: list[FreigabeAenderung] = []
+        self._aktion_laeuft = False
+        self._letzter_lauf_erfolgreich = False
+
+        # Einheitliche Abschlussleiste: "Schließen" wird erst nach erfolgreichem Lauf hervorgehoben.
+        self._schliessen_button: ttk.Button | None = None
+        self._abbrechen_button: ttk.Button | None = None
+
+        self.window.protocol("WM_DELETE_WINDOW", self._beende_assistent)
 
         self._baue_layout()
 
@@ -68,8 +76,19 @@ class FolderWizardGUI:
 
         aktions_rahmen = ttk.Frame(haupt)
         aktions_rahmen.pack(fill="x", pady=(10, 8))
-        ttk.Button(aktions_rahmen, text="2) Soll/Ist-Diff laden", command=self.lade_diff).pack(side="left")
+        ttk.Button(aktions_rahmen, text="2) Prüfung laden", command=self.lade_diff).pack(side="left")
         ttk.Button(aktions_rahmen, text="3) Änderungen anwenden", command=self.wende_aenderungen_an).pack(side="left", padx=(8, 0))
+
+        # Abschlussleiste rechts: klarer Abschluss mit Schließen + Abbrechen.
+        self._abbrechen_button = ttk.Button(aktions_rahmen, text="Abbrechen", command=self._beende_assistent)
+        self._abbrechen_button.pack(side="right")
+        self._schliessen_button = ttk.Button(
+            aktions_rahmen,
+            text="Schließen",
+            command=self._beende_assistent,
+            state="disabled",
+        )
+        self._schliessen_button.pack(side="right", padx=(0, 8))
 
         self._diff_text = tk.Text(haupt, height=16, wrap="word", state="disabled")
         self._diff_text.pack(fill="both", expand=True, pady=(0, 10))
@@ -106,9 +125,17 @@ class FolderWizardGUI:
 
     def wende_aenderungen_an(self) -> None:
         """Bestätigt und führt die geplanten Ordner-/Freigabeänderungen aus."""
+        if self._aktion_laeuft:
+            messagebox.showinfo(
+                "Aktion läuft",
+                "Die Verarbeitung läuft bereits. Bitte warten Sie, bis der Vorgang abgeschlossen ist.",
+                parent=self.window,
+            )
+            return
+
         basis_pfad = self._basis_pfad_var.get().strip()
         if not basis_pfad:
-            messagebox.showwarning("Ungültiger Pfad", "Bitte zuerst einen Basispfad eintragen.", parent=self.window)
+            messagebox.showwarning("Pfad fehlt", "Bitte geben Sie zuerst einen Basispfad an.", parent=self.window)
             return
 
         if not self._plan:
@@ -118,38 +145,87 @@ class FolderWizardGUI:
         bestaetigungstext = "\n".join(e.diff_text for e in geaendert) if geaendert else "Keine Änderungen erforderlich."
         if geaendert and not messagebox.askyesno(
             "Änderungen bestätigen",
-            f"Folgende Änderungen werden ausgeführt:\n\n{bestaetigungstext}",
+            f"Folgende Änderungen werden jetzt ausgeführt:\n\n{bestaetigungstext}",
             parent=self.window,
         ):
-            self._status_var.set("Anwenderabbruch: Keine Änderungen ausgeführt.")
+            self._status_var.set("Abgebrochen: Es wurden keine Änderungen durchgeführt.")
             return
 
-        lauf_id = erstelle_lauf_id()
-        setze_lauf_id(lauf_id)
-        zeitstempel = datetime.now().isoformat(timespec="seconds")
-        fehlende_ordner_vorher = ermittle_fehlende_ordner(Path(basis_pfad))
+        self._setze_aktionsstatus(laeuft=True)
+        try:
+            lauf_id = erstelle_lauf_id()
+            setze_lauf_id(lauf_id)
+            zeitstempel = datetime.now().isoformat(timespec="seconds")
+            fehlende_ordner_vorher = ermittle_fehlende_ordner(Path(basis_pfad))
 
-        ergebnisse = pruefe_und_erstelle_struktur(basis_pfad, bestaetigung=lambda _diff: True)
-        abschlussmeldungen = erstelle_abschlussmeldungen(fehlende_ordner_vorher, ergebnisse)
-        self._abschluss_var.set("\n".join(abschlussmeldungen))
+            ergebnisse = pruefe_und_erstelle_struktur(basis_pfad, bestaetigung=lambda _diff: True)
+            abschlussmeldungen = erstelle_abschlussmeldungen(fehlende_ordner_vorher, ergebnisse)
+            self._abschluss_var.set("\n".join(abschlussmeldungen))
 
-        protokoll = baue_ordnerlauf_protokoll(
-            lauf_id=lauf_id,
-            zeitstempel=zeitstempel,
-            basis_pfad=basis_pfad,
-            plan=self._plan,
-            ergebnisse=ergebnisse,
-            abschlussmeldungen=abschlussmeldungen,
-        )
-        protokoll_pfad = self._speichere_protokoll(protokoll)
-        self._aktualisiere_modulzustand(basis_pfad, protokoll, protokoll_pfad)
+            protokoll = baue_ordnerlauf_protokoll(
+                lauf_id=lauf_id,
+                zeitstempel=zeitstempel,
+                basis_pfad=basis_pfad,
+                plan=self._plan,
+                ergebnisse=ergebnisse,
+                abschlussmeldungen=abschlussmeldungen,
+            )
+            protokoll_pfad = self._speichere_protokoll(protokoll)
+            self._aktualisiere_modulzustand(basis_pfad, protokoll, protokoll_pfad)
 
-        self._status_var.set(f"Ausführung abgeschlossen. Lauf-ID: {lauf_id}")
-        messagebox.showinfo(
-            "Assistent abgeschlossen",
-            f"Ordner/Freigaben wurden verarbeitet.\n\nLauf-ID: {lauf_id}\nProtokoll: {protokoll_pfad}",
-            parent=self.window,
-        )
+            self._letzter_lauf_erfolgreich = True
+            self._setze_schliessen_hervorgehoben()
+            self._status_var.set(f"Fertig: Die Verarbeitung wurde erfolgreich abgeschlossen (Lauf-ID: {lauf_id}).")
+            messagebox.showinfo(
+                "Verarbeitung abgeschlossen",
+                (
+                    "Die Ordner- und Freigabestruktur wurde erfolgreich verarbeitet.\n\n"
+                    f"Lauf-ID: {lauf_id}\n"
+                    f"Protokoll: {protokoll_pfad}\n\n"
+                    "Sie können den Assistenten jetzt über „Schließen“ beenden."
+                ),
+                parent=self.window,
+            )
+        finally:
+            self._setze_aktionsstatus(laeuft=False)
+
+    def _setze_aktionsstatus(self, *, laeuft: bool) -> None:
+        """Steuert den Laufstatus und verhindert Bedienfehler während der Verarbeitung."""
+        self._aktion_laeuft = laeuft
+        if laeuft:
+            self._status_var.set("Verarbeitung läuft … Bitte warten.")
+        self.window.update_idletasks()
+
+    def _setze_schliessen_hervorgehoben(self) -> None:
+        """Aktiviert den Abschlussbutton sichtbar nach erfolgreichem Lauf."""
+        if self._schliessen_button is None:
+            return
+        self._schliessen_button.configure(state="normal", text="✅ Schließen")
+        self._schliessen_button.focus_set()
+
+    def _beende_assistent(self) -> None:
+        """Beendet den Assistenten mit einer klaren, deutschsprachigen Rückfrage."""
+        if self._aktion_laeuft:
+            bestaetigt = messagebox.askyesno(
+                "Verarbeitung läuft",
+                (
+                    "Der Vorgang läuft noch.\n"
+                    "Möchten Sie den Assistenten trotzdem schließen?"
+                ),
+                parent=self.window,
+            )
+            if not bestaetigt:
+                return
+        elif not self._letzter_lauf_erfolgreich:
+            bestaetigt = messagebox.askyesno(
+                "Assistent schließen",
+                "Möchten Sie den Assistenten ohne abgeschlossene Verarbeitung schließen?",
+                parent=self.window,
+            )
+            if not bestaetigt:
+                return
+
+        self.window.destroy()
 
     def _setze_diff_text(self, text: str) -> None:
         self._diff_text.configure(state="normal")
