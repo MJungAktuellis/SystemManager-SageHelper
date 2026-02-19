@@ -12,7 +12,7 @@ from pathlib import Path
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from typing import Callable
+from typing import Callable, Literal
 
 from systemmanager_sagehelper.gui_shell import GuiShell
 from systemmanager_sagehelper.gui_state import GUIStateStore, erstelle_installer_modulzustand
@@ -39,6 +39,8 @@ from systemmanager_sagehelper.logging_setup import erstelle_lauf_id
 
 LOGGER = logging.getLogger(__name__)
 
+WizardModus = Literal["install", "maintenance"]
+
 
 @dataclass(slots=True)
 class WizardSchritt:
@@ -55,9 +57,11 @@ class InstallerWizardGUI:
         self,
         master: tk.Misc,
         *,
+        mode: WizardModus = "install",
         repo_root: Path | None = None,
         on_finished: Callable[[bool], None] | None = None,
     ) -> None:
+        self.mode = mode
         self.repo_root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
         self.on_finished = on_finished
         self.state_store = GUIStateStore()
@@ -76,8 +80,8 @@ class InstallerWizardGUI:
 
         self.shell = GuiShell(
             self.window,
-            titel="Installationsassistent",
-            untertitel="Schrittweise Installation für SystemManager-SageHelper",
+            titel=self._wizard_titel,
+            untertitel=self._wizard_untertitel,
             on_save=self._speichere_optionen,
             on_back=self._zurueck,
             on_exit=self._beenden,
@@ -100,7 +104,7 @@ class InstallerWizardGUI:
         self.option_report_var = tk.BooleanVar(value=True)
         # One-Click-Installationen sollen standardmäßig eine Desktop-Verknüpfung anlegen.
         self.option_desktop_icon_var = tk.BooleanVar(value=True)
-        self.statustext_var = tk.StringVar(value="Noch keine Installation gestartet.")
+        self.statustext_var = tk.StringVar(value=f"Noch kein {self._vorgang_nomen.lower()} gestartet.")
 
         self.log_datei: Path | None = None
         self.report_datei: Path | None = None
@@ -131,12 +135,34 @@ class InstallerWizardGUI:
         self.window.protocol("WM_DELETE_WINDOW", self._beenden)
         self._render_schritt()
 
+    @property
+    def _ist_wartungsmodus(self) -> bool:
+        return self.mode == "maintenance"
+
+    @property
+    def _wizard_titel(self) -> str:
+        return "Wartungsassistent" if self._ist_wartungsmodus else "Installationsassistent"
+
+    @property
+    def _wizard_untertitel(self) -> str:
+        if self._ist_wartungsmodus:
+            return "Integrität prüfen, Komponentenstatus bewerten und gezielt reparieren"
+        return "Schrittweise Installation für SystemManager-SageHelper"
+
+    @property
+    def _vorgang_nomen(self) -> str:
+        return "Wartung" if self._ist_wartungsmodus else "Installation"
+
+    @property
+    def _vorgang_verb(self) -> str:
+        return "Wartung" if self._ist_wartungsmodus else "Installation"
+
     def _beenden(self) -> None:
         """Schließt das Wizard-Fenster geordnet."""
         if self.installation_laueft:
             messagebox.showwarning(
-                "Installation aktiv",
-                "Bitte warten Sie, bis die Installation abgeschlossen ist.",
+                f"{self._vorgang_nomen} aktiv",
+                f"Bitte warten Sie, bis die {self._vorgang_nomen.lower()} abgeschlossen ist.",
                 parent=self.window,
             )
             return
@@ -146,7 +172,7 @@ class InstallerWizardGUI:
         """Persistiert keine Dateien, sondern bestätigt die aktuelle Wizard-Konfiguration."""
         self.shell.setze_status("Wizard-Optionen übernommen")
         self.shell.logge_meldung(
-            f"Optionen übernommen: Pfad={self.installationspfad_var.get()} | "
+            f"Optionen übernommen ({self.mode}): Pfad={self.installationspfad_var.get()} | "
             f"Marker={self.option_marker_var.get()} | Report={self.option_report_var.get()} | "
             f"DesktopIcon={self.option_desktop_icon_var.get()}"
         )
@@ -175,7 +201,7 @@ class InstallerWizardGUI:
         if self.aktiver_schritt < 2:
             self.btn_weiter.config(state="normal", text="Weiter →", command=self._weiter)
         elif self.aktiver_schritt == 2:
-            self.btn_weiter.config(state="normal", text="Installation starten", command=self._starte_installation)
+            self.btn_weiter.config(state="normal", text=f"{self._vorgang_nomen} starten", command=self._starte_installation)
         elif self.aktiver_schritt == 3:
             self.btn_weiter.config(state="disabled" if self.installation_laueft else "normal", text="Weiter →", command=self._weiter)
         else:
@@ -204,13 +230,19 @@ class InstallerWizardGUI:
         rahmen = ttk.LabelFrame(self.inhalt, text="Willkommen", style="Section.TLabelframe")
         rahmen.pack(fill="both", expand=True)
         text = (
-            "Dieser Assistent führt Sie durch die Installation von SystemManager-SageHelper.\n\n"
+            f"Dieser Assistent führt Sie durch die {self._vorgang_nomen.lower()} von SystemManager-SageHelper.\n\n"
             "Ablauf:\n"
             "1) Installationspfad und Optionen prüfen\n"
-            "2) Komponenten auswählen\n"
-            "3) Installation ausführen\n"
+            "2) Komponenten auswählen bzw. prüfen\n"
+            f"3) {self._vorgang_nomen} ausführen\n"
             "4) Ergebnisse prüfen"
         )
+        if self._ist_wartungsmodus:
+            text += (
+                "\n\nIm Wartungsmodus werden keine Vollinstallationsaktionen angeboten. "
+                "Stattdessen stehen Integritätsprüfung, Versions-/Komponentencheck und "
+                "gezielte Reparatur/Aktualisierung bereit."
+            )
         ttk.Label(rahmen, text=text, justify="left").pack(anchor="w", padx=10, pady=10)
 
     def _render_pfad_optionen(self) -> None:
@@ -227,17 +259,28 @@ class InstallerWizardGUI:
         optionen.pack(fill="x", padx=10, pady=8)
         ttk.Checkbutton(optionen, text="Installationsreport schreiben", variable=self.option_report_var).pack(anchor="w")
         ttk.Checkbutton(optionen, text="Installationsmarker aktualisieren", variable=self.option_marker_var).pack(anchor="w")
-        ttk.Checkbutton(
-            optionen,
-            text="Desktop-Verknüpfung erstellen (empfohlen)",
-            variable=self.option_desktop_icon_var,
-        ).pack(anchor="w")
-        ttk.Label(
-            optionen,
-            text="Standard für One-Click: aktiv. Im Abschluss wird der Status separat ausgewiesen.",
-            style="Muted.TLabel",
-            wraplength=840,
-        ).pack(anchor="w", pady=(2, 0))
+        if self._ist_wartungsmodus:
+            # Im Wartungsmodus wird keine Vollinstallation angestoßen, daher sind
+            # One-Click-Artefakte wie ein neues Desktop-Icon hier bewusst ausgeblendet.
+            self.option_desktop_icon_var.set(False)
+            ttk.Label(
+                optionen,
+                text="Desktop-Verknüpfung ist im Wartungsmodus deaktiviert.",
+                style="Muted.TLabel",
+                wraplength=840,
+            ).pack(anchor="w", pady=(2, 0))
+        else:
+            ttk.Checkbutton(
+                optionen,
+                text="Desktop-Verknüpfung erstellen (empfohlen)",
+                variable=self.option_desktop_icon_var,
+            ).pack(anchor="w")
+            ttk.Label(
+                optionen,
+                text="Standard für One-Click: aktiv. Im Abschluss wird der Status separat ausgewiesen.",
+                style="Muted.TLabel",
+                wraplength=840,
+            ).pack(anchor="w", pady=(2, 0))
 
         info = (
             "Hinweis: Der Pfad muss eine gültige Projektstruktur enthalten, "
@@ -251,7 +294,12 @@ class InstallerWizardGUI:
 
         ttk.Label(
             rahmen,
-            text="Wählen Sie die Installationskomponenten. Abhängigkeiten werden automatisch validiert.",
+            text=(
+                "Wählen Sie die Komponenten für die Ausführung. "
+                "Im Wartungsmodus entspricht dies einer gezielten Reparatur/Aktualisierung."
+                if self._ist_wartungsmodus
+                else "Wählen Sie die Installationskomponenten. Abhängigkeiten werden automatisch validiert."
+            ),
             wraplength=860,
         ).pack(anchor="w", padx=10, pady=(10, 8))
 
@@ -283,7 +331,11 @@ class InstallerWizardGUI:
         rahmen = ttk.LabelFrame(self.inhalt, text="Abschluss", style="Section.TLabelframe")
         rahmen.pack(fill="both", expand=True)
 
-        status = "Installation erfolgreich abgeschlossen." if not self.installationsfehler else "Installation fehlgeschlagen."
+        status = (
+            f"{self._vorgang_nomen} erfolgreich abgeschlossen."
+            if not self.installationsfehler
+            else f"{self._vorgang_nomen} fehlgeschlagen."
+        )
         ttk.Label(rahmen, text=status).pack(anchor="w", padx=10, pady=(12, 8))
 
         details: list[str] = []
@@ -334,7 +386,7 @@ class InstallerWizardGUI:
         self.desktop_icon_pfad = None
         self.report_datei = None
         self.marker_datei = None
-        self.statustext_var.set("Installation läuft …")
+        self.statustext_var.set(f"{self._vorgang_nomen} läuft …")
 
         self.aktiver_schritt = 3
         self._render_schritt()
@@ -360,6 +412,9 @@ class InstallerWizardGUI:
             auswahl = {komp_id: var.get() for komp_id, var in self.komponenten_vars.items()}
 
             ergebnisse = self._fuehre_komponenten_mit_fortschritt_aus(self.komponenten, auswahl)
+            if self._ist_wartungsmodus:
+                self.window.after(0, self._fuege_fortschrittslog_hinzu, "Integritätsprüfung abgeschlossen.")
+                self.window.after(0, self._fuege_fortschrittslog_hinzu, "Versions-/Komponentencheck abgeschlossen.")
             desktop_verknuepfung_status = "Desktop-Verknüpfung: Deaktiviert"
 
             if self.option_marker_var.get():
@@ -372,6 +427,7 @@ class InstallerWizardGUI:
                 version=_ermittle_app_version(),
                 bericht_pfad=str(self.report_datei) if self.report_datei else "",
             )
+            installer_status["letzte_aktion"] = self.mode
             self.state_store.speichere_modulzustand("installer", installer_status)
 
             installer_optionen = InstallerOptionen(desktop_icon=self.option_desktop_icon_var.get())
@@ -380,7 +436,7 @@ class InstallerWizardGUI:
             self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Inno-Tasks aus Optionen: {inno_tasks or 'keine'}")
             self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Inno-Parameter: {' '.join(inno_parameter)}")
 
-            if installer_optionen.desktop_icon:
+            if installer_optionen.desktop_icon and not self._ist_wartungsmodus:
                 try:
                     self.desktop_icon_pfad = erstelle_desktop_verknuepfung_fuer_python_installation(ziel_root)
                     desktop_verknuepfung_status = f"Desktop-Verknüpfung: Erfolgreich erstellt ({self.desktop_icon_pfad})"
@@ -410,6 +466,7 @@ class InstallerWizardGUI:
                     desktop_verknuepfung_status=desktop_verknuepfung_status,
                     einstiegspfad="gui",
                     optionen={
+                        "Modus": "Wartung" if self._ist_wartungsmodus else "Installation",
                         "Installationsmarker": "aktiv" if self.option_marker_var.get() else "deaktiviert",
                         "Installationsreport": "aktiv" if self.option_report_var.get() else "deaktiviert",
                         "Desktop-Icon": "aktiv" if self.option_desktop_icon_var.get() else "deaktiviert",
@@ -437,6 +494,8 @@ class InstallerWizardGUI:
             if not auswahl.get(komponenten_id, False):
                 continue
             komponente = komponenten[komponenten_id]
+            if self._ist_wartungsmodus:
+                self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Integritätsprüfung: {komponente.name}")
             self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Starte: {komponente.name}")
             install_nachricht = komponente.install_fn()
             erfolgreich, verify_nachricht = komponente.verify_fn()
@@ -455,6 +514,7 @@ class InstallerWizardGUI:
                     naechste_aktion="Keine Aktion erforderlich.",
                 )
             )
+            self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Versions-/Komponentencheck: {verify_nachricht}")
             self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Abgeschlossen: {komponente.name}")
 
         return ergebnisse
@@ -463,8 +523,8 @@ class InstallerWizardGUI:
         self.installation_laueft = False
         if hasattr(self, "progress"):
             self.progress.stop()
-        self.statustext_var.set("Installation erfolgreich abgeschlossen.")
-        self.shell.setze_status("Installation abgeschlossen")
+        self.statustext_var.set(f"{self._vorgang_nomen} erfolgreich abgeschlossen.")
+        self.shell.setze_status(f"{self._vorgang_nomen} abgeschlossen")
         self.aktiver_schritt = 4
         self._render_schritt()
         if self.on_finished:
@@ -474,8 +534,8 @@ class InstallerWizardGUI:
         self.installation_laueft = False
         if hasattr(self, "progress"):
             self.progress.stop()
-        self.statustext_var.set("Installation fehlgeschlagen.")
-        self.shell.setze_status("Installation fehlgeschlagen")
+        self.statustext_var.set(f"{self._vorgang_nomen} fehlgeschlagen.")
+        self.shell.setze_status(f"{self._vorgang_nomen} fehlgeschlagen")
         if self.installationsfehler:
             self.shell.logge_meldung(f"[ERROR] {self.installationsfehler}")
         self.aktiver_schritt = 4
@@ -484,15 +544,15 @@ class InstallerWizardGUI:
             self.on_finished(False)
 
 
-def starte_installer_wizard(master: tk.Misc | None = None) -> InstallerWizardGUI:
+def starte_installer_wizard(master: tk.Misc | None = None, mode: WizardModus = "install") -> InstallerWizardGUI:
     """Komfortfunktion zum Starten des Installers als eigenes Fenster oder Child."""
     if master is None:
         root = tk.Tk()
-        wizard = InstallerWizardGUI(root)
+        wizard = InstallerWizardGUI(root, mode=mode)
         root.mainloop()
         return wizard
 
-    return InstallerWizardGUI(master)
+    return InstallerWizardGUI(master, mode=mode)
 
 
 if __name__ == "__main__":
