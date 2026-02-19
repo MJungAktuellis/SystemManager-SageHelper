@@ -125,7 +125,7 @@ def _schritt_dokumentation(
         str(docs_verzeichnis),
         analyse_ergebnisse=analyse_ergebnisse,
         analysebericht_pfad=str(report_pfad),
-        berichtsmodus="loop",
+        berichtsmodus="kompakt",
     )
     _melde(progress, WorkflowSchritt.DOKUMENTATION, 100, "Dokumentation abgeschlossen")
     return SchrittErgebnis(
