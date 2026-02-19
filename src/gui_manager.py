@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import ipaddress
+import os
 import re
 import subprocess
 import sys
@@ -73,6 +74,19 @@ class OnboardingController:
         self._window: tk.Toplevel | None = None
         self._status_var: tk.StringVar | None = None
         self._analyse_pfad_var: tk.StringVar | None = None
+        self._scanbereich_var: tk.StringVar | None = None
+        self._erweitert_aktiv_var: tk.BooleanVar | None = None
+
+        # Schrittsteuerung und Statusdarstellung für den geführten Wizard.
+        self._schritt_buttons: dict[str, ttk.Button] = {}
+        self._schritt_status_var: dict[str, tk.StringVar] = {}
+        self._schritt_aktion_var: dict[str, tk.StringVar] = {}
+        self._schritt_reihenfolge = ["discovery", "rollen", "analyse", "speichern"]
+        self._schritt_position = {schritt: index for index, schritt in enumerate(self._schritt_reihenfolge)}
+        self._aktueller_schritt = "discovery"
+        self._freigeschalteter_schritt_index = 0
+        self._discovery_bereiche: list[tuple[str, int, int]] = []
+        self._gespeicherter_scanbereich = ""
 
     def starte_wizard(self) -> None:
         """Öffnet den geführten Onboarding-Wizard als modalen Dialog."""
@@ -89,6 +103,8 @@ class OnboardingController:
 
         self._status_var = tk.StringVar(value="Bereit: Schritt 1 starten (Netzwerkerkennung).")
         self._analyse_pfad_var = tk.StringVar(value="docs/serverbericht.md")
+        self._scanbereich_var = tk.StringVar(value="Scanbereich wird automatisch aus der lokalen Netzwerkkonfiguration ermittelt …")
+        self._erweitert_aktiv_var = tk.BooleanVar(value=False)
 
         rahmen = ttk.Frame(self._window, padding=16)
         rahmen.pack(fill="both", expand=True)
@@ -101,36 +117,48 @@ class OnboardingController:
         ttk.Label(
             rahmen,
             text=(
-                "Folgen Sie den 4 Schritten: Netzwerkerkennung → Rollen prüfen → Analyse → Daten speichern.\n"
-                "Der Assistent bleibt getrennt vom normalen Dashboard-Betrieb."
+                "Folgen Sie den 4 Schritten: Netzwerkerkennung → Rollen prüfen → Analyse ausführen → Speichern/Bestätigen.\n"
+                "Der Standardpfad nutzt automatisch den lokalen Netzbereich und hält den Ablauf bewusst geführt."
             ),
             justify="left",
         ).pack(anchor="w", pady=(4, 14))
 
-        ttk.Label(rahmen, text="Netzwerkerkennungs-Bereich (CIDR, Basisbereich oder Kurzformat):").pack(anchor="w")
-        self._discovery_entry = ttk.Entry(rahmen, width=40)
-        self._discovery_entry.insert(0, "192.168.178")
-        self._discovery_entry.pack(anchor="w", pady=(2, 10))
+        ttk.Label(rahmen, text="Automatisch abgeleiteter Netzscanbereich:").pack(anchor="w")
+        ttk.Entry(rahmen, textvariable=self._scanbereich_var, width=58, state="readonly").pack(anchor="w", pady=(2, 8))
 
-        ttk.Label(
-            rahmen,
-            text=(
-                "Gültige Beispiele: 192.168.178.0/24, 192.168.178 + Start=1/Ende=30, "
-                "192.168.178.1-30"
-            ),
+        erweitert_rahmen = ttk.LabelFrame(rahmen, text="Erweiterter Pfad", style="Section.TLabelframe")
+        erweitert_rahmen.pack(fill="x", pady=(0, 10))
+        self._erweitert_toggle = ttk.Checkbutton(
+            erweitert_rahmen,
+            text="Erweiterten Netzscan nach zusätzlicher Bestätigung aktivieren",
+            variable=self._erweitert_aktiv_var,
+            command=self._umschalten_erweiterten_pfad,
+        )
+        self._erweitert_toggle.pack(anchor="w", padx=8, pady=(6, 4))
+
+        self._erweitert_hinweis = ttk.Label(
+            erweitert_rahmen,
+            text="Standard: kein freier Bereichseintrag. Optional kann ein CIDR/Bereich hinterlegt werden.",
             justify="left",
-        ).pack(anchor="w", pady=(0, 10))
+        )
+        self._erweitert_hinweis.pack(anchor="w", padx=8, pady=(0, 4))
 
-        start_ende_rahmen = ttk.Frame(rahmen)
-        start_ende_rahmen.pack(anchor="w", pady=(0, 10))
-        ttk.Label(start_ende_rahmen, text="Start:").pack(side="left")
-        self._discovery_start_entry = ttk.Entry(start_ende_rahmen, width=6)
+        self._discovery_entry = ttk.Entry(erweitert_rahmen, width=38)
+        self._discovery_entry.insert(0, "192.168.178.0/24")
+        self._discovery_start_entry = ttk.Entry(erweitert_rahmen, width=6)
         self._discovery_start_entry.insert(0, "1")
-        self._discovery_start_entry.pack(side="left", padx=(4, 12))
-        ttk.Label(start_ende_rahmen, text="Ende:").pack(side="left")
-        self._discovery_ende_entry = ttk.Entry(start_ende_rahmen, width=6)
+        self._discovery_ende_entry = ttk.Entry(erweitert_rahmen, width=6)
         self._discovery_ende_entry.insert(0, "30")
+
+        erweitert_felder = ttk.Frame(erweitert_rahmen)
+        ttk.Label(erweitert_felder, text="Scanbereich:").pack(side="left")
+        self._discovery_entry.pack(in_=erweitert_felder, side="left", padx=(4, 10))
+        ttk.Label(erweitert_felder, text="Start:").pack(side="left")
+        self._discovery_start_entry.pack(side="left", padx=(4, 8))
+        ttk.Label(erweitert_felder, text="Ende:").pack(side="left")
         self._discovery_ende_entry.pack(side="left", padx=(4, 0))
+        erweitert_felder.pack(anchor="w", padx=8, pady=(0, 8))
+        self._setze_erweitert_felder_aktiv(False)
 
         ttk.Label(rahmen, text="Analyse-Reportpfad:").pack(anchor="w")
         ttk.Entry(rahmen, textvariable=self._analyse_pfad_var, width=55).pack(anchor="w", pady=(2, 10))
@@ -139,34 +167,47 @@ class OnboardingController:
         schritte.pack(fill="x", pady=(6, 10))
         schritte.columnconfigure((0, 1), weight=1)
 
-        ttk.Button(schritte, text="1) Netzwerkerkennung starten", command=self.schritt_discovery).grid(
+        self._schritt_buttons["discovery"] = ttk.Button(schritte, text="1) Netzwerkerkennung starten", command=self.schritt_discovery)
+        self._schritt_buttons["discovery"].grid(
             row=0, column=0, sticky="ew", padx=(0, 6), pady=4
         )
-        ttk.Button(schritte, text="2) Rollen prüfen/anpassen", command=self.schritt_rollen_pruefen).grid(
+        self._schritt_buttons["rollen"] = ttk.Button(schritte, text="2) Rollen prüfen", command=self.schritt_rollen_pruefen)
+        self._schritt_buttons["rollen"].grid(
             row=0, column=1, sticky="ew", padx=(6, 0), pady=4
         )
-        ttk.Button(schritte, text="3) Analyse ausführen", command=self.schritt_analyse).grid(
+        self._schritt_buttons["analyse"] = ttk.Button(schritte, text="3) Analyse ausführen", command=self.schritt_analyse)
+        self._schritt_buttons["analyse"].grid(
             row=1, column=0, sticky="ew", padx=(0, 6), pady=4
         )
-        ttk.Button(schritte, text="4) Daten speichern & abschließen", command=self.schritt_speichern_und_abschliessen).grid(
+        self._schritt_buttons["speichern"] = ttk.Button(
+            schritte,
+            text="4) Speichern/Bestätigen",
+            command=self.schritt_speichern_und_abschliessen,
+        )
+        self._schritt_buttons["speichern"].grid(
             row=1, column=1, sticky="ew", padx=(6, 0), pady=4
         )
+
+        self._baue_schrittstatus_anzeige(rahmen)
+        self._aktualisiere_schritt_buttons()
+        try:
+            self._ermittle_automatischen_scanbereich()
+        except ValueError as exc:
+            self._setze_status(str(exc))
 
         ttk.Label(rahmen, textvariable=self._status_var, wraplength=700, justify="left").pack(anchor="w", pady=(8, 0))
 
     def schritt_discovery(self) -> None:
         """Schritt 1: Führt die Discovery durch und befüllt das Tabellenmodell."""
-        discovery_eingabe = self._discovery_entry.get().strip() if self._window else ""
-        start_eingabe = self._discovery_start_entry.get().strip() if self._window else ""
-        ende_eingabe = self._discovery_ende_entry.get().strip() if self._window else ""
+        if not self._ist_schritt_freigeschaltet("discovery"):
+            return
+
+        self._setze_aktuellen_schritt("discovery")
 
         try:
-            discovery_bereiche, gespeicherte_eingabe = self._parse_discovery_eingabe(
-                discovery_eingabe,
-                start_eingabe,
-                ende_eingabe,
-            )
+            discovery_bereiche, gespeicherte_eingabe = self._ermittle_discovery_bereiche_fuer_schritt_1()
         except ValueError as exc:
+            self._markiere_schritt("discovery", "fehler", str(exc), "Netzkonfiguration prüfen oder erweiterten Pfad aktivieren.")
             self._setze_status(str(exc))
             return
 
@@ -186,6 +227,12 @@ class OnboardingController:
                 )
         except Exception as exc:  # noqa: BLE001 - Wizard soll robust weiterlaufen.
             logger.exception("Netzwerkerkennung im Onboarding fehlgeschlagen")
+            self._markiere_schritt(
+                "discovery",
+                "fehler",
+                f"Netzwerkerkennung fehlgeschlagen: {exc}",
+                "Berechtigungen, Firewall und Netzbereich prüfen.",
+            )
             self._setze_status(f"Netzwerkerkennung fehlgeschlagen: {exc}")
             return
 
@@ -209,7 +256,15 @@ class OnboardingController:
                 )
             )
 
+        self._discovery_bereiche = discovery_bereiche
+        self._gespeicherter_scanbereich = gespeicherte_eingabe
         self.gui.modulzustand["letzte_discovery_range"] = gespeicherte_eingabe
+        self._markiere_schritt(
+            "discovery",
+            "erfolgreich",
+            f"{len(self.server_zeilen)} Server erkannt.",
+            "Mit Schritt 2 Rollen prüfen und bei Bedarf anpassen.",
+        )
         self._setze_status(f"Netzwerkerkennung abgeschlossen: {len(self.server_zeilen)} Server übernommen.")
 
     @staticmethod
@@ -294,7 +349,17 @@ class OnboardingController:
 
     def schritt_rollen_pruefen(self) -> None:
         """Schritt 2: Ermöglicht eine einfache Rollenanpassung pro gefundenem Server."""
+        if not self._ist_schritt_freigeschaltet("rollen"):
+            return
+        self._setze_aktuellen_schritt("rollen")
+
         if not self.server_zeilen:
+            self._markiere_schritt(
+                "rollen",
+                "fehler",
+                "Keine Serverdaten vorhanden.",
+                "Zuerst Schritt 1 Netzwerkerkennung ausführen.",
+            )
             self._setze_status("Keine Daten aus der Netzwerkerkennung vorhanden. Bitte zuerst Schritt 1 ausführen.")
             return
 
@@ -338,16 +403,38 @@ class OnboardingController:
             )
         ttk.Button(button_rahmen, text="Fertig", command=dialog.destroy).pack(side="right", padx=4)
 
+        self._markiere_schritt(
+            "rollen",
+            "erfolgreich",
+            f"{len(self.server_zeilen)} Server für Rollenprüfung geladen.",
+            "Nach Prüfung Schritt 3 Analyse ausführen.",
+        )
         self._setze_status("Rollenprüfung geöffnet: Auswahl prüfen und ggf. anpassen.")
 
     def schritt_analyse(self) -> None:
         """Schritt 3: Startet die Analyse auf Basis der bestätigten Rollen."""
+        if not self._ist_schritt_freigeschaltet("analyse"):
+            return
+        self._setze_aktuellen_schritt("analyse")
+
         if not self.server_zeilen:
+            self._markiere_schritt(
+                "analyse",
+                "fehler",
+                "Keine Server vorhanden.",
+                "Schritt 1 und 2 vollständig durchführen.",
+            )
             self._setze_status("Keine Server vorhanden. Netzwerkerkennung und Rollenprüfung zuerst ausführen.")
             return
 
         ziele = _baue_serverziele(self.server_zeilen)
         if not ziele:
+            self._markiere_schritt(
+                "analyse",
+                "fehler",
+                "Keine gültigen Analyseziele erzeugt.",
+                "Rollenprüfung erneut öffnen und Eingaben kontrollieren.",
+            )
             self._setze_status("Es konnten keine gültigen Analyseziele aus dem Tabellenmodell erzeugt werden.")
             return
 
@@ -356,6 +443,7 @@ class OnboardingController:
             self.analyse_ergebnisse = analysiere_mehrere_server(ziele)
         except Exception as exc:  # noqa: BLE001 - Wizard zeigt Fehler im UI an.
             logger.exception("Analyse im Onboarding fehlgeschlagen")
+            self._markiere_schritt("analyse", "fehler", f"Analyse fehlgeschlagen: {exc}", "Zielserver-Erreichbarkeit prüfen.")
             self._setze_status(f"Analyse fehlgeschlagen: {exc}")
             return
 
@@ -363,11 +451,27 @@ class OnboardingController:
         for zeile in self.server_zeilen:
             zeile.status = status_index.get(normalisiere_servernamen(zeile.servername), "nicht analysiert")
 
+        self._markiere_schritt(
+            "analyse",
+            "erfolgreich",
+            f"{len(self.analyse_ergebnisse)} Server analysiert.",
+            "Mit Schritt 4 Ergebnisse speichern und bestätigen.",
+        )
         self._setze_status(f"Analyse abgeschlossen: {len(self.analyse_ergebnisse)} Server analysiert.")
 
     def schritt_speichern_und_abschliessen(self) -> None:
         """Schritt 4: Persistiert Moduldaten + Onboarding-Status atomar im Gesamtzustand."""
+        if not self._ist_schritt_freigeschaltet("speichern"):
+            return
+        self._setze_aktuellen_schritt("speichern")
+
         if not self.server_zeilen:
+            self._markiere_schritt(
+                "speichern",
+                "fehler",
+                "Keine Daten zum Speichern vorhanden.",
+                "Vorher mindestens Schritt 1 durchführen.",
+            )
             self._setze_status("Es gibt keine Daten zum Speichern. Bitte vorher Schritt 1 ausführen.")
             return
 
@@ -394,6 +498,12 @@ class OnboardingController:
         self.gui.modulzustand = self.state_store.lade_modulzustand("gui_manager")
         self.gui.aktiviere_dashboardmodus_nach_onboarding()
 
+        self._markiere_schritt(
+            "speichern",
+            "erfolgreich",
+            "Onboarding vollständig gespeichert.",
+            "Dashboard kann nun regulär verwendet werden.",
+        )
         self._setze_status("Onboarding abgeschlossen und vollständig gespeichert.")
         messagebox.showinfo(
             "Erststart abgeschlossen",
@@ -465,6 +575,195 @@ class OnboardingController:
         if self._status_var is not None:
             self._status_var.set(text)
         logger.info("[Onboarding] %s", text)
+
+    def _baue_schrittstatus_anzeige(self, parent: ttk.Frame) -> None:
+        """Zeigt pro Onboarding-Schritt den Zustand und die nächste Aktion an."""
+        status_rahmen = ttk.LabelFrame(parent, text="Schrittstatus", style="Section.TLabelframe")
+        status_rahmen.pack(fill="x", pady=(2, 10))
+
+        for index, schritt in enumerate(self._schritt_reihenfolge, start=1):
+            status_var = tk.StringVar(value="Wartet")
+            aktion_var = tk.StringVar(value="Noch keine Aktion erforderlich.")
+            self._schritt_status_var[schritt] = status_var
+            self._schritt_aktion_var[schritt] = aktion_var
+
+            ttk.Label(status_rahmen, text=f"{index}.").grid(row=index - 1, column=0, sticky="nw", padx=(8, 6), pady=3)
+            ttk.Label(status_rahmen, text=self._titel_fuer_schritt(schritt)).grid(row=index - 1, column=1, sticky="w", pady=3)
+            ttk.Label(status_rahmen, textvariable=status_var).grid(row=index - 1, column=2, sticky="w", padx=(10, 8), pady=3)
+            ttk.Label(status_rahmen, textvariable=aktion_var, wraplength=340, justify="left").grid(
+                row=index - 1,
+                column=3,
+                sticky="w",
+                padx=(0, 8),
+                pady=3,
+            )
+
+        self._markiere_schritt(
+            "discovery",
+            "aktiv",
+            "Aktueller Schritt",
+            "Netzwerkerkennung starten, um den Ablauf zu beginnen.",
+            auto_freigabe=False,
+        )
+
+    def _titel_fuer_schritt(self, schritt: str) -> str:
+        titel = {
+            "discovery": "Netzwerkerkennung",
+            "rollen": "Rollen prüfen",
+            "analyse": "Analyse ausführen",
+            "speichern": "Speichern/Bestätigen",
+        }
+        return titel.get(schritt, schritt)
+
+    def _markiere_schritt(
+        self,
+        schritt: str,
+        status: str,
+        meldung: str,
+        empfohlene_aktion: str,
+        *,
+        auto_freigabe: bool = True,
+    ) -> None:
+        """Pflegt den sichtbaren Schrittstatus einheitlich und schaltet Folge-Schritte frei."""
+        status_texte = {
+            "wartet": "Wartet",
+            "aktiv": "Aktiv",
+            "erfolgreich": "Erfolgreich",
+            "fehler": "Fehlerhaft",
+        }
+        status_label = status_texte.get(status, status)
+        self._schritt_status_var[schritt].set(f"{status_label}: {meldung}")
+        self._schritt_aktion_var[schritt].set(f"Empfehlung: {empfohlene_aktion}")
+
+        if auto_freigabe and status == "erfolgreich":
+            self._freigeschalteter_schritt_index = max(self._freigeschalteter_schritt_index, self._schritt_position[schritt] + 1)
+            self._aktualisiere_schritt_buttons()
+
+    def _setze_aktuellen_schritt(self, schritt: str) -> None:
+        """Markiert den aktuell bearbeiteten Schritt in der Statusanzeige."""
+        self._aktueller_schritt = schritt
+        self._markiere_schritt(schritt, "aktiv", "Aktueller Schritt", "Aktion ausführen und Ergebnis prüfen.", auto_freigabe=False)
+
+    def _ist_schritt_freigeschaltet(self, schritt: str) -> bool:
+        """Prüft die Reihenfolge im geführten Standardfluss."""
+        if self._schritt_position[schritt] > self._freigeschalteter_schritt_index:
+            self._setze_status("Bitte die vorherigen Schritte im geführten Ablauf zuerst abschließen.")
+            return False
+        return True
+
+    def _aktualisiere_schritt_buttons(self) -> None:
+        """Aktiviert Buttons nur gemäß aktueller Schrittfreigabe."""
+        for schritt, button in self._schritt_buttons.items():
+            status = "normal" if self._schritt_position[schritt] <= self._freigeschalteter_schritt_index else "disabled"
+            button.configure(state=status)
+
+    def _umschalten_erweiterten_pfad(self) -> None:
+        """Aktiviert den optionalen erweiterten Scanpfad erst nach Bestätigung."""
+        if self._erweitert_aktiv_var is None:
+            return
+
+        if not self._erweitert_aktiv_var.get():
+            self._setze_erweitert_felder_aktiv(False)
+            self._setze_status("Erweiterter Pfad deaktiviert. Standardfluss bleibt aktiv.")
+            return
+
+        bestaetigt = messagebox.askyesno(
+            "Erweiterten Pfad bestätigen",
+            "Der erweiterte Pfad erlaubt manuelle Scanbereiche und kann zu längeren Laufzeiten führen. Fortfahren?",
+            parent=self._window,
+        )
+        if not bestaetigt:
+            self._erweitert_aktiv_var.set(False)
+            self._setze_erweitert_felder_aktiv(False)
+            return
+
+        self._setze_erweitert_felder_aktiv(True)
+        self._setze_status("Erweiterter Pfad aktiviert: optionaler manueller Netzscanbereich freigeschaltet.")
+
+    def _setze_erweitert_felder_aktiv(self, aktiv: bool) -> None:
+        """Steuert die Eingabefelder des optionalen erweiterten Pfads."""
+        state = "normal" if aktiv else "disabled"
+        for feld in (self._discovery_entry, self._discovery_start_entry, self._discovery_ende_entry):
+            feld.configure(state=state)
+
+    def _ermittle_discovery_bereiche_fuer_schritt_1(self) -> tuple[list[tuple[str, int, int]], str]:
+        """Liefert Discovery-Bereiche für Schritt 1 aus Standard- oder erweitertem Pfad."""
+        if self._erweitert_aktiv_var and self._erweitert_aktiv_var.get():
+            discovery_eingabe = self._discovery_entry.get().strip() if self._window else ""
+            start_eingabe = self._discovery_start_entry.get().strip() if self._window else ""
+            ende_eingabe = self._discovery_ende_entry.get().strip() if self._window else ""
+            return self._parse_discovery_eingabe(discovery_eingabe, start_eingabe, ende_eingabe)
+        return self._ermittle_automatischen_scanbereich()
+
+    def _ermittle_automatischen_scanbereich(self) -> tuple[list[tuple[str, int, int]], str]:
+        """Leitet den Standard-Scanbereich aus lokaler IPv4-Konfiguration ab."""
+        for ip_text, maske_text in self._sammle_lokale_ipv4_konfigurationen():
+            try:
+                interface = ipaddress.IPv4Interface(f"{ip_text}/{maske_text}")
+            except ValueError:
+                continue
+
+            netz = interface.network
+            if netz.num_addresses < 4:
+                continue
+
+            erster_host = ipaddress.IPv4Address(int(netz.network_address) + 1)
+            letzter_host = ipaddress.IPv4Address(int(netz.broadcast_address) - 1)
+            basis = ".".join(str(erster_host).split(".")[:3])
+            start = int(str(erster_host).split(".")[3])
+            ende = int(str(letzter_host).split(".")[3])
+
+            if netz.prefixlen < 24:
+                start, ende = 1, 254
+
+            gespeicherter_bereich = f"{basis}.{start}-{ende}"
+            if self._scanbereich_var is not None:
+                self._scanbereich_var.set(f"{netz} (abgeleitet aus {ip_text}/{maske_text})")
+            return [(basis, start, ende)], gespeicherter_bereich
+
+        raise ValueError("Kein geeigneter lokaler IPv4-Netzbereich gefunden. Bitte erweiterten Pfad verwenden.")
+
+    @staticmethod
+    def _sammle_lokale_ipv4_konfigurationen() -> list[tuple[str, str]]:
+        """Sammelt lokale IPv4- und Subnetzmasken-Kombinationen plattformunabhängig."""
+        konfigurationen: list[tuple[str, str]] = []
+
+        # Linux/macOS: direkte Auswertung der Interface-Adressen via `ip`.
+        if os.name != "nt":
+            try:
+                output = subprocess.check_output(["ip", "-o", "-f", "inet", "addr", "show"], text=True, stderr=subprocess.STDOUT)
+                for zeile in output.splitlines():
+                    teile = zeile.split()
+                    if "inet" not in teile:
+                        continue
+                    inet_index = teile.index("inet")
+                    cidr = teile[inet_index + 1]
+                    ip_text, prefix = cidr.split("/")
+                    if ip_text.startswith("127."):
+                        continue
+                    maske = str(ipaddress.IPv4Network(f"0.0.0.0/{prefix}").netmask)
+                    konfigurationen.append((ip_text, maske))
+            except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+                pass
+
+        # Windows-Fallback: `ipconfig` liefert IPv4 und Subnetzmaske pro Adapterblock.
+        try:
+            output = subprocess.check_output(["ipconfig"], text=True, stderr=subprocess.STDOUT)
+            aktuelle_ip = ""
+            for zeile in output.splitlines():
+                if "IPv4" in zeile:
+                    match = re.search(r"(\d+\.\d+\.\d+\.\d+)", zeile)
+                    if match:
+                        aktuelle_ip = match.group(1)
+                elif "Subnetzmaske" in zeile or "Subnet Mask" in zeile:
+                    mask_match = re.search(r"(\d+\.\d+\.\d+\.\d+)", zeile)
+                    if aktuelle_ip and mask_match and not aktuelle_ip.startswith("127."):
+                        konfigurationen.append((aktuelle_ip, mask_match.group(1)))
+                        aktuelle_ip = ""
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+
+        return konfigurationen
 
 
 class SystemManagerGUI:
