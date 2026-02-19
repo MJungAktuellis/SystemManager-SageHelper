@@ -25,7 +25,10 @@ from systemmanager_sagehelper.installer import (
     InstallationsKomponente,
     STANDARD_REIHENFOLGE,
     erstelle_desktop_verknuepfung_fuer_python_installation,
+    ermittle_standard_installationsziel,
     erstelle_standard_komponenten,
+    kopiere_installationsquellen,
+    validiere_quellpfad,
     konfiguriere_logging,
     schreibe_installationsreport,
     validiere_auswahl_und_abhaengigkeiten,
@@ -73,11 +76,14 @@ class InstallerWizardGUI:
         master: tk.Misc,
         *,
         mode: WizardModus = "install",
-        repo_root: Path | None = None,
+        source_root: Path | None = None,
+        target_root: Path | None = None,
         on_finished: Callable[[bool], None] | None = None,
     ) -> None:
         self.mode = mode
-        self.repo_root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
+        self.source_root = (source_root or Path(__file__).resolve().parents[2]).resolve()
+        # Standardziel ist bewusst unter Program Files, damit Launcher und Uninstall konsistent sind.
+        self.target_root = (target_root or ermittle_standard_installationsziel()).resolve()
         self.on_finished = on_finished
         self.state_store = GUIStateStore()
 
@@ -116,7 +122,8 @@ class InstallerWizardGUI:
         ]
         self.aktiver_schritt = 0
 
-        self.installationspfad_var = tk.StringVar(value=str(self.repo_root))
+        self.quellpfad_var = tk.StringVar(value=str(self.source_root))
+        self.installationspfad_var = tk.StringVar(value=str(self.target_root))
         self.option_marker_var = tk.BooleanVar(value=True)
         self.option_report_var = tk.BooleanVar(value=True)
         # One-Click-Installationen sollen standardmäßig eine Desktop-Verknüpfung anlegen.
@@ -135,7 +142,7 @@ class InstallerWizardGUI:
         self.abschluss_was_getan: list[str] = []
         self.abschluss_naechste_schritte: list[str] = []
 
-        self.komponenten = erstelle_standard_komponenten(self.repo_root)
+        self.komponenten = erstelle_standard_komponenten(self.target_root)
         self.komponenten_vars = {
             komponenten_id: tk.BooleanVar(value=self.komponenten[komponenten_id].default_aktiv)
             for komponenten_id in STANDARD_REIHENFOLGE
@@ -212,7 +219,7 @@ class InstallerWizardGUI:
         LOGGER.info(
             "Optionen übernommen (%s): Pfad=%s | Marker=%s | Report=%s | DesktopIcon=%s",
             self.mode,
-            self.installationspfad_var.get(),
+            f"Quelle={self.quellpfad_var.get()} | Ziel={self.installationspfad_var.get()}",
             self.option_marker_var.get(),
             self.option_report_var.get(),
             self.option_desktop_icon_var.get(),
@@ -329,9 +336,15 @@ class InstallerWizardGUI:
 
         pfad_zeile = ttk.Frame(rahmen)
         pfad_zeile.pack(fill="x", padx=10, pady=(12, 8))
-        ttk.Label(pfad_zeile, text="Repository-/Installationspfad:").pack(anchor="w")
-        ttk.Entry(pfad_zeile, textvariable=self.installationspfad_var).pack(fill="x", side="left", expand=True, pady=(6, 0))
-        ttk.Button(pfad_zeile, text="Durchsuchen", command=self._waehle_installationspfad).pack(side="left", padx=(8, 0), pady=(6, 0))
+        ttk.Label(pfad_zeile, text="Quellpfad (entpacktes ZIP/Repository):").pack(anchor="w")
+        ttk.Entry(pfad_zeile, textvariable=self.quellpfad_var).pack(fill="x", side="left", expand=True, pady=(6, 0))
+        ttk.Button(pfad_zeile, text="Durchsuchen", command=self._waehle_quellpfad).pack(side="left", padx=(8, 0), pady=(6, 0))
+
+        ziel_zeile = ttk.Frame(rahmen)
+        ziel_zeile.pack(fill="x", padx=10, pady=(0, 8))
+        ttk.Label(ziel_zeile, text="Installationsziel:").pack(anchor="w")
+        ttk.Entry(ziel_zeile, textvariable=self.installationspfad_var).pack(fill="x", side="left", expand=True, pady=(6, 0))
+        ttk.Button(ziel_zeile, text="Durchsuchen", command=self._waehle_installationspfad).pack(side="left", padx=(8, 0), pady=(6, 0))
 
         optionen = ttk.Frame(rahmen)
         optionen.pack(fill="x", padx=10, pady=8)
@@ -384,8 +397,8 @@ class InstallerWizardGUI:
             ).pack(anchor="w", pady=(2, 0))
 
         info = (
-            "Hinweis: Der Pfad muss eine gültige Projektstruktur enthalten, "
-            "damit Komponenten wie requirements.txt und Launcher-Dateien korrekt verarbeitet werden."
+            "Hinweis: Der Quellpfad muss eine gültige Projektstruktur enthalten. "
+            "Das Installationsziel darf leer oder bereits vorhanden sein; Inhalte werden aktualisiert."
         )
         ttk.Label(rahmen, text=info, wraplength=850).pack(anchor="w", padx=10, pady=(12, 0))
 
@@ -466,20 +479,25 @@ class InstallerWizardGUI:
             justify="left",
         ).pack(anchor="w", padx=10, pady=8)
 
+    def _waehle_quellpfad(self) -> None:
+        ausgewaehlt = filedialog.askdirectory(parent=self.window)
+        if ausgewaehlt:
+            self.quellpfad_var.set(ausgewaehlt)
+
     def _waehle_installationspfad(self) -> None:
         ausgewaehlt = filedialog.askdirectory(parent=self.window)
         if ausgewaehlt:
             self.installationspfad_var.set(ausgewaehlt)
 
     def _pruefe_installationspfad(self) -> bool:
-        pfad = Path(self.installationspfad_var.get()).expanduser().resolve()
-        erwartete_datei = pfad / "src" / "systemmanager_sagehelper" / "installer.py"
-        if erwartete_datei.exists():
+        quellpfad = Path(self.quellpfad_var.get()).expanduser().resolve()
+        gueltig, nachricht = validiere_quellpfad(quellpfad)
+        if gueltig:
             return True
 
         messagebox.showerror(
-            "Ungültiger Installationspfad",
-            "Der gewählte Pfad enthält keine gültige Projektstruktur.",
+            "Ungültiger Quellpfad",
+            nachricht,
             parent=self.window,
         )
         return False
@@ -520,7 +538,9 @@ class InstallerWizardGUI:
 
     def _fuehre_installation_hintergrund_aus(self) -> None:
         try:
+            quell_root = Path(self.quellpfad_var.get()).expanduser().resolve()
             ziel_root = Path(self.installationspfad_var.get()).expanduser().resolve()
+            kopiere_installationsquellen(quell_root, ziel_root)
             self.log_datei = konfiguriere_logging(ziel_root)
             self.komponenten = erstelle_standard_komponenten(ziel_root)
             auswahl = {komp_id: var.get() for komp_id, var in self.komponenten_vars.items()}
@@ -594,6 +614,8 @@ class InstallerWizardGUI:
                         "Installationsmarker": "aktiv" if self.option_marker_var.get() else "deaktiviert",
                         "Installationsreport": "aktiv" if self.option_report_var.get() else "deaktiviert",
                         "Desktop-Icon": "aktiv" if self.option_desktop_icon_var.get() else "deaktiviert",
+                        "Quellpfad": str(quell_root),
+                        "Installationsziel": str(ziel_root),
                         "Update erforderlich": "ja" if update_kontext.update_erforderlich else "nein",
                         "Migrationslog": str(self.migrationslog_datei) if self.migrationslog_datei else "nicht erstellt",
                     },
@@ -712,15 +734,21 @@ class InstallerWizardGUI:
             self.on_finished(False)
 
 
-def starte_installer_wizard(master: tk.Misc | None = None, mode: WizardModus = "install") -> InstallerWizardGUI:
+def starte_installer_wizard(
+    master: tk.Misc | None = None,
+    mode: WizardModus = "install",
+    *,
+    source_root: Path | None = None,
+    target_root: Path | None = None,
+) -> InstallerWizardGUI:
     """Komfortfunktion zum Starten des Installers als eigenes Fenster oder Child."""
     if master is None:
         root = tk.Tk()
-        wizard = InstallerWizardGUI(root, mode=mode)
+        wizard = InstallerWizardGUI(root, mode=mode, source_root=source_root, target_root=target_root)
         root.mainloop()
         return wizard
 
-    return InstallerWizardGUI(master, mode=mode)
+    return InstallerWizardGUI(master, mode=mode, source_root=source_root, target_root=target_root)
 
 
 if __name__ == "__main__":

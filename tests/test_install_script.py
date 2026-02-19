@@ -103,8 +103,10 @@ class TestInstallScript(unittest.TestCase):
         komponenten = {"kern": SimpleNamespace(default_aktiv=True, name="Kernkomponente")}
 
         with (
-            patch.object(install_script, "parse_cli_args", return_value=SimpleNamespace(mode="cli", non_interactive=True, desktop_icon=False)),
+            patch.object(install_script, "parse_cli_args", return_value=SimpleNamespace(mode="cli", non_interactive=True, desktop_icon=False, source=Path("."), target=Path("./ziel"))),
+            patch.object(install_script, "validiere_quellpfad", return_value=(True, "ok")),
             patch.object(install_script, "konfiguriere_logging", return_value="install.log"),
+            patch.object(install_script, "kopiere_installationsquellen"),
             patch.object(install_script, "erstelle_standard_komponenten", return_value=komponenten),
             patch.object(install_script, "drucke_voraussetzungsstatus"),
             patch.object(install_script, "drucke_statusbericht"),

@@ -96,7 +96,7 @@ def test_installer_deaktiviert_globale_shell_aktionen(monkeypatch) -> None:
     monkeypatch.setattr(installer_gui, "erstelle_standard_komponenten", lambda _root: {})
     monkeypatch.setattr(installer_gui.InstallerWizardGUI, "_render_schritt", lambda self: None)
 
-    installer_gui.InstallerWizardGUI(master=object(), repo_root=Path("."))
+    installer_gui.InstallerWizardGUI(master=object(), source_root=Path("."), target_root=Path("."))
 
     assert _FakeGuiShell.letzte_kwargs is not None
     assert _FakeGuiShell.letzte_kwargs["show_actions"] is False

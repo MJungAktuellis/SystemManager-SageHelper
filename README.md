@@ -128,13 +128,17 @@ Teile bei Supportanfragen immer diese reproduzierbaren Artefakte aus `logs/`:
 
 ### Option A: GUI-Installer unter Windows (Standard, empfohlen)
 
-1. Repository als ZIP auf den Zielserver kopieren und entpacken.
+1. Repository als ZIP auf den Zielserver kopieren und entpacken (**Quellpfad**).
 2. `Install-SystemManager-SageHelper.cmd` per Doppelklick ausführen.
 3. Der Launcher startet die kanonische Python-Orchestrierung (`scripts/install.py --mode auto`).
-4. Im Modus `auto` wird zuerst GUI versucht und bei Fehlern automatisch auf CLI zurückgefallen.
-5. Im One-Click-/GUI-Flow ist die Option **Desktop-Verknüpfung** standardmäßig aktiviert und wird im Abschluss inkl. Status ausgewiesen.
-6. Standardmäßig schließt sich das Fenster nach erfolgreicher Installation automatisch (keine unnötig offene Konsole).
-7. Bei Fehlern bitte die Dateien `logs/install_launcher.log`, `logs/install_assistant_ps.log`, `logs/install_engine.log` und `logs/install_report.md` teilen.
+4. Der Wizard trennt jetzt klar zwischen:
+   - **Quellpfad** (entpacktes ZIP/Repository, nur als Input),
+   - **Installationsziel** (Standard: `C:\Program Files\SystemManager-SageHelper`).
+5. Vor der Installation wird die Projektstruktur **im Quellpfad** geprüft.
+6. Während der Installation werden alle benötigten Dateien (`src`, `scripts`, Ressourcen) in das Ziel kopiert; danach laufen Launcher und Verknüpfungen nur noch aus dem Zielverzeichnis.
+7. Im One-Click-/GUI-Flow ist die Option **Desktop-Verknüpfung** standardmäßig aktiviert und wird im Abschluss inkl. Status ausgewiesen.
+8. Standardmäßig schließt sich das Fenster nach erfolgreicher Installation automatisch (keine unnötig offene Konsole).
+9. Bei Fehlern bitte die Dateien `logs/install_launcher.log`, `logs/install_assistant_ps.log`, `logs/install_engine.log` und `logs/install_report.md` teilen.
 
 #### CMD-Launcher: Konsole/Debug steuern
 
@@ -278,10 +282,15 @@ Der Installer registriert automatisch einen vollständigen Deinstallations-Eintr
 
 ### Deinstallation
 
-Es gibt zwei saubere Wege:
+Es gibt zwei klar definierte Wege:
 
-1. **Windows GUI:** „Programme und Features“ → `SystemManager-SageHelper` → Deinstallieren.
-2. **Direkt über Uninstaller:** `C:\Program Files\SystemManager-SageHelper\unins*.exe`
+1. **Empfohlen (Inno-Setup / echter Uninstaller):**
+   - **Windows GUI:** „Programme und Features“ → `SystemManager-SageHelper` → Deinstallieren.
+   - **Direkt:** `C:\Program Files\SystemManager-SageHelper\unins*.exe`
+2. **ZIP-/Ordner-Modus (ohne Setup-Paket):**
+   - zuerst Desktop-/Startmenü-Verknüpfungen entfernen,
+   - dann den Installationsmarker unter `%ProgramData%\SystemManager-SageHelper\config\installation_state.json` löschen,
+   - anschließend den Installationsordner (z. B. `C:\Program Files\SystemManager-SageHelper`) entfernen.
 
 > Hinweis: Nutzdaten in `%ProgramData%\SystemManager-SageHelper` können für Audits bewusst erhalten bleiben und bei Bedarf manuell gelöscht werden.
 

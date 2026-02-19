@@ -21,6 +21,7 @@ from systemmanager_sagehelper.gui_state import GUIStateStore, erstelle_installer
 from systemmanager_sagehelper.installation_state import _ermittle_app_version, schreibe_installations_marker
 from systemmanager_sagehelper.installer_gui import starte_installer_wizard
 from systemmanager_sagehelper.installer import (
+    STANDARD_INSTALLATIONSZIEL_WINDOWS,
     ErgebnisStatus,
     InstallationsFehler,
     STANDARD_REIHENFOLGE,
@@ -32,6 +33,9 @@ from systemmanager_sagehelper.installer import (
     schreibe_installationsreport,
     validiere_auswahl_und_abhaengigkeiten,
     erstelle_desktop_verknuepfung_fuer_python_installation,
+    ermittle_standard_installationsziel,
+    kopiere_installationsquellen,
+    validiere_quellpfad,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -134,6 +138,19 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="auto",
         help="Installationsmodus: auto (GUI mit CLI-Fallback), gui oder cli.",
     )
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=REPO_ROOT,
+        help="Quellpfad mit entpacktem ZIP/Repository (read-only).",
+    )
+    parser.add_argument(
+        "--target",
+        type=Path,
+        default=ermittle_standard_installationsziel(),
+        help=f"Installationsziel (Standard: {STANDARD_INSTALLATIONSZIEL_WINDOWS}).",
+    )
+
     desktop_icon_group = parser.add_mutually_exclusive_group()
     desktop_icon_group.add_argument(
         "--desktop-icon",
@@ -157,13 +174,15 @@ def _baue_report_optionen(cli_args: argparse.Namespace) -> dict[str, str]:
         "Modus": cli_args.mode,
         "Non-Interactive": "ja" if cli_args.non_interactive else "nein",
         "Desktop-Icon": "aktiv" if cli_args.desktop_icon else "deaktiviert",
+        "Quellpfad": str(cli_args.source),
+        "Installationsziel": str(cli_args.target),
     }
 
 
-def _starte_gui_modus() -> int:
+def _starte_gui_modus(source_root: Path, target_root: Path) -> int:
     """Startet den GUI-Wizard und liefert einen Exit-Code zurück."""
     try:
-        starte_installer_wizard()
+        starte_installer_wizard(source_root=source_root, target_root=target_root)
         return 0
     except Exception as fehler:
         LOGGER.exception("GUI-Installer fehlgeschlagen.")
@@ -175,12 +194,20 @@ def main() -> None:
     """Startpunkt der kanonischen Installationsorchestrierung."""
     cli_args = parse_cli_args()
     _safe_print("=== Installation von SystemManager-SageHelper ===")
-    log_datei = konfiguriere_logging(REPO_ROOT)
+    quell_root = cli_args.source.expanduser().resolve()
+    ziel_root = cli_args.target.expanduser().resolve()
+
+    gueltig, validierungsnachricht = validiere_quellpfad(quell_root)
+    if not gueltig:
+        _safe_print(f"[ERROR] Ungültiger Quellpfad: {validierungsnachricht}")
+        raise SystemExit(1)
+
+    log_datei = konfiguriere_logging(ziel_root)
     _safe_print(f"[INFO] Installationslog: {log_datei}")
     LOGGER.info("Installationslauf gestartet (mode=%s).", cli_args.mode)
 
     if cli_args.mode in {"auto", "gui"}:
-        gui_exit = _starte_gui_modus()
+        gui_exit = _starte_gui_modus(quell_root, ziel_root)
         if gui_exit == 0:
             _safe_print("[OK] GUI-Installation beendet.")
             return
@@ -188,7 +215,11 @@ def main() -> None:
             raise SystemExit(1)
         _safe_print("[INFO] Fallback auf CLI-Orchestrierung.")
 
-    komponenten = erstelle_standard_komponenten(REPO_ROOT)
+    _safe_print(f"[INFO] Quelle: {quell_root}")
+    _safe_print(f"[INFO] Ziel: {ziel_root}")
+    kopiere_installationsquellen(quell_root, ziel_root)
+
+    komponenten = erstelle_standard_komponenten(ziel_root)
 
     try:
         drucke_voraussetzungsstatus()
@@ -209,7 +240,7 @@ def main() -> None:
         desktop_verknuepfung_pfad: Path | None = None
         if cli_args.desktop_icon:
             try:
-                desktop_verknuepfung_pfad = erstelle_desktop_verknuepfung_fuer_python_installation(REPO_ROOT)
+                desktop_verknuepfung_pfad = erstelle_desktop_verknuepfung_fuer_python_installation(ziel_root)
                 desktop_verknuepfung_status = f"Desktop-Verknüpfung: Erfolgreich erstellt ({desktop_verknuepfung_pfad})"
                 LOGGER.info("Desktop-Verknüpfung erfolgreich erstellt: %s", desktop_verknuepfung_pfad)
             except InstallationsFehler as exc:
@@ -219,14 +250,14 @@ def main() -> None:
             LOGGER.info("Desktop-Verknüpfung wurde per CLI-Option deaktiviert.")
 
         report_datei = schreibe_installationsreport(
-            REPO_ROOT,
+            ziel_root,
             ergebnisse,
             auswahl,
             desktop_verknuepfung_status=desktop_verknuepfung_status,
             einstiegspfad="cli",
             optionen=_baue_report_optionen(cli_args),
         )
-        marker_datei = schreibe_installations_marker(repo_root=REPO_ROOT)
+        marker_datei = schreibe_installations_marker(repo_root=ziel_root)
 
         # Persistiert den Installer-Status zusätzlich im GUI-State, damit Launcher
         # und weitere Oberflächen den Zustand ohne Marker-Details auswerten können.
@@ -261,7 +292,7 @@ def main() -> None:
             _safe_print("[WARN] Desktop-Verknüpfung konnte nicht erstellt werden. Details siehe Installationsreport.")
     else:
         _safe_print("[INFO] Desktop-Verknüpfung wurde deaktiviert.")
-    _safe_print("Startbeispiel:")
+    _safe_print("Startbeispiel (aus Zielverzeichnis):")
     _safe_print("  python -m systemmanager_sagehelper scan --server localhost --rollen APP --out report.md")
 
 
