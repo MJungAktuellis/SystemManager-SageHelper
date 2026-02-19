@@ -120,6 +120,42 @@ class RollenDetails:
 
 
 @dataclass
+class RollenCheckEintrag:
+    """Strukturiertes Ergebnis einer Rollenprüfung für UI und Reporting."""
+
+    rolle: str
+    erkannt: bool
+    details: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PortDienstEintrag:
+    """Gemeinsames Datenmodell für Ports und Dienste in Detailkarten."""
+
+    typ: str
+    name: str
+    status: str
+    details: str | None = None
+
+
+@dataclass
+class ServerDetailkarte:
+    """Vereinheitlicht strukturierte Detaildaten pro Server für UI/Markdown."""
+
+    server: str
+    zeitpunkt: datetime
+    rollen: list[str] = field(default_factory=list)
+    rollenquelle: str | None = None
+    betriebssystem: str | None = None
+    os_version: str | None = None
+    rollen_checks: list[RollenCheckEintrag] = field(default_factory=list)
+    ports_und_dienste: list[PortDienstEintrag] = field(default_factory=list)
+    software: list[str] = field(default_factory=list)
+    empfehlungen: list[str] = field(default_factory=list)
+    freitext_hinweise: list[str] = field(default_factory=list)
+
+
+@dataclass
 class DiscoveryErgebnis:
     """Strukturierter Discovery-Treffer mit Qualitäts- und Fehlerhinweisen."""
 
@@ -160,3 +196,4 @@ class AnalyseErgebnis:
     dienste: list[DienstInfo] = field(default_factory=list)
     software: list[SoftwareInfo] = field(default_factory=list)
     rollen_details: RollenDetails = field(default_factory=RollenDetails)
+    empfehlungen: list[str] = field(default_factory=list)
