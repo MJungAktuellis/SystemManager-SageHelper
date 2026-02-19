@@ -307,6 +307,45 @@ def test_onboarding_discovery_parse_ungueltiges_format() -> None:
         assert "192.168.0.1-30" in str(exc)
 
 
+def test_onboarding_liest_lokale_ipv4_konfiguration_unix(monkeypatch) -> None:
+    """Lokale Interface-Daten sollen zu IPv4/Masken-Paaren aufgelöst werden."""
+    ip_output = "2: eth0    inet 192.168.50.23/24 brd 192.168.50.255 scope global dynamic eth0\n"
+
+    monkeypatch.setattr(gui_manager.os, "name", "posix", raising=False)
+
+    def fake_check_output(command, text=True, stderr=None):  # noqa: ANN001,ANN201
+        if command[:3] == ["ip", "-o", "-f"]:
+            return ip_output
+        raise FileNotFoundError
+
+    monkeypatch.setattr(gui_manager.subprocess, "check_output", fake_check_output)
+
+    konfigurationen = gui_manager.OnboardingController._sammle_lokale_ipv4_konfigurationen()
+
+    assert konfigurationen == [("192.168.50.23", "255.255.255.0")]
+
+
+def test_onboarding_auto_scanbereich_aus_netzkonfiguration() -> None:
+    """Der Standardpfad soll einen Scanbereich ohne manuelle Eingabe ableiten."""
+    controller = object.__new__(gui_manager.OnboardingController)
+
+    class _Var:
+        def __init__(self) -> None:
+            self.value = ""
+
+        def set(self, value: str) -> None:
+            self.value = value
+
+    controller._scanbereich_var = _Var()
+    controller._sammle_lokale_ipv4_konfigurationen = lambda: [("10.10.2.11", "255.255.255.0")]
+
+    bereiche, gespeichert = controller._ermittle_automatischen_scanbereich()
+
+    assert bereiche == [("10.10.2", 1, 254)]
+    assert gespeichert == "10.10.2.1-254"
+    assert "10.10.2.0/24" in controller._scanbereich_var.value
+
+
 def test_erststart_haelt_dashboard_gesperrt_bis_onboarding_abschluss() -> None:
     """Beim Erststart darf kein parallel nutzbares Dashboard aufgebaut werden."""
 
