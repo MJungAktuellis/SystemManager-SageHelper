@@ -31,9 +31,13 @@ class GuiShell:
         *,
         titel: str,
         untertitel: str,
-        on_save: Callable[[], None],
-        on_back: Callable[[], None],
-        on_exit: Callable[[], None],
+        on_save: Callable[[], None] | None = None,
+        on_back: Callable[[], None] | None = None,
+        on_exit: Callable[[], None] | None = None,
+        show_actions: bool = True,
+        show_save_action: bool = True,
+        show_back_action: bool = True,
+        show_exit_action: bool = True,
     ) -> None:
         self.master = master
         self.master.title(titel)
@@ -47,7 +51,18 @@ class GuiShell:
         container.pack(fill="both", expand=True)
 
         self._baue_kopfzeile(container, titel=titel, untertitel=untertitel)
-        self._baue_aktionsleiste(container, on_save=on_save, on_back=on_back, on_exit=on_exit)
+        # Die Shell kann optional ohne globale Aktionsleiste verwendet werden,
+        # z. B. in Wizarden mit eigener, schrittspezifischer Navigation.
+        if show_actions:
+            self._baue_aktionsleiste(
+                container,
+                on_save=on_save,
+                on_back=on_back,
+                on_exit=on_exit,
+                show_save_action=show_save_action,
+                show_back_action=show_back_action,
+                show_exit_action=show_exit_action,
+            )
 
         self.content_frame = ttk.Frame(container)
         self.content_frame.pack(fill="both", expand=True, pady=(LAYOUT.padding_inline, LAYOUT.padding_inline))
@@ -70,16 +85,24 @@ class GuiShell:
         self,
         parent: ttk.Frame,
         *,
-        on_save: Callable[[], None],
-        on_back: Callable[[], None],
-        on_exit: Callable[[], None],
+        on_save: Callable[[], None] | None,
+        on_back: Callable[[], None] | None,
+        on_exit: Callable[[], None] | None,
+        show_save_action: bool,
+        show_back_action: bool,
+        show_exit_action: bool,
     ) -> None:
         leiste = ttk.Frame(parent)
         leiste.pack(fill="x", pady=(10, 4))
 
-        ttk.Button(leiste, text=BUTTON_SPEICHERN, style="Secondary.TButton", command=on_save).pack(side="left", padx=(0, 8))
-        ttk.Button(leiste, text=BUTTON_ZURUECK, style="Secondary.TButton", command=on_back).pack(side="left")
-        ttk.Button(leiste, text=BUTTON_BEENDEN, style="Secondary.TButton", command=on_exit).pack(side="right")
+        if show_save_action and on_save is not None:
+            ttk.Button(leiste, text=BUTTON_SPEICHERN, style="Secondary.TButton", command=on_save).pack(
+                side="left", padx=(0, 8)
+            )
+        if show_back_action and on_back is not None:
+            ttk.Button(leiste, text=BUTTON_ZURUECK, style="Secondary.TButton", command=on_back).pack(side="left")
+        if show_exit_action and on_exit is not None:
+            ttk.Button(leiste, text=BUTTON_BEENDEN, style="Secondary.TButton", command=on_exit).pack(side="right")
 
     def _baue_statusbereich(self, parent: ttk.Frame) -> None:
         rahmen = ttk.LabelFrame(parent, text="Status / Meldungen", style="Section.TLabelframe")

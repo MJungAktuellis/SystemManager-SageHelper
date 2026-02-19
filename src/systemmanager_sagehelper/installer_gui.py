@@ -82,9 +82,10 @@ class InstallerWizardGUI:
             self.window,
             titel=self._wizard_titel,
             untertitel=self._wizard_untertitel,
-            on_save=self._speichere_optionen,
-            on_back=self._zurueck,
-            on_exit=self._beenden,
+            on_save=None,
+            on_back=None,
+            on_exit=None,
+            show_actions=False,
         )
 
         self.lauf_id = erstelle_lauf_id()
@@ -127,9 +128,9 @@ class InstallerWizardGUI:
         self.navigation = ttk.Frame(self.shell.content_frame)
         self.navigation.pack(fill="x", pady=(8, 0))
 
-        self.btn_zurueck = ttk.Button(self.navigation, text="← Zurück", command=self._zurueck)
+        self.btn_zurueck = ttk.Button(self.navigation, text="Zurück", command=self._zurueck)
         self.btn_zurueck.pack(side="left")
-        self.btn_weiter = ttk.Button(self.navigation, text="Weiter →", style="Primary.TButton", command=self._weiter)
+        self.btn_weiter = ttk.Button(self.navigation, text="Weiter", style="Primary.TButton", command=self._weiter)
         self.btn_weiter.pack(side="right")
 
         self.window.protocol("WM_DELETE_WINDOW", self._beenden)
@@ -199,11 +200,11 @@ class InstallerWizardGUI:
         self.btn_zurueck.config(state="normal" if self.aktiver_schritt > 0 else "disabled")
 
         if self.aktiver_schritt < 2:
-            self.btn_weiter.config(state="normal", text="Weiter →", command=self._weiter)
+            self.btn_weiter.config(state="normal", text="Weiter", command=self._weiter)
         elif self.aktiver_schritt == 2:
             self.btn_weiter.config(state="normal", text=f"{self._vorgang_nomen} starten", command=self._starte_installation)
         elif self.aktiver_schritt == 3:
-            self.btn_weiter.config(state="disabled" if self.installation_laueft else "normal", text="Weiter →", command=self._weiter)
+            self.btn_weiter.config(state="disabled" if self.installation_laueft else "normal", text="Weiter", command=self._weiter)
         else:
             self.btn_weiter.config(text="Schließen", state="normal", command=self._beenden)
 
@@ -259,6 +260,15 @@ class InstallerWizardGUI:
         optionen.pack(fill="x", padx=10, pady=8)
         ttk.Checkbutton(optionen, text="Installationsreport schreiben", variable=self.option_report_var).pack(anchor="w")
         ttk.Checkbutton(optionen, text="Installationsmarker aktualisieren", variable=self.option_marker_var).pack(anchor="w")
+
+        # Optionales Speichern der gewählten Optionen als explizite Schrittaktion
+        # (kein globaler Shell-Button), damit die Navigation eindeutig bleibt.
+        ttk.Button(
+            optionen,
+            text="Optionen speichern",
+            style="Secondary.TButton",
+            command=self._speichere_optionen,
+        ).pack(anchor="w", pady=(8, 0))
         if self._ist_wartungsmodus:
             # Im Wartungsmodus wird keine Vollinstallation angestoßen, daher sind
             # One-Click-Artefakte wie ein neues Desktop-Icon hier bewusst ausgeblendet.
