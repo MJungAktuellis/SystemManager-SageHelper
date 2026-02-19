@@ -229,7 +229,22 @@ def _formatiere_diff(soll: SollFreigabe, ist: FreigabeIstZustand, aktion: str, b
     )
 
 
-def plane_freigabeaenderungen(basis_pfad: str, principal_kandidaten: list[str] | None = None) -> list[FreigabeAenderung]:
+def _kandidat_erklaerung(ist: FreigabeIstZustand, kandidaten_pfade: list[Path]) -> str:
+    """Ermittelt einen Hinweis, ob der Ist-Pfad zu einem bekannten Kandidaten passt."""
+    if not ist.pfad:
+        return ""
+    ist_norm = _normalisiere_pfad(ist.pfad)
+    for kandidat in kandidaten_pfade:
+        if _normalisiere_pfad(str(kandidat)) == ist_norm:
+            return f" (gefunden unter Kandidat: {kandidat})"
+    return ""
+
+
+def plane_freigabeaenderungen(
+    basis_pfad: str,
+    principal_kandidaten: list[str] | None = None,
+    kandidaten_pfade: list[Path] | None = None,
+) -> list[FreigabeAenderung]:
     """Plant notwendige Share-Anpassungen anhand eines Ist/Soll-Vergleichs."""
     soll_freigaben = [
         SollFreigabe(ordner=basis_pfad, name="SystemAG$", rechte="CHANGE"),
@@ -238,6 +253,7 @@ def plane_freigabeaenderungen(basis_pfad: str, principal_kandidaten: list[str] |
     ]
 
     kandidaten = principal_kandidaten or _ermittle_principal_kandidaten()
+    struktur_kandidaten = kandidaten_pfade or []
     plan: list[FreigabeAenderung] = []
 
     for soll in soll_freigaben:
@@ -271,7 +287,8 @@ def plane_freigabeaenderungen(basis_pfad: str, principal_kandidaten: list[str] |
 
         gruende: list[str] = []
         if not pfad_ok:
-            gruende.append("Share-Pfad weicht ab")
+            kandidat_text = _kandidat_erklaerung(ist, struktur_kandidaten)
+            gruende.append(f"Share-Pfad weicht ab{kandidat_text}")
         if not rechte_ok:
             gruende.append("erforderliche Rechte fehlen")
         begruendung = " und ".join(gruende)

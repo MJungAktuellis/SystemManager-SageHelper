@@ -59,6 +59,7 @@ _STANDARD_ZUSTAND: dict[str, Any] = {
         "folder_manager": {
             "ausgabepfade": {
                 "basis_pfad": "",
+                "bestaetigter_zielpfad": "",
                 "letztes_protokoll": "",
             },
             "letzte_kerninfos": [],

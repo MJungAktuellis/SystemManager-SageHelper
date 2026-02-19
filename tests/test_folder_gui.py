@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from systemmanager_sagehelper.folder_gui import baue_ordnerlauf_protokoll, erstelle_abschlussmeldungen
-from systemmanager_sagehelper.share_manager import FreigabeErgebnis, FreigabeIstZustand, FreigabeAenderung, SollFreigabe
+from systemmanager_sagehelper.folder_gui import (
+    baue_ordnerlauf_protokoll,
+    erstelle_abschlussmeldungen,
+    erstelle_verstaendlichen_bericht,
+)
+from systemmanager_sagehelper.share_manager import FreigabeAenderung, FreigabeErgebnis, FreigabeIstZustand, SollFreigabe
 
 
 def _freigabe(aktion: str, erfolg: bool = True) -> FreigabeErgebnis:
@@ -50,3 +54,22 @@ def test_protokoll_ist_json_sicher_bei_set_werten() -> None:
 
     assert protokoll["lauf_id"] == "lauf-1"
     assert protokoll["plan"][0]["ist"]["rechte"]["Everyone"] == ["READ"]
+
+
+def test_verstaendlicher_bericht_enthaelt_alle_abschnitte() -> None:
+    plan = [
+        FreigabeAenderung(
+            soll=SollFreigabe(name="SystemAG$", ordner="C:/SystemAG", rechte="CHANGE"),
+            ist=FreigabeIstZustand(existiert=True, pfad="D:/SystemAG", rechte={"Everyone": {"READ"}}),
+            aktion="update",
+            begruendung="Share-Pfad weicht ab",
+            diff_text="[UPDATE] SystemAG$",
+        )
+    ]
+
+    bericht = erstelle_verstaendlichen_bericht("C:/SystemAG", plan, [Path("C:/SystemAG/LiveupdateOL")])
+
+    assert "Problem:" in bericht
+    assert "Auswirkung:" in bericht
+    assert "Empfohlene Maßnahme:" in bericht
+    assert "Begründung:" in bericht

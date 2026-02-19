@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 from systemmanager_sagehelper import share_manager
@@ -85,3 +86,23 @@ def test_erfolgsmeldung_beschreibt_recht_verstaendlich() -> None:
 
     assert ergebnis.erfolg is True
     assert "Everyone mit Recht CHANGE" in ergebnis.meldung
+
+
+def test_plan_kennzeichnet_kandidatenpfad_in_begruendung() -> None:
+    """Bei Pfadabweichung soll der erkannte Kandidatenpfad im Grund auftauchen."""
+    istzustand = {
+        "SystemAG$": FreigabeIstZustand(existiert=True, pfad="D:/Kunde/SystemAG", rechte={"Everyone": {"CHANGE"}}),
+        "AddinsOL$": FreigabeIstZustand(existiert=True, pfad="C:/SystemAG/AddinsOL", rechte={"Everyone": {"CHANGE"}}),
+        "LiveupdateOL$": FreigabeIstZustand(existiert=True, pfad="C:/SystemAG/LiveupdateOL", rechte={"Everyone": {"CHANGE"}}),
+    }
+
+    with patch("systemmanager_sagehelper.share_manager._ermittle_ist_zustand", side_effect=lambda name: istzustand[name]):
+        plan = share_manager.plane_freigabeaenderungen(
+            "C:/SystemAG",
+            principal_kandidaten=["Everyone"],
+            kandidaten_pfade=[Path("D:/Kunde/SystemAG")],
+        )
+
+    systemag_eintrag = next(eintrag for eintrag in plan if eintrag.soll.name == "SystemAG$")
+    assert systemag_eintrag.aktion == "update"
+    assert "gefunden unter Kandidat" in systemag_eintrag.begruendung
