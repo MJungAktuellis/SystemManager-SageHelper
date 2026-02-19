@@ -826,7 +826,8 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
         fehlerursachen.append("tcp_timeout")
 
     hostname = host
-    if konfiguration.nutze_reverse_dns and ip_adressen:
+    # Reverse-DNS dient ausschließlich der Namensanreicherung bereits erreichbarer Hosts.
+    if erreichbar and konfiguration.nutze_reverse_dns and ip_adressen:
         reverse = _resolve_reverse_dns(ip_adresse)
         if reverse:
             strategien.append("reverse_dns")
@@ -842,8 +843,9 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
         else:
             fehlerursachen.append("ad_ldap_nicht_verfuegbar")
 
-    # Ohne Erreichbarkeit und ohne Reverse-DNS gibt es keinen verwertbaren Treffer.
-    if not erreichbar and "reverse_dns" not in strategien:
+    # Filterlogik: Ohne echten Erreichbarkeitsnachweis (ICMP/TCP) wird der Host verworfen.
+    # Reverse-DNS allein ist nicht belastbar, da veraltete PTR-Einträge False Positives erzeugen können.
+    if not erreichbar:
         return None
 
     return DiscoveryErgebnis(

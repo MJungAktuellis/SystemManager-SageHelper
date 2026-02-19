@@ -240,7 +240,7 @@ def test_analyse_starten_erzeugt_bericht_und_zeigt_verweis(monkeypatch) -> None:
 
 
 def test_filter_discovery_treffer_mit_standardfilter_auf_erreichbarkeit() -> None:
-    """Nicht erreichbare (inkl. Reverse-only) Treffer bleiben standardmäßig ausgeblendet."""
+    """Nicht erreichbare Treffer bleiben standardmäßig ausgeblendet."""
     treffer = [
         DiscoveryTabellenTreffer(
             hostname="srv-app-01",
@@ -255,7 +255,6 @@ def test_filter_discovery_treffer_mit_standardfilter_auf_erreichbarkeit() -> Non
             erreichbar=False,
             dienste="-",
             vertrauensgrad=0.1,
-            nur_reverse_dns=True,
         ),
         DiscoveryTabellenTreffer(
             hostname="srv-offline",
