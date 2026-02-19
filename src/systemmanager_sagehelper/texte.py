@@ -10,9 +10,17 @@ from __future__ import annotations
 
 # Einheitliche Statuspräfixe für GUI und Berichtsausgaben.
 STATUS_PREFIX = "Status:"
-STATUS_ERFOLG = "✅ Erfolg"
+STATUS_ERFOLG = "✅ Erfolgreich"
 STATUS_WARNUNG = "⚠️ Warnung"
-STATUS_HINWEIS = "ℹ️ Hinweis"
+STATUS_HINWEIS = "ℹ️ Info"
+STATUS_FEHLER = "❌ Fehler"
+
+
+# Klar verständliche Statusstufen für den Installationsassistenten.
+INSTALLER_STATUS_INFO = "Info"
+INSTALLER_STATUS_WARNUNG = "Warnung"
+INSTALLER_STATUS_FEHLER = "Fehler"
+INSTALLER_STATUS_ERFOLGREICH = "Erfolgreich"
 
 
 # Wiederverwendbare Schaltflächenbeschriftungen.
@@ -37,3 +45,14 @@ BERICHT_KOPFBEREICH = "Kopfbereich"
 BERICHT_MANAGEMENT_ZUSAMMENFASSUNG = "Management-Zusammenfassung"
 BERICHT_SERVERLISTE = "Serverliste"
 BERICHT_MASSNAHMEN = "Maßnahmen und offene Punkte"
+
+
+# Standardtexte rund um den Shell-Meldungsbereich.
+SHELL_BEREICH_STATUS_MELDUNGEN = "Status / Meldungen"
+SHELL_OPTION_TECHNISCHE_LOGS = "Technische Meldungen anzeigen"
+SHELL_STATUS_BEREIT = "Bereit"
+
+
+# Abschlussseite im Installer-Wizard.
+INSTALLER_ABSCHLUSS_WAS_GETAN = "Was wurde getan"
+INSTALLER_ABSCHLUSS_NAECHSTE_SCHRITTE = "Was ist als Nächstes zu tun?"
