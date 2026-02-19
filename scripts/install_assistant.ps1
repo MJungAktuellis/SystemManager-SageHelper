@@ -94,8 +94,158 @@ function Invoke-PythonInstallAttempt {
     return $false
 }
 
+function Invoke-InstallerExecutable {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$StrategyLabel,
+        [int]$TimeoutSeconds = 600
+    )
+
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        Write-PsLog -Category "WARN" -Cause "INSTALLER_DATEI_FEHLT" -Candidate $StrategyLabel -Message "Installer-Datei wurde nicht gefunden: $FilePath"
+        return @{ Success = $false; ExitCode = $null; Reason = "Datei nicht gefunden" }
+    }
+
+    Write-Host "[INFO] Starte Installationsstrategie '$StrategyLabel' mit '$FilePath'."
+    Write-PsLog -Category "INFO" -Cause "INSTALLATIONSSTRATEGIE_START" -Candidate $StrategyLabel -Message "Datei: $FilePath | Argumente: $($Arguments -join ' ')"
+
+    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -Wait -PassThru -NoNewWindow
+    if ($null -eq $process) {
+        Write-PsLog -Category "ERROR" -Cause "INSTALLER_START_FEHLGESCHLAGEN" -Candidate $StrategyLabel -Message "Prozessstart lieferte kein Prozessobjekt."
+        return @{ Success = $false; ExitCode = $null; Reason = "Prozessstart fehlgeschlagen" }
+    }
+
+    # Einige Installer ignorieren -Wait; deshalb prüfen wir zusätzlich aktiv auf Timeout.
+    if (-not $process.HasExited) {
+        $waitResult = $process.WaitForExit($TimeoutSeconds * 1000)
+        if (-not $waitResult) {
+            $process.Kill()
+            Write-PsLog -Category "ERROR" -Cause "INSTALLER_TIMEOUT" -Candidate $StrategyLabel -Message "Timeout nach $TimeoutSeconds Sekunden, Prozess wurde beendet."
+            return @{ Success = $false; ExitCode = $null; Reason = "Timeout" }
+        }
+    }
+
+    $exitCode = $process.ExitCode
+    Write-PsLog -Category "INFO" -Cause "INSTALLER_BEENDET" -Candidate $StrategyLabel -ExitCode $exitCode -Message "Strategie beendet."
+
+    if ($exitCode -in @(0, 1641, 3010)) {
+        return @{ Success = $true; ExitCode = $exitCode; Reason = "Erfolgreich" }
+    }
+
+    return @{ Success = $false; ExitCode = $exitCode; Reason = "ExitCode $exitCode" }
+}
+
+function Find-LocalPythonInstaller {
+    param([string]$RepoRoot)
+
+    $searchRoots = @(
+        Join-Path $RepoRoot "scripts\bootstrap",
+        Join-Path $RepoRoot "installer\bootstrap"
+    )
+
+    $patterns = @("python*.exe", "python*.msi")
+    foreach ($root in $searchRoots) {
+        if (-not (Test-Path -LiteralPath $root)) {
+            Write-PsLog -Category "INFO" -Cause "LOKALER_INSTALLER_PFAD_FEHLT" -Candidate "lokaler-installer" -Message "Pfad fehlt: $root"
+            continue
+        }
+
+        $matches = Get-ChildItem -Path $root -File -ErrorAction SilentlyContinue | Where-Object {
+            $name = $_.Name.ToLowerInvariant()
+            [bool]($patterns | Where-Object { $name -like $_ } | Select-Object -First 1)
+        } | Sort-Object LastWriteTime -Descending
+
+        if ($matches) {
+            $selected = $matches | Select-Object -First 1
+            Write-PsLog -Category "INFO" -Cause "LOKALER_INSTALLER_GEFUNDEN" -Candidate "lokaler-installer" -Message "Verwende Datei: $($selected.FullName)"
+            return $selected.FullName
+        }
+    }
+
+    return $null
+}
+
+function Get-InstallerArguments {
+    param([string]$InstallerPath)
+
+    $extension = [System.IO.Path]::GetExtension($InstallerPath).ToLowerInvariant()
+    if ($extension -eq ".msi") {
+        return @("/i", "`"$InstallerPath`"", "/qn", "/norestart")
+    }
+
+    # Offizielle Python-EXE-Installer-Parameter für eine stille Installation.
+    return @("/quiet", "InstallAllUsers=1", "PrependPath=1", "Include_launcher=1")
+}
+
+function Test-DownloadAllowed {
+    # Standardmäßig aus Sicherheitsgründen deaktiviert. Aktivierung nur bewusst per Umgebungsvariable.
+    return $env:SYSTEMMANAGER_ALLOW_PYTHON_DOWNLOAD -eq "1"
+}
+
+function Invoke-DownloadWithRetry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [int]$RetryCount = 3,
+        [int]$TimeoutSeconds = 120
+    )
+
+    for ($attempt = 1; $attempt -le $RetryCount; $attempt++) {
+        try {
+            Write-PsLog -Category "INFO" -Cause "DOWNLOAD_VERSUCH" -Candidate "online-download" -Message "Versuch $attempt/$RetryCount: $Url"
+            $progressPreferenceBackup = $ProgressPreference
+            $ProgressPreference = "SilentlyContinue"
+            Invoke-WebRequest -Uri $Url -OutFile $Destination -TimeoutSec $TimeoutSeconds -UseBasicParsing
+            $ProgressPreference = $progressPreferenceBackup
+            return $true
+        }
+        catch {
+            $ProgressPreference = $progressPreferenceBackup
+            Write-PsLog -Category "WARN" -Cause "DOWNLOAD_FEHLER" -Candidate "online-download" -Message "Versuch $attempt fehlgeschlagen: $($_.Exception.Message)"
+            Start-Sleep -Seconds ([Math]::Min(5 * $attempt, 15))
+        }
+    }
+
+    return $false
+}
+
+function Test-FileHashMatch {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string]$ExpectedSha256
+    )
+
+    $actualHash = (Get-FileHash -Path $FilePath -Algorithm SHA256).Hash
+    $match = $actualHash.Equals($ExpectedSha256, [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not $match) {
+        Write-PsLog -Category "ERROR" -Cause "HASH_PRUEFUNG_FEHLGESCHLAGEN" -Candidate "online-download" -Message "Erwartet: $ExpectedSha256 | Ist: $actualHash"
+    }
+    return $match
+}
+
+function Resolve-PythonAfterInstall {
+    param(
+        [array]$Candidates,
+        [string]$StrategyLabel
+    )
+
+    Refresh-ProcessPath
+    $resolved = Resolve-PythonLauncher -Candidates $Candidates
+    if ($resolved) {
+        Write-PsLog -Category "INFO" -Cause "PYTHON_NACH_INSTALLATION_GEFUNDEN" -Candidate $StrategyLabel -Message "Launcher: $($resolved.Label)"
+        return $resolved
+    }
+
+    Write-PsLog -Category "WARN" -Cause "PYTHON_NACH_INSTALLATION_NICHT_GEFUNDEN" -Candidate $StrategyLabel -Message "Trotz Installation kein Launcher gefunden."
+    return $null
+}
+
 function Ensure-PythonAvailable {
-    param([array]$Candidates)
+    param(
+        [array]$Candidates,
+        [string]$RepoRoot
+    )
 
     $resolved = Resolve-PythonLauncher -Candidates $Candidates
     if ($resolved) {
@@ -103,20 +253,89 @@ function Ensure-PythonAvailable {
         return $resolved
     }
 
-    Write-Host "[WARN] Kein Python-Launcher gefunden. Starte Bootstrap-Installation (winget -> choco)."
+    Write-Host "[WARN] Kein Python-Launcher gefunden. Starte Bootstrap-Installation (winget -> choco -> lokal -> online optional)."
     Write-PsLog -Category "WARN" -Cause "PYTHON_FEHLT" -Message "Kein Python-Launcher gefunden."
 
+    $strategyErrors = New-Object System.Collections.Generic.List[string]
+
     $installSucceeded = Invoke-PythonInstallAttempt -Installer "winget" -Command "winget" -Arguments @("install", "--id", "Python.Python.3.11", "-e", "--accept-package-agreements", "--accept-source-agreements")
-    if (-not $installSucceeded) {
-        $installSucceeded = Invoke-PythonInstallAttempt -Installer "choco" -Command "choco" -Arguments @("install", "python", "--yes", "--no-progress")
+    if ($installSucceeded) {
+        $resolved = Resolve-PythonAfterInstall -Candidates $Candidates -StrategyLabel "winget"
+        if ($resolved) { return $resolved }
+        $strategyErrors.Add("winget: Installation erfolgreich, aber Launcher nicht auflösbar") | Out-Null
+    }
+    else {
+        $strategyErrors.Add("winget: nicht verfügbar oder fehlgeschlagen") | Out-Null
     }
 
-    if (-not $installSucceeded) {
-        return $null
+    $installSucceeded = Invoke-PythonInstallAttempt -Installer "choco" -Command "choco" -Arguments @("install", "python", "--yes", "--no-progress")
+    if ($installSucceeded) {
+        $resolved = Resolve-PythonAfterInstall -Candidates $Candidates -StrategyLabel "choco"
+        if ($resolved) { return $resolved }
+        $strategyErrors.Add("choco: Installation erfolgreich, aber Launcher nicht auflösbar") | Out-Null
+    }
+    else {
+        $strategyErrors.Add("choco: nicht verfügbar oder fehlgeschlagen") | Out-Null
     }
 
-    Refresh-ProcessPath
-    return Resolve-PythonLauncher -Candidates $Candidates
+    $localInstaller = Find-LocalPythonInstaller -RepoRoot $RepoRoot
+    if ($localInstaller) {
+        $installerArguments = Get-InstallerArguments -InstallerPath $localInstaller
+        if ([System.IO.Path]::GetExtension($localInstaller).ToLowerInvariant() -eq ".msi") {
+            $execution = Invoke-InstallerExecutable -FilePath "msiexec.exe" -Arguments $installerArguments -StrategyLabel "lokaler-msi-installer"
+        }
+        else {
+            $execution = Invoke-InstallerExecutable -FilePath $localInstaller -Arguments $installerArguments -StrategyLabel "lokaler-exe-installer"
+        }
+
+        if ($execution.Success) {
+            $resolved = Resolve-PythonAfterInstall -Candidates $Candidates -StrategyLabel "lokaler-installer"
+            if ($resolved) { return $resolved }
+            $strategyErrors.Add("lokaler Installer: ExitCode $($execution.ExitCode), aber Launcher nicht auflösbar") | Out-Null
+        }
+        else {
+            $strategyErrors.Add("lokaler Installer: $($execution.Reason)") | Out-Null
+        }
+    }
+    else {
+        $strategyErrors.Add("lokaler Installer: keine Datei in scripts/bootstrap oder installer/bootstrap gefunden") | Out-Null
+    }
+
+    if (Test-DownloadAllowed) {
+        $downloadUrl = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
+        $expectedHash = $env:SYSTEMMANAGER_PYTHON_BOOTSTRAP_SHA256
+        $downloadTarget = Join-Path $env:TEMP "python-3.11.9-amd64.exe"
+
+        if ([string]::IsNullOrWhiteSpace($expectedHash)) {
+            $strategyErrors.Add("online-download: übersprungen, da SYSTEMMANAGER_PYTHON_BOOTSTRAP_SHA256 fehlt") | Out-Null
+            Write-PsLog -Category "WARN" -Cause "DOWNLOAD_OHNE_HASH_VERBOTEN" -Candidate "online-download" -Message "Download aktiviert, aber keine Hash-Vorgabe gesetzt."
+        }
+        else {
+            $downloadOk = Invoke-DownloadWithRetry -Url $downloadUrl -Destination $downloadTarget
+            if ($downloadOk -and (Test-FileHashMatch -FilePath $downloadTarget -ExpectedSha256 $expectedHash)) {
+                $execution = Invoke-InstallerExecutable -FilePath $downloadTarget -Arguments (Get-InstallerArguments -InstallerPath $downloadTarget) -StrategyLabel "online-download-installer"
+                if ($execution.Success) {
+                    $resolved = Resolve-PythonAfterInstall -Candidates $Candidates -StrategyLabel "online-download"
+                    if ($resolved) { return $resolved }
+                    $strategyErrors.Add("online-download: ExitCode $($execution.ExitCode), aber Launcher nicht auflösbar") | Out-Null
+                }
+                else {
+                    $strategyErrors.Add("online-download: Installer fehlgeschlagen ($($execution.Reason))") | Out-Null
+                }
+            }
+            else {
+                $strategyErrors.Add("online-download: Download oder Hash-Prüfung fehlgeschlagen") | Out-Null
+            }
+        }
+    }
+    else {
+        $strategyErrors.Add("online-download: per Richtlinie deaktiviert (SYSTEMMANAGER_ALLOW_PYTHON_DOWNLOAD!=1)") | Out-Null
+    }
+
+    $errorMessage = "Keine Installationsstrategie erfolgreich: " + ($strategyErrors -join " | ")
+    Write-PsLog -Category "ERROR" -Cause "PYTHON_BOOTSTRAP_FEHLGESCHLAGEN" -Message $errorMessage
+    Write-Host "[FEHLER] Python-Bootstrap fehlgeschlagen. Details: $errorMessage"
+    return $null
 }
 
 if (-not (Test-Admin)) {
@@ -139,13 +358,15 @@ Add-Content -Path $PsLog -Value ("==== [" + (Get-Date -Format "yyyy-MM-dd HH:mm:
 
 # Bevorzugte Interpreter-Reihenfolge für den Start der Python-Orchestrierung.
 $PythonCandidates = Get-PythonCandidates
-$resolvedLauncher = Ensure-PythonAvailable -Candidates $PythonCandidates
+$resolvedLauncher = Ensure-PythonAvailable -Candidates $PythonCandidates -RepoRoot $RepoRoot
 if (-not $resolvedLauncher) {
     Write-Host "[FEHLER] Python konnte nicht automatisch installiert oder gefunden werden."
     Write-Host "Konkrete Schritte:"
     Write-Host "  1) winget install --id Python.Python.3.11 -e"
     Write-Host "  2) Falls winget fehlt: choco install python --yes"
-    Write-Host "  3) Danach erneut 'Install-SystemManager-SageHelper.cmd' starten."
+    Write-Host "  3) Alternativ lokalen Installer in scripts/bootstrap oder installer/bootstrap ablegen."
+    Write-Host "  4) Optional Online-Download erlauben: SYSTEMMANAGER_ALLOW_PYTHON_DOWNLOAD=1 und SYSTEMMANAGER_PYTHON_BOOTSTRAP_SHA256 setzen."
+    Write-Host "  5) Danach erneut 'Install-SystemManager-SageHelper.cmd' starten."
     Write-PsLog -Category "ERROR" -Cause "PYTHON_FEHLT" -Message "Python nicht verfügbar und automatische Installation nicht erfolgreich."
     exit 1
 }

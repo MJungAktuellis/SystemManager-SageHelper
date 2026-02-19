@@ -217,14 +217,26 @@ Erwartbares Verhalten:
 1. Der Launcher prüft nacheinander `py -3`, `python` und `python3`.
 2. Falls kein Launcher gefunden wird, startet automatisch die Installation in dieser Reihenfolge:
    - zuerst `winget` (`Python.Python.3.11`),
-   - danach als Fallback `choco install python --yes`.
-3. Nach erfolgreicher Installation wird die PATH-Auflösung im laufenden Prozess aktualisiert und `scripts/install.py` erneut gestartet.
-4. Alle Ergebnisse inkl. Ursachenklassifikation und Exit-Codes werden in `logs/install_assistant_ps.log` protokolliert.
+   - danach als Fallback `choco install python --yes`,
+   - danach lokaler Offline-Installer aus `scripts/bootstrap/` oder `installer/bootstrap/` (`*.exe`/`*.msi`),
+   - optional ein Online-Download (nur bei expliziter Freigabe per Umgebungsvariable).
+3. Nach **jeder** Installationsstrategie aktualisiert der Launcher die PATH-Auflösung im laufenden Prozess und prüft den Python-Launcher erneut.
+4. Alle Ergebnisse inkl. Strategiepfad, Ursachenklassifikation und Exit-Codes werden in `logs/install_assistant_ps.log` protokolliert.
+
+Optionale Freigabe für den Online-Download:
+
+```powershell
+$env:SYSTEMMANAGER_ALLOW_PYTHON_DOWNLOAD = "1"
+$env:SYSTEMMANAGER_PYTHON_BOOTSTRAP_SHA256 = "<ERWARTETER_SHA256_HASH>"
+```
+
+> Der Download wird nur ausgeführt, wenn **beide** Variablen gesetzt sind. Ohne Hash-Vorgabe wird aus Sicherheitsgründen nicht installiert.
 
 Troubleshooting:
 
-- Wenn `winget` und `choco` beide fehlen, installiert der Launcher Python nicht automatisch.
-- In diesem Fall Python manuell installieren und den Launcher erneut ausführen:
+- Wenn `winget` und `choco` fehlen, wird automatisch nach lokalen Bootstrap-Installern gesucht.
+- Wenn keine lokalen Installer vorhanden sind, Python manuell installieren oder den optionalen Online-Download freigeben.
+- Für manuelle Installation:
 
 ```powershell
 winget install --id Python.Python.3.11 -e
@@ -232,7 +244,7 @@ winget install --id Python.Python.3.11 -e
 choco install python --yes
 ```
 
-- Bei wiederholten Fehlern bitte die Logdatei `logs/install_assistant_ps.log` mit den Kategorien `PYTHON_FEHLT`, `INSTALLER_FEHLGESCHLAGEN` und den jeweiligen `EXITCODE`-Einträgen prüfen.
+- Bei wiederholten Fehlern bitte die Logdatei `logs/install_assistant_ps.log` mit den Kategorien `PYTHON_BOOTSTRAP_FEHLGESCHLAGEN`, `INSTALLATIONSSTRATEGIE_START`, `INSTALLER_BEENDET`, `HASH_PRUEFUNG_FEHLGESCHLAGEN` und den jeweiligen `EXITCODE`-Einträgen prüfen.
 
 ## Windows-Build & distributierbares Installer-Paket
 
