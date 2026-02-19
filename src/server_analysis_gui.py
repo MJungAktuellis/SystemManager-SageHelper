@@ -228,6 +228,9 @@ class DiscoveryTabellenTreffer:
     erreichbar: bool
     dienste: str
     vertrauensgrad: float
+    rollenhinweise: tuple[str, ...] = ()
+    namensquelle: str | None = None
+    erklaerung: str = ""
 
 
 def _bewerte_vertrauen_als_sterne(vertrauensgrad: float) -> str:
@@ -243,6 +246,27 @@ def _formatiere_vertrauensanzeige(vertrauensgrad: float, *, zeige_rohwert: bool)
     if not zeige_rohwert:
         return sterne
     return f"{sterne} ({vertrauensgrad:.2f})"
+
+
+def _namensquelle_anzeige(namensquelle: str | None) -> str:
+    """Formatiert die Herkunft des angezeigten Hostnamens für die GUI."""
+    mapping = {
+        "forward_dns": "Forward-DNS",
+        "reverse_dns": "Reverse-DNS",
+        "eingabe": "Eingabe",
+    }
+    return mapping.get((namensquelle or "").lower(), "nicht auflösbar")
+
+
+def _erklaerung_aus_treffer(treffer: DiscoveryTabellenTreffer) -> str:
+    """Erstellt eine knappe Begründung für den Rollenvorschlag."""
+    teile = []
+    if treffer.dienste and treffer.dienste != "-":
+        teile.append(f"Ports/Dienste: {treffer.dienste}")
+    if treffer.rollenhinweise:
+        teile.append("Hinweise: " + ", ".join(treffer.rollenhinweise))
+    teile.append(f"Hostname: {_namensquelle_anzeige(treffer.namensquelle)}")
+    return " | ".join(teile)
 
 
 _VERTRAUENS_TOOLTIP_TEXT = (
@@ -324,9 +348,14 @@ class DiscoveryTrefferDialog:
                 erreichbar=item.erreichbar,
                 dienste=", ".join(item.erkannte_dienste) or "-",
                 vertrauensgrad=item.vertrauensgrad,
+                rollenhinweise=tuple(item.rollenhinweise),
+                namensquelle=item.namensquelle,
+                erklaerung="",
             )
             for item in treffer
         ]
+        for eintrag in self._treffer:
+            eintrag.erklaerung = _erklaerung_aus_treffer(eintrag)
         self.ausgewaehlt: list[DiscoveryTabellenTreffer] = []
 
         self.window = tk.Toplevel(parent)
@@ -368,7 +397,7 @@ class DiscoveryTrefferDialog:
 
         self.tree = ttk.Treeview(
             self.window,
-            columns=("hostname", "ip", "erreichbar", "dienste", "vertrauen"),
+            columns=("hostname", "ip", "erreichbar", "dienste", "namensquelle", "vertrauen", "erklaerung"),
             show="headings",
             selectmode="extended",
             height=17,
@@ -378,12 +407,16 @@ class DiscoveryTrefferDialog:
         self.tree.heading("ip", text="IP")
         self.tree.heading("erreichbar", text="Erreichbar")
         self.tree.heading("dienste", text="Dienste")
+        self.tree.heading("namensquelle", text="Namensquelle")
         self.tree.heading("vertrauen", text="Vertrauensgrad")
+        self.tree.heading("erklaerung", text="Erklärung")
         self.tree.column("hostname", width=220)
         self.tree.column("ip", width=150)
         self.tree.column("erreichbar", width=90, anchor="center")
-        self.tree.column("dienste", width=260)
+        self.tree.column("dienste", width=180)
+        self.tree.column("namensquelle", width=120, anchor="center")
         self.tree.column("vertrauen", width=150, anchor="center")
+        self.tree.column("erklaerung", width=320)
         self.tree.bind("<Double-1>", self._bearbeite_hostname)
 
         self._id_zu_treffer: dict[str, DiscoveryTabellenTreffer] = {}
@@ -408,10 +441,12 @@ class DiscoveryTrefferDialog:
                     treffer.ip_adresse,
                     "ja" if treffer.erreichbar else "nein",
                     treffer.dienste,
+                    _namensquelle_anzeige(treffer.namensquelle),
                     _formatiere_vertrauensanzeige(
                         treffer.vertrauensgrad,
                         zeige_rohwert=self.zeige_rohwert_var.get(),
                     ),
+                    treffer.erklaerung,
                 ),
             )
             self._id_zu_treffer[item_id] = treffer
@@ -451,14 +486,32 @@ class DiscoveryTrefferDialog:
 
 
 def _rollen_aus_discovery_treffer(treffer: DiscoveryTabellenTreffer) -> list[str]:
-    """Leitet eine konservative Rollenvorbelegung aus Discovery-Diensten ab."""
-    rollen = []
-    if "1433" in treffer.dienste:
-        rollen.append("SQL")
+    """Leitet Rollenvorschläge über gewichtete Heuristiken aus Discovery-Indikatoren ab."""
+    punktestand = {"SQL": 0, "APP": 0, "CTX": 0}
+
+    # Port-/Dienstgewichtung: SQL bleibt auch ohne offenen 1433 möglich.
+    if any(port in treffer.dienste for port in ("1433", "1434", "4022")):
+        punktestand["SQL"] += 4
     if "3389" in treffer.dienste:
-        rollen.append("CTX")
+        punktestand["CTX"] += 4
+
+    # Analysevorbefunde aus Discovery (z. B. Remote-Inventar, SQL-Dienste, Instanzen).
+    for hinweis in treffer.rollenhinweise:
+        lower = hinweis.lower()
+        if lower.startswith("sql_"):
+            punktestand["SQL"] += 3
+        if "termservice" in lower or "sessionenv" in lower:
+            punktestand["CTX"] += 2
+
+    # Restliche erreichbare Systeme werden als APP gewichtet, aber nicht blind bevorzugt.
+    if treffer.erreichbar:
+        punktestand["APP"] += 1
+
+    rollen = [rolle for rolle, score in punktestand.items() if score >= 3]
     if not rollen:
-        rollen.append("APP")
+        # Fallback mit höchstem Score statt starrem APP-Default.
+        beste_rolle = max(punktestand, key=punktestand.get)
+        rollen = [beste_rolle]
     return rollen
 def _detailzeilen(ergebnis: AnalyseErgebnis) -> list[str]:
     """Liefert strukturierte Detailzeilen je Server für die aufklappbare Ansicht."""

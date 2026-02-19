@@ -90,6 +90,7 @@ def test_rollenableitung_aus_discovery_diensten() -> None:
         erreichbar=True,
         dienste="1433, 3389",
         vertrauensgrad=0.9,
+        rollenhinweise=("sql_instanz:mssqlserver",),
     )
     nur_app = DiscoveryTabellenTreffer(
         hostname="srv-02",
@@ -101,6 +102,32 @@ def test_rollenableitung_aus_discovery_diensten() -> None:
 
     assert _rollen_aus_discovery_treffer(sql_ctx) == ["SQL", "CTX"]
     assert _rollen_aus_discovery_treffer(nur_app) == ["APP"]
+
+
+def test_rollenableitung_sql_ohne_1433_durch_instanzhinweis() -> None:
+    """SQL soll auch ohne Port 1433 erkannt werden, wenn belastbare Hinweise vorliegen."""
+    nur_sql_hinweis = DiscoveryTabellenTreffer(
+        hostname="srv-sql-browser",
+        ip_adresse="10.0.0.12",
+        erreichbar=True,
+        dienste="1434",
+        vertrauensgrad=0.6,
+        rollenhinweise=("sql_instanz:sage", "sql_remote_dienst:sqlbrowser"),
+    )
+    assert _rollen_aus_discovery_treffer(nur_sql_hinweis) == ["SQL"]
+
+
+def test_rollenableitung_gemischte_rollen() -> None:
+    """Bei gemischten Hinweisen sollen mehrere Rollen gleichzeitig vorgeschlagen werden."""
+    gemischt = DiscoveryTabellenTreffer(
+        hostname="srv-mix-01",
+        ip_adresse="10.0.0.13",
+        erreichbar=True,
+        dienste="3389",
+        vertrauensgrad=0.7,
+        rollenhinweise=("sql_remote_dienst:mssqlserver",),
+    )
+    assert _rollen_aus_discovery_treffer(gemischt) == ["SQL", "CTX"]
 
 
 def test_executive_summary_aggregiert_rollen_ports_und_warnungen() -> None:
