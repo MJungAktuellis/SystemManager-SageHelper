@@ -78,3 +78,29 @@ def test_installer_modulzustand_schema_bleibt_stabil() -> None:
         "zeitpunkt": "2026-05-06T10:11:12",
         "bericht_pfad": "logs/install_report.md",
     }
+
+
+def test_onboarding_status_migration_setzt_erststart_schema_stabil(tmp_path: Path) -> None:
+    """Legacy-Onboardingdaten werden auf das aktuelle Erststart-Schema migriert."""
+    store = GUIStateStore(tmp_path / "gui_state.json")
+    store.speichere_gesamtzustand({
+        "onboarding": {"onboarding_abgeschlossen": False, "onboarding_version": "0.9.0"},
+        "modules": {},
+    })
+
+    geladen = store.lade_onboarding_status()
+
+    assert geladen["onboarding_schema_version"] == 2
+    assert geladen["onboarding_status"] == "ausstehend"
+    assert geladen["abbruch_zeitpunkt"] == ""
+
+
+def test_onboarding_status_migration_markiert_abbruch_konsistent(tmp_path: Path) -> None:
+    """Ist ein Abbruchzeitpunkt vorhanden, bleibt der Modus eindeutig abgebrochen."""
+    store = GUIStateStore(tmp_path / "gui_state.json")
+    store.speichere_onboarding_status({"abbruch_zeitpunkt": "2026-07-01T08:30:00"})
+
+    geladen = store.lade_onboarding_status()
+
+    assert geladen["onboarding_abgeschlossen"] is False
+    assert geladen["onboarding_status"] == "abgebrochen"

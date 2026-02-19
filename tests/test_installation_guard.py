@@ -151,6 +151,8 @@ def test_onboarding_guard_startet_wizard_bei_offenem_status(monkeypatch) -> None
     gui._onboarding_controller = SimpleNamespace(starte_wizard=Mock())
     gui.master = SimpleNamespace(after=lambda delay, callback: aufrufe.append((delay, callback)))
 
+    status = gui._initialisiere_onboarding_status()
+    gui._onboarding_aktiv = not status.get("onboarding_abgeschlossen", False)
     gui._pruefe_onboarding_guard()
 
     assert gui.state_store.gespeichert is not None
@@ -178,6 +180,8 @@ def test_onboarding_guard_ignoriert_abgeschlossenen_status() -> None:
     gui._onboarding_controller = SimpleNamespace(starte_wizard=Mock())
     gui.master = SimpleNamespace(after=Mock())
 
+    status = gui._initialisiere_onboarding_status()
+    gui._onboarding_aktiv = not status.get("onboarding_abgeschlossen", False)
     gui._pruefe_onboarding_guard()
 
     gui.master.after.assert_not_called()
@@ -222,7 +226,7 @@ def test_dashboard_installationsstatus_nutzt_marker_pruefung_mit_versionsinfo(mo
 
     gui._aktualisiere_dashboard_status()
 
-    assert gui._karten_status["installation"].value == "Status: Installiert (2.0.0)"
+    assert gui._karten_status["installation"].value.startswith("Status: Installiert (2.0.0)")
 
 
 def test_dashboard_installationsstatus_zeigt_teilweise_konfiguration_ohne_marker(monkeypatch) -> None:
@@ -301,3 +305,21 @@ def test_onboarding_discovery_parse_ungueltiges_format() -> None:
         assert "Ungültiges Format für die Netzwerkerkennung" in str(exc)
         assert "192.168.0.0/24" in str(exc)
         assert "192.168.0.1-30" in str(exc)
+
+
+def test_erststart_haelt_dashboard_gesperrt_bis_onboarding_abschluss() -> None:
+    """Beim Erststart darf kein parallel nutzbares Dashboard aufgebaut werden."""
+
+    gui = object.__new__(gui_manager.SystemManagerGUI)
+    gui.state_store = SimpleNamespace(lade_onboarding_status=lambda: {"onboarding_abgeschlossen": False})
+    gui._dashboard_gebaut = False
+    gui._onboarding_aktiv = True
+    gui._baue_dashboard = Mock()
+    gui._onboarding_controller = SimpleNamespace(starte_wizard=Mock())
+    gui.master = SimpleNamespace(after=Mock())
+
+    gui._pruefe_onboarding_guard()
+
+    gui._baue_dashboard.assert_not_called()
+    assert gui._dashboard_gebaut is False
+    gui.master.after.assert_called_once()

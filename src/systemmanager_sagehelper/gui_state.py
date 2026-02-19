@@ -21,8 +21,11 @@ _STANDARD_ZUSTAND: dict[str, Any] = {
     "onboarding": {
         "onboarding_abgeschlossen": False,
         "onboarding_version": "1.0.0",
+        "onboarding_schema_version": 2,
+        "onboarding_status": "ausstehend",
         "erststart_zeitpunkt": "",
         "letzter_abschluss_zeitpunkt": "",
+        "abbruch_zeitpunkt": "",
     },
     "modules": {
         "gui_manager": {
@@ -154,12 +157,34 @@ class GUIStateStore:
         onboarding_datei = gesamtzustand.get("onboarding")
         if isinstance(onboarding_datei, dict):
             onboarding_standard.update(onboarding_datei)
-        return onboarding_standard
+        return self._migriere_onboarding_status(onboarding_standard)
 
     def speichere_onboarding_status(self, onboarding_status: dict[str, Any]) -> None:
         """Persistiert den Onboarding-Status im Gesamtzustand."""
         gesamtzustand = self.lade_gesamtzustand()
         combined_status = self.lade_onboarding_status()
         combined_status.update(onboarding_status)
-        gesamtzustand["onboarding"] = combined_status
+        gesamtzustand["onboarding"] = self._migriere_onboarding_status(combined_status)
         self.speichere_gesamtzustand(gesamtzustand)
+
+    @staticmethod
+    def _migriere_onboarding_status(onboarding_status: dict[str, Any]) -> dict[str, Any]:
+        """Normalisiert Legacy-Onboardingdaten auf das aktuelle, robuste Schema.
+
+        Historisch enthielt der Persistenzzustand nur wenige Felder. Für stabile
+        Erststarts und nachvollziehbare Zustandsübergänge werden fehlende Felder
+        ergänzt und der Status deterministisch abgeleitet.
+        """
+        status = deepcopy(_STANDARD_ZUSTAND["onboarding"])
+        status.update(onboarding_status)
+
+        if status.get("onboarding_abgeschlossen"):
+            status["onboarding_status"] = "abgeschlossen"
+        elif status.get("abbruch_zeitpunkt"):
+            status["onboarding_status"] = "abgebrochen"
+        elif status.get("onboarding_status") not in {"ausstehend", "abgebrochen", "abgeschlossen"}:
+            status["onboarding_status"] = "ausstehend"
+
+        status["onboarding_schema_version"] = 2
+        status["onboarding_version"] = str(status.get("onboarding_version") or _STANDARD_ZUSTAND["onboarding"]["onboarding_version"])
+        return status

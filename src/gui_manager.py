@@ -52,6 +52,7 @@ def _formatiere_server_summary_fuer_dashboard(server_summary: list[dict[str, obj
     return " | ".join(zeilen)
 
 _ONBOARDING_VERSION = "1.0.0"
+_ONBOARDING_ABBRUCH_AKTION = "app_schliessen"
 
 
 class OnboardingController:
@@ -378,9 +379,11 @@ class OnboardingController:
         onboarding_status.update(
             {
                 "onboarding_abgeschlossen": True,
+                "onboarding_status": "abgeschlossen",
                 "onboarding_version": _ONBOARDING_VERSION,
                 "erststart_zeitpunkt": onboarding_status.get("erststart_zeitpunkt") or now_iso,
                 "letzter_abschluss_zeitpunkt": now_iso,
+                "abbruch_zeitpunkt": "",
             }
         )
 
@@ -389,8 +392,7 @@ class OnboardingController:
         self.state_store.speichere_gesamtzustand(gesamtzustand)
 
         self.gui.modulzustand = self.state_store.lade_modulzustand("gui_manager")
-        self.gui._lade_uebersichtszeilen()
-        self.gui._aktualisiere_dashboard_status()
+        self.gui.aktiviere_dashboardmodus_nach_onboarding()
 
         self._setze_status("Onboarding abgeschlossen und vollständig gespeichert.")
         messagebox.showinfo(
@@ -442,10 +444,21 @@ class OnboardingController:
         self.state_store.speichere_modulzustand("gui_manager", self.gui.modulzustand)
 
     def _abbrechen(self) -> None:
-        """Schließt den Wizard ohne Abschlussflag und markiert den Zustand klar."""
-        self._setze_status("Erststart abgebrochen: Startübersicht bleibt im eingeschränkten Erststartmodus.")
+        """Bricht das Onboarding kontrolliert ab und erzwingt den konfigurierten Modus."""
+        abbruch_zeitpunkt = datetime.now().isoformat(timespec="seconds")
+        self.state_store.speichere_onboarding_status(
+            {
+                "onboarding_abgeschlossen": False,
+                "onboarding_status": "abgebrochen",
+                "abbruch_zeitpunkt": abbruch_zeitpunkt,
+            }
+        )
+        self._setze_status("Erststart abgebrochen: Anwendung wird gemäß Richtlinie geschlossen.")
         if self._window:
             self._window.destroy()
+
+        if _ONBOARDING_ABBRUCH_AKTION == "app_schliessen":
+            self.gui.master.after(50, self.gui.master.quit)
 
     def _setze_status(self, text: str) -> None:
         """Aktualisiert die Wizard-Statuszeile zentral und robust."""
@@ -463,33 +476,61 @@ class SystemManagerGUI:
 
         self.state_store = GUIStateStore()
         self.modulzustand = self.state_store.lade_modulzustand("gui_manager")
+        self.onboarding_status = self._initialisiere_onboarding_status()
+        self._onboarding_aktiv = not self.onboarding_status.get("onboarding_abgeschlossen", False)
 
+        untertitel = (
+            "Geführter Erststart: Bitte den Assistenten vollständig abschließen"
+            if self._onboarding_aktiv
+            else "Dashboard für Analyse, Ordnermanagement und Dokumentation"
+        )
         self.shell = GuiShell(
             master,
             titel="SystemManager-SageHelper",
-            untertitel="Dashboard für Analyse, Ordnermanagement und Dokumentation",
+            untertitel=untertitel,
             on_save=self.speichern,
             on_back=self.zurueck,
             on_exit=self.master.quit,
+            show_actions=not self._onboarding_aktiv,
         )
 
         self._karten_status: dict[str, tk.StringVar] = {}
         self._karten_buttons: dict[str, ttk.Button] = {}
-        self._baue_dashboard()
+        self._dashboard_gebaut = False
         self._onboarding_controller = OnboardingController(self)
+
+        if self._onboarding_aktiv:
+            # Während des Erststarts ist bewusst kein parallel nutzbares Dashboard sichtbar.
+            self.shell.setze_status("Erststart erkannt: Dashboard gesperrt, Assistent wird geöffnet")
+        else:
+            self._baue_dashboard()
+            self._dashboard_gebaut = True
+
         self._pruefe_onboarding_guard()
 
-    def _pruefe_onboarding_guard(self) -> None:
-        """Startet beim Erststart automatisch den geführten Wizard."""
+    def _initialisiere_onboarding_status(self) -> dict[str, object]:
+        """Lädt den Onboardingstatus und ergänzt fehlende Erststartdaten robust."""
         onboarding_status = self.state_store.lade_onboarding_status()
         if not onboarding_status.get("erststart_zeitpunkt"):
             onboarding_status["erststart_zeitpunkt"] = datetime.now().isoformat(timespec="seconds")
             onboarding_status["onboarding_version"] = onboarding_status.get("onboarding_version") or _ONBOARDING_VERSION
+            onboarding_status.setdefault("onboarding_status", "ausstehend")
             self.state_store.speichere_onboarding_status(onboarding_status)
+        return onboarding_status
 
-        if not onboarding_status.get("onboarding_abgeschlossen", False):
-            self.shell.setze_status("Erststart erkannt: Onboarding-Wizard wird geöffnet")
+    def _pruefe_onboarding_guard(self) -> None:
+        """Startet beim Erststart automatisch den geführten Wizard."""
+        if self._onboarding_aktiv:
             self.master.after(150, self._onboarding_controller.starte_wizard)
+
+    def aktiviere_dashboardmodus_nach_onboarding(self) -> None:
+        """Aktiviert das Hauptdashboard explizit nach erfolgreichem Onboarding."""
+        self._onboarding_aktiv = False
+        self.onboarding_status = self.state_store.lade_onboarding_status()
+        if not self._dashboard_gebaut:
+            self._baue_dashboard()
+            self._dashboard_gebaut = True
+        self.shell.setze_status("Onboarding abgeschlossen: Dashboard wurde freigeschaltet")
 
     def _baue_dashboard(self) -> None:
         """Erzeugt die Startseite mit klaren Modul-Cards inklusive Statusanzeige."""
