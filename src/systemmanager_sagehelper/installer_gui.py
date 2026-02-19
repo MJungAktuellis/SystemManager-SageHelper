@@ -17,7 +17,7 @@ from typing import Callable, Literal
 
 from systemmanager_sagehelper.gui_shell import GuiShell
 from systemmanager_sagehelper.gui_state import GUIStateStore, erstelle_installer_modulzustand
-from systemmanager_sagehelper.installation_state import _ermittle_app_version, schreibe_installations_marker
+from systemmanager_sagehelper.installation_state import _ermittle_app_version, pruefe_installationszustand, schreibe_installations_marker
 from systemmanager_sagehelper.installer import (
     ErgebnisStatus,
     InstallationsErgebnis,
@@ -36,6 +36,7 @@ from systemmanager_sagehelper.installer_options import (
     mappe_inno_tasks,
 )
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id
+from systemmanager_sagehelper.update_strategy import ermittle_update_kontext, sichere_persistente_daten_vor_update
 from systemmanager_sagehelper.texte import (
     INSTALLER_ABSCHLUSS_NAECHSTE_SCHRITTE,
     INSTALLER_ABSCHLUSS_WAS_GETAN,
@@ -120,6 +121,8 @@ class InstallerWizardGUI:
         self.log_datei: Path | None = None
         self.report_datei: Path | None = None
         self.marker_datei: Path | None = None
+        self.migrationslog_datei: Path | None = None
+        self.update_backup_pfad: Path | None = None
         self.installationsfehler: str | None = None
         self.desktop_icon_fehler: str | None = None
         self.desktop_icon_pfad: Path | None = None
@@ -439,6 +442,8 @@ class InstallerWizardGUI:
         self.desktop_icon_pfad = None
         self.report_datei = None
         self.marker_datei = None
+        self.migrationslog_datei = None
+        self.update_backup_pfad = None
         self.statustext_var.set(self._status_text(INSTALLER_STATUS_INFO, f"{self._vorgang_nomen} wird vorbereitet."))
         self.abschluss_was_getan = []
         self.abschluss_naechste_schritte = []
@@ -466,6 +471,17 @@ class InstallerWizardGUI:
             self.komponenten = erstelle_standard_komponenten(ziel_root)
             auswahl = {komp_id: var.get() for komp_id, var in self.komponenten_vars.items()}
 
+            install_pruefung = pruefe_installationszustand(repo_root=ziel_root)
+            update_kontext = ermittle_update_kontext(install_pruefung)
+            if self._ist_wartungsmodus:
+                self.window.after(0, self._log_info, f"Versionsvergleich: {update_kontext.installierte_version or 'unbekannt'} → {update_kontext.ziel_version}")
+
+            migrations_ergebnis = sichere_persistente_daten_vor_update(ziel_root, update_kontext=update_kontext)
+            if migrations_ergebnis.durchgefuehrt:
+                self.update_backup_pfad = migrations_ergebnis.backup_root
+                self.migrationslog_datei = migrations_ergebnis.migrationslog_pfad
+                self.window.after(0, self._log_erfolg, "Persistente Daten wurden vor dem Update gesichert.")
+
             ergebnisse = self._fuehre_komponenten_mit_fortschritt_aus(self.komponenten, auswahl)
             if self._ist_wartungsmodus:
                 self.window.after(0, self._log_erfolg, "Integritätsprüfung abgeschlossen.")
@@ -484,6 +500,11 @@ class InstallerWizardGUI:
                 bericht_pfad=str(self.report_datei) if self.report_datei else "",
             )
             installer_status["letzte_aktion"] = self.mode
+            installer_status["update_erforderlich"] = update_kontext.update_erforderlich
+            installer_status["ziel_version"] = update_kontext.ziel_version
+            installer_status["installierte_version"] = update_kontext.installierte_version
+            installer_status["migrationslog_pfad"] = str(self.migrationslog_datei) if self.migrationslog_datei else ""
+            installer_status["backup_pfad"] = str(self.update_backup_pfad) if self.update_backup_pfad else ""
             self.state_store.speichere_modulzustand("installer", installer_status)
 
             installer_optionen = InstallerOptionen(desktop_icon=self.option_desktop_icon_var.get())
@@ -519,6 +540,8 @@ class InstallerWizardGUI:
                         "Installationsmarker": "aktiv" if self.option_marker_var.get() else "deaktiviert",
                         "Installationsreport": "aktiv" if self.option_report_var.get() else "deaktiviert",
                         "Desktop-Icon": "aktiv" if self.option_desktop_icon_var.get() else "deaktiviert",
+                        "Update erforderlich": "ja" if update_kontext.update_erforderlich else "nein",
+                        "Migrationslog": str(self.migrationslog_datei) if self.migrationslog_datei else "nicht erstellt",
                     },
                 )
                 self.window.after(0, self._log_erfolg, "Installationsreport wurde erstellt.")
@@ -582,6 +605,10 @@ class InstallerWizardGUI:
             was_getan.append("Ein Installationsreport wurde erstellt.")
         if self.marker_datei:
             was_getan.append("Der Installationsmarker wurde aktualisiert.")
+        if self.update_backup_pfad:
+            was_getan.append("Persistente Daten wurden vor dem Update gesichert.")
+        if self.migrationslog_datei:
+            was_getan.append("Ein Migrationslog wurde in logs/update_migration.log erstellt.")
         if self.desktop_icon_pfad:
             was_getan.append("Eine Desktop-Verknüpfung wurde erstellt.")
         if self.desktop_icon_fehler:
@@ -591,6 +618,8 @@ class InstallerWizardGUI:
             naechste_schritte.append("Bitte öffnen Sie die Anwendung und prüfen Sie die wichtigsten Funktionen.")
             if self.report_datei:
                 naechste_schritte.append("Prüfen Sie den Installationsreport für die Dokumentation.")
+            if self.migrationslog_datei:
+                naechste_schritte.append("Prüfen Sie das Migrationslog für Backup- und Update-Details.")
         else:
             naechste_schritte.append("Bitte führen Sie den Assistenten erneut aus.")
             if self.log_datei:

@@ -21,6 +21,7 @@ from systemmanager_sagehelper.installer_gui import InstallerWizardGUI
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 from systemmanager_sagehelper.models import AnalyseErgebnis
 from systemmanager_sagehelper.targeting import normalisiere_servernamen
+from systemmanager_sagehelper.update_strategy import ermittle_update_kontext
 from systemmanager_sagehelper.texte import (
     STATUS_PREFIX,
 )
@@ -795,6 +796,9 @@ class SystemManagerGUI:
 
         self._karten_status: dict[str, tk.StringVar] = {}
         self._karten_buttons: dict[str, ttk.Button] = {}
+        self._karten_titel: dict[str, tk.StringVar] = {}
+        self._karten_beschreibung: dict[str, tk.StringVar] = {}
+        self._karten_experten_buttons: dict[str, ttk.Button] = {}
         self._dashboard_gebaut = False
         self._onboarding_controller = OnboardingController(self)
 
@@ -911,8 +915,13 @@ class SystemManagerGUI:
         card = ttk.Frame(parent, style="Card.TFrame", padding=LAYOUT.padding_block)
         card.grid(row=zeile, column=spalte, sticky="nsew", padx=6, pady=6)
 
-        ttk.Label(card, text=titel, style="Card.TLabel", font=("Segoe UI", 12, "bold")).pack(anchor="w")
-        ttk.Label(card, text=beschreibung, style="Card.TLabel", wraplength=LAYOUT.card_breite).pack(
+        titel_var = tk.StringVar(value=titel)
+        beschreibung_var = tk.StringVar(value=beschreibung)
+        self._karten_titel[status_key] = titel_var
+        self._karten_beschreibung[status_key] = beschreibung_var
+
+        ttk.Label(card, textvariable=titel_var, style="Card.TLabel", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        ttk.Label(card, textvariable=beschreibung_var, style="Card.TLabel", wraplength=LAYOUT.card_breite).pack(
             anchor="w", pady=(6, 10)
         )
 
@@ -930,6 +939,19 @@ class SystemManagerGUI:
         )
         primar_button.pack(anchor="w")
         self._karten_buttons[status_key] = primar_button
+
+        if status_key == "installation":
+            # Expertenpfad bleibt bewusst separat, damit reguläre Nutzer nicht versehentlich
+            # eine Vollinstallation auslösen. Die Primäraktion wird dynamisch gewartet.
+            experten_button = ttk.Button(
+                card,
+                text="Vollinstallation (Expertenmodus)",
+                style="Secondary.TButton",
+                width=LAYOUT.button_breite,
+                command=lambda: self.installieren(expertenmodus=True),
+            )
+            experten_button.pack(anchor="w", pady=(6, 0))
+            self._karten_experten_buttons[status_key] = experten_button
 
     def _baue_uebersichtsseite(self) -> None:
         """Stellt je Modul Kerninfos und Berichtverweise aus der Persistenz dar."""
@@ -988,14 +1010,20 @@ class SystemManagerGUI:
         # Primäre Quelle für den Installationsstatus bleibt die technische Installationsprüfung
         # (Marker + Integrität). Der GUI-State ergänzt diese Information für Bericht/Version.
         installationspruefung = pruefe_installationszustand()
+        update_kontext = ermittle_update_kontext(installationspruefung)
         installer_modul = module.get("installer", {}) if isinstance(module.get("installer"), dict) else {}
         if installationspruefung.installiert:
             version = installer_modul.get("version") or installationspruefung.erkannte_version or ""
             letzte_aktion = installer_modul.get("letzte_aktion")
             modus_text = "Wartung" if letzte_aktion == "maintenance" else "Installation"
-            status_texte["installation"] = (
-                f"Installiert ({version}) · Letzte Aktion: {modus_text}" if version else f"Installiert · Letzte Aktion: {modus_text}"
-            )
+            if update_kontext.update_erforderlich:
+                status_texte["installation"] = (
+                    f"Update verfügbar ({update_kontext.installierte_version or version or 'unbekannt'} → {update_kontext.ziel_version})"
+                )
+            else:
+                status_texte["installation"] = (
+                    f"Installiert ({version}) · Letzte Aktion: {modus_text}" if version else f"Installiert · Letzte Aktion: {modus_text}"
+                )
         elif installer_modul.get("installiert"):
             status_texte["installation"] = "Teilweise installiert (Prüfung erforderlich)"
 
@@ -1013,23 +1041,53 @@ class SystemManagerGUI:
         for key, var in self._karten_status.items():
             var.set(f"{STATUS_PREFIX} {status_texte.get(key, 'unbekannt')}")
 
-        self._aktualisiere_installationskarte(installationspruefung.installiert)
+        self._aktualisiere_installationskarte(installationspruefung.installiert, update_kontext.update_erforderlich)
 
-    def _aktualisiere_installationskarte(self, installiert: bool) -> None:
+    def _aktualisiere_installationskarte(self, installiert: bool, update_erforderlich: bool) -> None:
         """Aktualisiert den Primärbutton der Installationskarte abhängig vom Zustand.
 
         Bei bestehender Installation wird die Aktion klar als Prüf-/Aktualisierungspfad
         gekennzeichnet, damit keine unbeabsichtigte Vollinstallation gestartet wird.
         """
         karten_buttons = getattr(self, "_karten_buttons", {})
+        karten_titel = getattr(self, "_karten_titel", {})
+        karten_beschreibung = getattr(self, "_karten_beschreibung", {})
+        karten_experten = getattr(self, "_karten_experten_buttons", {})
         installations_button = karten_buttons.get("installation")
         if installations_button is None:
             return
 
+        titel_var = karten_titel.get("installation")
+        beschreibung_var = karten_beschreibung.get("installation")
+
         if installiert:
-            installations_button.configure(text="Wartung starten")
+            if update_erforderlich:
+                if titel_var is not None:
+                    titel_var.set("Update & Wartung")
+                if beschreibung_var is not None:
+                    beschreibung_var.set(
+                        "Prüft Versionen, führt Migrationsschritte aus und schützt persistente Daten vor dem Update."
+                    )
+            else:
+                if titel_var is not None:
+                    titel_var.set("Wartung")
+                if beschreibung_var is not None:
+                    beschreibung_var.set(
+                        "Installationszustand ist aktuell. Startet Integritätsprüfung und optionale Wartungsschritte."
+                    )
+            installations_button.configure(text="Update / Wartung prüfen")
+            if karten_experten.get("installation") is not None:
+                karten_experten["installation"].configure(state="normal")
         else:
+            if titel_var is not None:
+                titel_var.set("Installation")
+            if beschreibung_var is not None:
+                beschreibung_var.set(
+                    "Installiert alle Kernkomponenten. Danach stehen Analyse-, Ordner- und Doku-Module bereit."
+                )
             installations_button.configure(text="Installation starten")
+            if karten_experten.get("installation") is not None:
+                karten_experten["installation"].configure(state="disabled")
 
     def _starte_neuen_lauf(self) -> str:
         """Erzeugt pro Aktion eine neue Lauf-ID für konsistente Korrelation."""
@@ -1076,13 +1134,17 @@ class SystemManagerGUI:
     def installieren(self, *, bestaetigung_erforderlich: bool = True, expertenmodus: bool = False) -> None:
         """Öffnet den Installationsassistenten mit Guard gegen unbeabsichtigte Vollinstallationen."""
         installationspruefung = pruefe_installationszustand()
-        modus = "install"
+        update_kontext = ermittle_update_kontext(installationspruefung)
+        modus = update_kontext.modus
 
         if installationspruefung.installiert and not expertenmodus:
             modus = "maintenance"
             if bestaetigung_erforderlich and not self.shell.bestaetige_aktion(
-                "Wartung starten",
-                "Das System ist bereits installiert. Es wird der Wartungsmodus geöffnet.",
+                "Update / Wartung prüfen",
+                (
+                    "Das System ist bereits installiert. Es wird der Wartungsmodus geöffnet.\n"
+                    f"Versionskontext: {update_kontext.installierte_version or 'unbekannt'} → {update_kontext.ziel_version}."
+                ),
             ):
                 self.shell.setze_status("Wartung abgebrochen")
                 return

@@ -142,6 +142,28 @@ Beispiel für Supportfälle:
 Install-SystemManager-SageHelper.cmd --persist-console --pause
 ```
 
+### Update ohne Datenverlust
+
+Bei bereits installierten Systemen startet die Primäraktion im Launcher jetzt **immer als „Update / Wartung prüfen“**.
+Eine Vollinstallation ist weiterhin vorhanden, aber nur als **Expertenpfad** vorgesehen.
+
+Die Update-Strategie umfasst drei verbindliche Schritte:
+
+1. **Versionsvergleich**
+   - Vergleich zwischen installierter Version (Installationsmarker) und Zielversion.
+   - Nur bei neuer Zielversion oder unbekannter Altversion wird ein Updatepfad mit Migration ausgelöst.
+2. **Daten- und Konfigurationsschutz**
+   - Vor Update werden persistente Bereiche gesichert:
+     - `config/` (ohne bereits vorhandene `config/update_backups/`)
+     - `logs/`
+     - Markdown-Reports aus `docs/`
+   - Die Sicherung liegt unter `config/update_backups/<Zeitstempel>/`.
+3. **Migrationsprotokoll**
+   - Jede Update-Migration wird in `logs/update_migration.log` dokumentiert
+     (Versionen, Begründung, Backup-Pfad, gesicherte Bereiche).
+
+Damit bleiben Konfigurationen, Logs und Reports auch bei Wartung/Update nachvollziehbar erhalten.
+
 ### Option B: CLI-Installation (optional, plattformübergreifend)
 
 Interaktiver CLI-Modus:
