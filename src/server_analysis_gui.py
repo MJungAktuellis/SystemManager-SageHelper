@@ -13,6 +13,7 @@ from systemmanager_sagehelper.analyzer import (
     analysiere_mehrere_server,
     DiscoveryKonfiguration,
     entdecke_server_ergebnisse,
+    entdecke_server_namen,
 )
 from systemmanager_sagehelper.gui_shell import GuiShell
 from systemmanager_sagehelper.installation_state import pruefe_installationszustand, verarbeite_installations_guard
@@ -491,6 +492,8 @@ class MehrserverAnalyseGUI:
         self._zeilen_nach_id: dict[str, ServerTabellenZeile] = {}
         self._letzte_ergebnisse: list[AnalyseErgebnis] = []
         self._letzte_discovery_range = tk.StringVar(value=self.modulzustand.get("letzte_discovery_range", ""))
+        self._letzter_discovery_modus = tk.StringVar(value=self.modulzustand.get("letzter_discovery_modus", "range"))
+        self._letzte_discovery_namen = tk.StringVar(value=self.modulzustand.get("letzte_discovery_namen", ""))
         letzte_discovery_eingabe = self.modulzustand.get("letzte_discovery_eingabe", {})
         self._discovery_basis_var = tk.StringVar(value=str(letzte_discovery_eingabe.get("basis", "")))
         self._discovery_start_var = tk.StringVar(value=str(letzte_discovery_eingabe.get("start", "")))
@@ -575,6 +578,11 @@ class MehrserverAnalyseGUI:
         ttk.Label(form_frame, text="Letzter Netzwerkerkennungs-Bereich:").grid(row=4, column=0, sticky="w", padx=8, pady=(2, 8))
         ttk.Entry(form_frame, textvariable=self._letzte_discovery_range, width=30).grid(row=4, column=1, padx=6, sticky="w")
 
+        ttk.Label(form_frame, text="Servernamenliste (eine Zeile pro Host):").grid(row=5, column=0, sticky="nw", padx=8, pady=(2, 8))
+        self.text_discovery_namen = tk.Text(form_frame, width=45, height=5, wrap="none")
+        self.text_discovery_namen.grid(row=5, column=1, columnspan=5, padx=6, pady=(2, 8), sticky="we")
+        self.text_discovery_namen.insert("1.0", self._letzte_discovery_namen.get())
+
         ttk.Label(form_frame, text="Analyse-Ausgabepfad:").grid(row=4, column=2, sticky="w", padx=8)
         ttk.Entry(form_frame, textvariable=self._ausgabe_pfad, width=45).grid(row=4, column=3, columnspan=3, padx=6, sticky="w")
 
@@ -616,6 +624,13 @@ class MehrserverAnalyseGUI:
             action_frame, text=BUTTON_NETZWERKERKENNUNG_STARTEN, style="Secondary.TButton", command=self.discovery_starten
         )
         self.btn_discovery.pack(side="left", padx=4)
+        self.btn_discovery_namen = ttk.Button(
+            action_frame,
+            text="Servernamen prüfen",
+            style="Secondary.TButton",
+            command=self.discovery_servernamen_starten,
+        )
+        self.btn_discovery_namen.pack(side="left", padx=4)
         self.btn_loeschen = ttk.Button(
             action_frame,
             text="Ausgewählten Eintrag löschen",
@@ -808,6 +823,7 @@ class MehrserverAnalyseGUI:
             return
 
         basis, startwert, endwert = validierte_eingabe
+        self._letzter_discovery_modus.set("range")
         self._letzte_discovery_range.set(f"{basis}.{startwert}-{endwert}")
         self.shell.setze_status("Netzwerkerkennung läuft")
         self.master.update_idletasks()
@@ -825,6 +841,51 @@ class MehrserverAnalyseGUI:
             self.shell.setze_status("Netzwerkerkennung fehlgeschlagen")
             return
 
+        self._uebernehme_discovery_treffer(treffer, erfolgstitel="Netzwerkerkennung abgeschlossen")
+        self.shell.setze_status("Netzwerkerkennung abgeschlossen")
+        self._aktualisiere_button_zustaende()
+
+    def _lese_discovery_namen_aus_textfeld(self) -> list[str]:
+        """Liest die Namenliste robust aus dem Mehrzeilenfeld und entfernt Leerzeilen."""
+        text = self.text_discovery_namen.get("1.0", "end").strip()
+        self._letzte_discovery_namen.set(text)
+        return [zeile.strip() for zeile in text.splitlines() if zeile.strip()]
+
+    def discovery_servernamen_starten(self) -> None:
+        """Startet die Discovery gezielt über eine explizite Servernamenliste."""
+        if not self.shell.bestaetige_aktion("Servernamen prüfen", "Die Prüfung der Servernamenliste wird gestartet."):
+            return
+
+        hosts = self._lese_discovery_namen_aus_textfeld()
+        if not hosts:
+            self.shell.zeige_warnung(
+                "Keine Servernamen angegeben",
+                "Bitte tragen Sie mindestens einen Hostnamen in die Servernamenliste ein.",
+                "Nutzen Sie pro Zeile genau einen Namen (Kurzname oder FQDN).",
+            )
+            return
+
+        self._letzter_discovery_modus.set("namenliste")
+        self.shell.setze_status("Servernamenprüfung läuft")
+        self.master.update_idletasks()
+
+        try:
+            treffer = entdecke_server_namen(
+                hosts=hosts,
+                konfiguration=DiscoveryKonfiguration(nutze_reverse_dns=True, nutze_ad_ldap=True),
+            )
+        except Exception as exc:  # noqa: BLE001 - robuste GUI-Fehlerbehandlung.
+            logger.exception("Servernamenprüfung fehlgeschlagen")
+            self.shell.zeige_fehler("Fehler bei der Servernamenprüfung", f"Die Prüfung konnte nicht ausgeführt werden: {exc}", "Prüfen Sie Namensauflösung und Berechtigungen.")
+            self.shell.setze_status("Servernamenprüfung fehlgeschlagen")
+            return
+
+        self._uebernehme_discovery_treffer(treffer, erfolgstitel="Servernamenprüfung abgeschlossen")
+        self.shell.setze_status("Servernamenprüfung abgeschlossen")
+        self._aktualisiere_button_zustaende()
+
+    def _uebernehme_discovery_treffer(self, treffer: list[DiscoveryErgebnis], *, erfolgstitel: str) -> None:
+        """Zeigt Treffer im Standarddialog und übernimmt ausgewählte Server in die Tabelle."""
         dialog = DiscoveryTrefferDialog(self.master, treffer)
         self.master.wait_window(dialog.window)
 
@@ -848,12 +909,10 @@ class MehrserverAnalyseGUI:
                 hinzugefuegt += 1
 
         self.shell.zeige_erfolg(
-            "Netzwerkerkennung abgeschlossen",
+            erfolgstitel,
             f"Gefundene Treffer: {len(treffer)}\nAusgewählt: {len(dialog.ausgewaehlt)}\nNeu übernommen: {hinzugefuegt}",
             "Prüfen Sie die Serverliste und passen Sie Rollen bei Bedarf an.",
         )
-        self.shell.setze_status("Netzwerkerkennung abgeschlossen")
-        self._aktualisiere_button_zustaende()
 
     def eintrag_loeschen(self) -> None:
         auswahl = self.tree.selection()
@@ -966,6 +1025,7 @@ class MehrserverAnalyseGUI:
 
     def speichern(self) -> None:
         """Persistiert Serverlisten, Rollen, Discovery-Range und Ausgabepfade."""
+        self._letzte_discovery_namen.set(self.text_discovery_namen.get("1.0", "end").strip())
         serverlisten = [asdict(zeile) for zeile in self._zeilen_nach_id.values()]
         rollen = {zeile.servername: zeile.rollen() for zeile in self._zeilen_nach_id.values()}
         ausgabepfade = {
@@ -978,6 +1038,8 @@ class MehrserverAnalyseGUI:
                 "serverlisten": serverlisten,
                 "rollen": rollen,
                 "letzte_discovery_range": self._letzte_discovery_range.get().strip(),
+                "letzter_discovery_modus": self._letzter_discovery_modus.get().strip() or "range",
+                "letzte_discovery_namen": self._letzte_discovery_namen.get().strip(),
                 "letzte_discovery_eingabe": {
                     "basis": self._discovery_basis_var.get().strip(),
                     "start": self._discovery_start_var.get().strip(),

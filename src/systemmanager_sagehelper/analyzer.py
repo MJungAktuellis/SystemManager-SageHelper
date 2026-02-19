@@ -781,6 +781,56 @@ def _normalisiere_hostname(hostname: str) -> str:
     return bereinigt.split(".", maxsplit=1)[0]
 
 
+def _normalisiere_discovery_hostliste(hosts: Iterable[str]) -> list[str]:
+    """Bereinigt und dedupliziert Hostnamen für Discovery-Läufe.
+
+    Die Funktion führt Kurzname/FQDN-Varianten auf einen gemeinsamen Schlüssel
+    zusammen. Für die tatsächliche Prüfung wird bevorzugt die FQDN-Variante
+    behalten, da sie in heterogenen DNS-Umgebungen robuster auflösbar ist.
+    """
+    dedupliziert: dict[str, str] = {}
+    for rohwert in hosts:
+        bereinigt = rohwert.strip().rstrip(".")
+        if not bereinigt:
+            continue
+
+        normalisiert = bereinigt.lower()
+        vergleichsschluessel = _normalisiere_hostname(normalisiert)
+        if not vergleichsschluessel:
+            continue
+
+        bestehend = dedupliziert.get(vergleichsschluessel)
+        if bestehend is None:
+            dedupliziert[vergleichsschluessel] = normalisiert
+            continue
+
+        # FQDN gewinnt gegenüber Kurzname, damit DNS-Auflösung stabiler bleibt.
+        if "." in normalisiert and "." not in bestehend:
+            dedupliziert[vergleichsschluessel] = normalisiert
+
+    return sorted(dedupliziert.values())
+
+
+def _dedupliziere_discovery_ergebnisse(ergebnisse: Iterable[DiscoveryErgebnis]) -> list[DiscoveryErgebnis]:
+    """Fasst Discovery-Ergebnisse robust zusammen und entfernt Duplikate."""
+    dedupliziert: dict[tuple[str, str], DiscoveryErgebnis] = {}
+    for item in sorted(ergebnisse, key=lambda eintrag: (eintrag.hostname.lower(), -eintrag.vertrauensgrad)):
+        # Deduplizierung erfolgt über normalisierten Hostnamen + IP,
+        # um FQDN-/Kurzname-Varianten robust zusammenzuführen.
+        schluessel = (_normalisiere_hostname(item.hostname), item.ip_adresse)
+        if schluessel in dedupliziert:
+            bestehend = dedupliziert[schluessel]
+            bestehend.erkannte_dienste = _normalisiere_liste_ohne_duplikate(bestehend.erkannte_dienste + item.erkannte_dienste)
+            bestehend.strategien = _normalisiere_liste_ohne_duplikate(bestehend.strategien + item.strategien)
+            bestehend.fehlerursachen = _normalisiere_liste_ohne_duplikate(bestehend.fehlerursachen + item.fehlerursachen)
+            bestehend.vertrauensgrad = max(bestehend.vertrauensgrad, item.vertrauensgrad)
+            bestehend.erreichbar = bestehend.erreichbar or item.erreichbar
+            continue
+        dedupliziert[schluessel] = item
+
+    return sorted(dedupliziert.values(), key=lambda item: (item.hostname.lower(), item.ip_adresse))
+
+
 def _ad_ldap_hinweis() -> str | None:
     """Liefert optionalen AD/LDAP-Hinweis, sofern Domänenumfeld erkannt wird."""
     import os
@@ -870,29 +920,16 @@ def entdecke_server_ergebnisse(
     normalisierte_basis, normalisierter_start, normalisiertes_ende = _validiere_discovery_range(basis, start, ende)
 
     hosts = [f"{normalisierte_basis}.{host_teil}" for host_teil in range(normalisierter_start, normalisiertes_ende + 1)]
+    normalisierte_hosts = _normalisiere_discovery_hostliste(hosts)
     ergebnisse: list[DiscoveryErgebnis] = []
 
-    with ThreadPoolExecutor(max_workers=min(conf.max_worker, len(hosts) or 1)) as executor:
-        futures = [executor.submit(_entdecke_einzelnen_host, host, conf) for host in hosts]
+    with ThreadPoolExecutor(max_workers=min(conf.max_worker, len(normalisierte_hosts) or 1)) as executor:
+        futures = [executor.submit(_entdecke_einzelnen_host, host, conf) for host in normalisierte_hosts]
         for future in as_completed(futures):
             treffer = future.result()
             if treffer is not None:
                 ergebnisse.append(treffer)
-
-    dedupliziert: dict[tuple[str, str], DiscoveryErgebnis] = {}
-    for item in sorted(ergebnisse, key=lambda eintrag: (eintrag.hostname.lower(), -eintrag.vertrauensgrad)):
-        # Deduplizierung erfolgt über normalisierten Hostnamen + IP,
-        # um FQDN-/Kurzname-Varianten robust zusammenzuführen.
-        schluessel = (_normalisiere_hostname(item.hostname), item.ip_adresse)
-        if schluessel in dedupliziert:
-            bestehend = dedupliziert[schluessel]
-            bestehend.erkannte_dienste = _normalisiere_liste_ohne_duplikate(bestehend.erkannte_dienste + item.erkannte_dienste)
-            bestehend.strategien = _normalisiere_liste_ohne_duplikate(bestehend.strategien + item.strategien)
-            bestehend.fehlerursachen = _normalisiere_liste_ohne_duplikate(bestehend.fehlerursachen + item.fehlerursachen)
-            bestehend.vertrauensgrad = max(bestehend.vertrauensgrad, item.vertrauensgrad)
-            bestehend.erreichbar = bestehend.erreichbar or item.erreichbar
-            continue
-        dedupliziert[schluessel] = item
+    deduplizierte_ergebnisse = _dedupliziere_discovery_ergebnisse(ergebnisse)
 
     strategie_liste = ["icmp", "tcp_syn"]
     if conf.nutze_reverse_dns:
@@ -901,7 +938,7 @@ def entdecke_server_ergebnisse(
         strategie_liste.append("ad_ldap")
 
     fehler_counter: dict[str, int] = {}
-    for item in dedupliziert.values():
+    for item in deduplizierte_ergebnisse:
         for fehler in item.fehlerursachen:
             fehler_counter[fehler] = fehler_counter.get(fehler, 0) + 1
 
@@ -910,7 +947,7 @@ def entdecke_server_ergebnisse(
         start=normalisierter_start,
         ende=normalisiertes_ende,
         strategien=tuple(strategie_liste),
-        trefferzahl=len(dedupliziert),
+        trefferzahl=len(deduplizierte_ergebnisse),
         fehlerursachen=fehler_counter,
     )
     logger.info(
@@ -923,7 +960,35 @@ def entdecke_server_ergebnisse(
         laufprotokoll.fehlerursachen,
     )
 
-    return sorted(dedupliziert.values(), key=lambda item: (item.hostname.lower(), item.ip_adresse))
+    return deduplizierte_ergebnisse
+
+
+def entdecke_server_namen(
+    hosts: list[str],
+    konfiguration: DiscoveryKonfiguration | None = None,
+) -> list[DiscoveryErgebnis]:
+    """Ermittelt Discovery-Treffer aus einer expliziten Liste von Servernamen."""
+    conf = konfiguration or DiscoveryKonfiguration()
+    normalisierte_hosts = _normalisiere_discovery_hostliste(hosts)
+    if not normalisierte_hosts:
+        return []
+
+    ergebnisse: list[DiscoveryErgebnis] = []
+    with ThreadPoolExecutor(max_workers=min(conf.max_worker, len(normalisierte_hosts))) as executor:
+        futures = [executor.submit(_entdecke_einzelnen_host, host, conf) for host in normalisierte_hosts]
+        for future in as_completed(futures):
+            treffer = future.result()
+            if treffer is not None:
+                ergebnisse.append(treffer)
+
+    deduplizierte_ergebnisse = _dedupliziere_discovery_ergebnisse(ergebnisse)
+    logger.info(
+        "Discovery über Servernamenliste abgeschlossen | Eingaben=%s | Normalisiert=%s | Treffer=%s",
+        len(hosts),
+        len(normalisierte_hosts),
+        len(deduplizierte_ergebnisse),
+    )
+    return deduplizierte_ergebnisse
 
 
 def entdecke_server_kandidaten(basis: str, start: int, ende: int) -> list[str]:
