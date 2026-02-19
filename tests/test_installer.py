@@ -195,6 +195,37 @@ class TestInstaller(unittest.TestCase):
         self.assertEqual(Path("C:/Users/Public/Desktop/SystemManager-SageHelper.lnk"), shortcut)
         shortcut_mock.assert_called_once()
 
+
+    def test_validiere_quellpfad_prueft_installationsstruktur(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quell_root = Path(tmp_dir)
+            (quell_root / "src" / "systemmanager_sagehelper").mkdir(parents=True, exist_ok=True)
+            (quell_root / "src" / "systemmanager_sagehelper" / "installer.py").write_text("# test", encoding="utf-8")
+            (quell_root / "scripts").mkdir(parents=True, exist_ok=True)
+            (quell_root / "scripts" / "install.py").write_text("# test", encoding="utf-8")
+
+            gueltig, _ = installer.validiere_quellpfad(quell_root)
+
+        self.assertTrue(gueltig)
+
+    def test_kopiere_installationsquellen_kopiert_zentrale_ressourcen(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            basis = Path(tmp_dir)
+            quell_root = basis / "quelle"
+            ziel_root = basis / "ziel"
+            (quell_root / "src" / "systemmanager_sagehelper").mkdir(parents=True, exist_ok=True)
+            (quell_root / "scripts").mkdir(parents=True, exist_ok=True)
+            (quell_root / "src" / "systemmanager_sagehelper" / "installer.py").write_text("# test", encoding="utf-8")
+            (quell_root / "scripts" / "install.py").write_text("# test", encoding="utf-8")
+            (quell_root / "requirements.txt").write_text("pytest", encoding="utf-8")
+
+            kopiert = installer.kopiere_installationsquellen(quell_root, ziel_root)
+            self.assertTrue((ziel_root / "src").exists())
+            self.assertTrue((ziel_root / "scripts").exists())
+            self.assertTrue((ziel_root / "requirements.txt").exists())
+            self.assertTrue(kopiert)
+
+
     def test_richte_tool_dateien_und_launcher_ein_erstellt_gui_und_cli_launcher(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             repo_root = Path(tmp_dir)
@@ -208,7 +239,8 @@ class TestInstaller(unittest.TestCase):
             self.assertTrue(cli_launcher.exists())
             self.assertTrue(kompat_launcher.exists())
 
-            self.assertIn("python src\\gui_manager.py", gui_launcher.read_text(encoding="utf-8"))
+            self.assertIn("%APP_ROOT%\\src\\gui_manager.py", gui_launcher.read_text(encoding="utf-8"))
+            self.assertIn('set "PYTHONPATH=%APP_ROOT%\\src;%PYTHONPATH%"', cli_launcher.read_text(encoding="utf-8"))
             self.assertIn("python -m systemmanager_sagehelper %*", cli_launcher.read_text(encoding="utf-8"))
             self.assertIn("start_systemmanager.bat gui", kompat_launcher.read_text(encoding="utf-8"))
 

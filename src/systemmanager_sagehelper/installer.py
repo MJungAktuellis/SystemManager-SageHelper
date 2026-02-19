@@ -32,6 +32,16 @@ STANDARD_REIHENFOLGE = [
 ]
 
 STANDARD_LAUFZEITORDNER = ("logs", "docs", "config")
+STANDARD_INSTALLATIONSZIEL_WINDOWS = Path(r"C:\Program Files\SystemManager-SageHelper")
+INSTALLATIONS_RESSOURCEN = (
+    "src",
+    "scripts",
+    "requirements.txt",
+    "README.md",
+    "CHANGELOG.md",
+    "Install-SystemManager-SageHelper.cmd",
+    "config",
+)
 
 
 @dataclass(frozen=True)
@@ -87,6 +97,55 @@ class InstallationsKomponente:
 
 class InstallationsFehler(RuntimeError):
     """Signalisiert einen bewusst abgebrochenen Installationsschritt."""
+
+
+def ermittle_standard_installationsziel() -> Path:
+    """Liefert das bevorzugte Installationsziel für die aktuelle Plattform."""
+    if ist_windows_system():
+        return STANDARD_INSTALLATIONSZIEL_WINDOWS
+    return Path.home() / "SystemManager-SageHelper"
+
+
+def validiere_quellpfad(quellpfad: Path) -> tuple[bool, str]:
+    """Validiert, ob der Quellpfad eine lauffähige ZIP-/Repo-Struktur enthält."""
+    pfad = quellpfad.expanduser().resolve()
+    erwartete_datei = pfad / "src" / "systemmanager_sagehelper" / "installer.py"
+    if not erwartete_datei.exists():
+        return False, "Quellpfad enthält keine gültige Projektstruktur (installer.py fehlt)."
+    if not (pfad / "scripts" / "install.py").exists():
+        return False, "Quellpfad enthält kein Installationsskript unter scripts/install.py."
+    return True, "Quellpfad ist gültig."
+
+
+def kopiere_installationsquellen(quellpfad: Path, zielpfad: Path) -> list[Path]:
+    """Kopiert alle für den Betrieb benötigten Dateien vom Quell- ins Zielverzeichnis."""
+    logger = logging.getLogger(__name__)
+    quell = quellpfad.expanduser().resolve()
+    ziel = zielpfad.expanduser().resolve()
+
+    gueltig, nachricht = validiere_quellpfad(quell)
+    if not gueltig:
+        raise InstallationsFehler(nachricht)
+
+    ziel.mkdir(parents=True, exist_ok=True)
+    kopierte_pfade: list[Path] = []
+
+    for eintrag in INSTALLATIONS_RESSOURCEN:
+        quelle = quell / eintrag
+        ziel_eintrag = ziel / eintrag
+        if not quelle.exists():
+            logger.info("Ressource übersprungen (nicht vorhanden): %s", quelle)
+            continue
+        if quelle.is_dir():
+            if ziel_eintrag.exists():
+                shutil.rmtree(ziel_eintrag)
+            shutil.copytree(quelle, ziel_eintrag)
+        else:
+            ziel_eintrag.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(quelle, ziel_eintrag)
+        kopierte_pfade.append(ziel_eintrag)
+
+    return kopierte_pfade
 
 
 def ermittle_log_datei(repo_root: Path) -> Path:
@@ -532,53 +591,63 @@ def richte_tool_dateien_und_launcher_ein(repo_root: Path) -> str:
     script_ordner.mkdir(parents=True, exist_ok=True)
 
     gui_launcher = script_ordner / "start_systemmanager_gui.bat"
+    # Der GUI-Launcher arbeitet immer relativ zu seinem eigenen Speicherort im Zielverzeichnis.
     gui_launcher.write_text(
-        "@echo off\r\n"
-        "python src\\gui_manager.py\r\n",
+        '@echo off\r\n'
+        'setlocal\r\n'
+        'set "APP_ROOT=%~dp0.."\r\n'
+        'python "%APP_ROOT%\\src\\gui_manager.py"\r\n'
+        'endlocal\r\n',
         encoding="utf-8",
     )
 
     cli_launcher = script_ordner / "start_systemmanager_cli.bat"
     cli_launcher.write_text(
-        "@echo off\r\n"
-        "python -m systemmanager_sagehelper %*\r\n",
+        '@echo off\r\n'
+        'setlocal\r\n'
+        'set "APP_ROOT=%~dp0.."\r\n'
+        'set "PYTHONPATH=%APP_ROOT%\\src;%PYTHONPATH%"\r\n'
+        'python -m systemmanager_sagehelper %*\r\n'
+        'endlocal\r\n',
         encoding="utf-8",
     )
 
     # Kompatibilitäts-Launcher: bietet klare Auswahl und delegiert robust.
     windows_launcher = script_ordner / "start_systemmanager.bat"
     windows_launcher.write_text(
-        "@echo off\r\n"
-        "setlocal\r\n"
-        "if /I \"%~1\"==\"gui\" goto start_gui\r\n"
-        "if /I \"%~1\"==\"cli\" goto start_cli\r\n"
-        "echo Bitte Startmodus waehlen:\r\n"
-        "echo   - GUI: start_systemmanager.bat gui\r\n"
-        "echo   - CLI: start_systemmanager.bat cli [Argumente]\r\n"
-        "echo\r\n"
-        "echo Starte standardmaessig die GUI ...\r\n"
-        "goto start_gui\r\n"
-        ":start_gui\r\n"
-        "call \"%~dp0start_systemmanager_gui.bat\"\r\n"
-        "goto ende\r\n"
-        ":start_cli\r\n"
-        "shift\r\n"
-        "call \"%~dp0start_systemmanager_cli.bat\" %*\r\n"
-        ":ende\r\n"
-        "endlocal\r\n",
+        '@echo off\r\n'
+        'setlocal\r\n'
+        'if /I "%~1"=="gui" goto start_gui\r\n'
+        'if /I "%~1"=="cli" goto start_cli\r\n'
+        'echo Bitte Startmodus waehlen:\r\n'
+        'echo   - GUI: start_systemmanager.bat gui\r\n'
+        'echo   - CLI: start_systemmanager.bat cli [Argumente]\r\n'
+        'echo\r\n'
+        'echo Starte standardmaessig die GUI ...\r\n'
+        'goto start_gui\r\n'
+        ':start_gui\r\n'
+        'call "%~dp0start_systemmanager_gui.bat"\r\n'
+        'goto ende\r\n'
+        ':start_cli\r\n'
+        'shift\r\n'
+        'call "%~dp0start_systemmanager_cli.bat" %*\r\n'
+        ':ende\r\n'
+        'endlocal\r\n',
         encoding="utf-8",
     )
 
     shell_launcher = script_ordner / "start_systemmanager.sh"
     shell_launcher.write_text(
-        "#!/usr/bin/env bash\n"
-        "python -m systemmanager_sagehelper \"$@\"\n",
+        '#!/usr/bin/env bash\n'
+        'SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"\n'
+        'APP_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"\n'
+        'export PYTHONPATH="${APP_ROOT}/src:${PYTHONPATH}"\n'
+        'python -m systemmanager_sagehelper "$@"\n',
         encoding="utf-8",
     )
     shell_launcher.chmod(0o755)
 
     return "Launcher-Dateien (GUI/CLI + Kompatibilität) wurden unter scripts/ eingerichtet."
-
 
 def _escape_powershell_literal(text: str) -> str:
     """Escaped einen String für die sichere Verwendung in PowerShell-Literalen."""
