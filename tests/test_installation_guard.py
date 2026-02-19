@@ -198,6 +198,30 @@ class _StatusVar:
         self.value = value
 
 
+class _ButtonVar:
+    """Testdouble für Buttons, der configure-Parameter speichert."""
+
+    def __init__(self) -> None:
+        self.config: dict[str, str] = {}
+
+    def configure(self, **kwargs) -> None:
+        self.config.update(kwargs)
+
+
+def test_installationskarte_zeigt_update_aktion_bei_installiertem_system() -> None:
+    """Bei installierter Umgebung muss die Primäraktion auf Wartung/Update wechseln."""
+    gui = object.__new__(gui_manager.SystemManagerGUI)
+    gui._karten_buttons = {"installation": _ButtonVar()}
+    gui._karten_titel = {"installation": _StatusVar()}
+    gui._karten_beschreibung = {"installation": _StatusVar()}
+    gui._karten_experten_buttons = {"installation": _ButtonVar()}
+
+    gui._aktualisiere_installationskarte(True, True)
+
+    assert gui._karten_buttons["installation"].config["text"] == "Update / Wartung prüfen"
+    assert gui._karten_titel["installation"].value == "Update & Wartung"
+    assert gui._karten_experten_buttons["installation"].config["state"] == "normal"
+
 def test_dashboard_installationsstatus_nutzt_marker_pruefung_mit_versionsinfo(monkeypatch) -> None:
     """Dashboard soll primär die Installationsprüfung und ergänzend GUI-State nutzen."""
     monkeypatch.setattr(
