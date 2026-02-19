@@ -8,11 +8,17 @@ from typing import Literal
 from .models import AnalyseErgebnis, ServerDetailkarte
 from .viewmodel import baue_server_detailkarte
 from .texte import (
+    BERICHT_ARTEFAKTE,
+    BERICHT_AUSWIRKUNGEN,
+    BERICHT_BEFUNDE,
     BERICHT_KOPFBEREICH,
-    BERICHT_MANAGEMENT_ZUSAMMENFASSUNG,
     BERICHT_MASSNAHMEN,
     BERICHT_SERVERLISTE,
     BERICHT_TITEL,
+    BERICHT_ZUSAMMENFASSUNG,
+    ZIELGRUPPE_ADMIN,
+    ZIELGRUPPE_DRITTUSER,
+    ZIELGRUPPE_SUPPORT,
     STATUS_ERFOLG,
     STATUS_HINWEIS,
     STATUS_WARNUNG,
@@ -101,6 +107,25 @@ def _baue_serverliste_tabelle(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
         ["Server", "Rollen", "Betriebssystem", "Sage-Version", "Blockierte Ports", "Bewertung"],
         tabellenzeilen,
     )
+
+
+def _baue_auswirkungen(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
+    """Leitet Auswirkungen aus Blockaden und Hinweisen ab."""
+    auswirkungen: list[str] = []
+    for ergebnis in ergebnisse:
+        blockierte_ports = [str(port.port) for port in ergebnis.ports if not port.offen]
+        if blockierte_ports:
+            auswirkungen.append(
+                f"{STATUS_WARNUNG}: {ergebnis.server} - Blockierte Ports ({', '.join(blockierte_ports)}) können Fachanwendungen stören."
+            )
+        if ergebnis.hinweise:
+            auswirkungen.append(
+                f"{STATUS_WARNUNG}: {ergebnis.server} - Offene Hinweise können Betrieb und Supportaufwand erhöhen."
+            )
+
+    if not auswirkungen:
+        return [f"- {STATUS_ERFOLG}: Keine kritischen Auswirkungen erkannt."]
+    return _render_bullet_liste(auswirkungen, limit=200)
 
 
 def _baue_massnahmen(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
@@ -208,13 +233,20 @@ def render_markdown(
         f"- Datum: {erzeugt_am}",
         f"- Lauf-ID: {lauf_id}",
         f"- Berichtstyp: {modus_name}",
+        f"- Zielgruppen: {ZIELGRUPPE_ADMIN}, {ZIELGRUPPE_SUPPORT}, {ZIELGRUPPE_DRITTUSER}",
         f"- Template-Version: {template_version}",
         "",
-        f"## {BERICHT_MANAGEMENT_ZUSAMMENFASSUNG}",
+        f"## {BERICHT_ZUSAMMENFASSUNG}",
         *_baue_executive_summary(ergebnisse),
         "",
         f"## {BERICHT_SERVERLISTE}",
         *_baue_serverliste_tabelle(ergebnisse),
+        "",
+        f"## {BERICHT_BEFUNDE}",
+        "- Befunde pro Server finden Sie im jeweiligen Detailblock.",
+        "",
+        f"## {BERICHT_AUSWIRKUNGEN}",
+        *_baue_auswirkungen(ergebnisse),
         "",
     ]
 
@@ -225,4 +257,5 @@ def render_markdown(
             zeilen.extend(_render_detailblock(ergebnis))
 
     zeilen.extend([f"## {BERICHT_MASSNAHMEN}", *_baue_massnahmen(ergebnisse), ""])
+    zeilen.extend([f"## {BERICHT_ARTEFAKTE}", "- Laufbezogene Artefakte sind im Dokumentationsbericht referenziert.", ""])
     return "\n".join(zeilen).strip() + "\n"

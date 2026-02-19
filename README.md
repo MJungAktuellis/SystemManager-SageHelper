@@ -40,6 +40,19 @@ SystemManager-SageHelper/
     └── test_report.py
 ```
 
+## Sprachleitfaden (verbindlich)
+
+- **Anrede:** durchgängig formell mit **„Sie“** in UI, Meldungen und Dokumentation.
+- **Fehlermeldungsstil:** immer **Ursache → Auswirkung → nächster Schritt**.
+- **Statuswörter:** **Erfolgreich**, **Warnung**, **Hinweis**, **Fehler**.
+- **Fachbegriffe:** bevorzugt deutsch (z. B. **Zusammenfassung**, **Befunde**, **Auswirkungen**, **Maßnahmen**, **Artefakte**).
+
+## Zielgruppenorientierung
+
+- **Admin:** technische Befunde, Rollen- und Portdetails, Infrastrukturbezug.
+- **Support:** priorisierte Maßnahmen inkl. konkreter Entstörungsschritte.
+- **Drittuser:** kompakte Zusammenfassung mit Fokus auf Auswirkungen und Entscheidungsbedarf.
+
 ## Technische Architektur
 
 ### Single Source of Truth
@@ -314,11 +327,11 @@ PYTHONPATH=src python -m systemmanager_sagehelper ordner-check --basis /tmp/Syst
 PYTHONPATH=src python -m systemmanager_sagehelper ordner-check --basis /tmp/SystemAG --anlegen
 ```
 
-### 5) Dokumentationsmodus für Microsoft Loop (kompakt)
+### 5) Dokumentationsmodus (kompakt)
 
-Der Workflow erzeugt die `docs/ServerDokumentation.md` standardmäßig im **Modus `loop`**:
+Der Workflow erzeugt die `docs/ServerDokumentation.md` standardmäßig im **Modus `kompakt`**:
 
-- entscheidungsorientiert (Executive Summary + priorisierte Maßnahmen),
+- entscheidungsorientiert (Zusammenfassung + priorisierte Maßnahmen),
 - konsistente Artefaktverweise (`Analysebericht`, `Logpfade`, `Lauf-IDs`),
 - Rohlogs nur als **Anhang/Referenz**.
 
@@ -329,9 +342,9 @@ Beispielauszug:
 - Kunde: nicht angegeben
 - Umgebung: nicht angegeben
 - Lauf-ID: lauf-20260102-110000-efgh5678
-- Berichtsmodus: Loop (kompakt)
+- Berichtsmodus: Kompaktbericht
 
-## Maßnahmen/Offene Punkte
+## Maßnahmen
 | Priorität | Maßnahme |
 | --- | --- |
 | P1 | srv-sql-01: Port 1433 (MSSQL) prüfen/freischalten |

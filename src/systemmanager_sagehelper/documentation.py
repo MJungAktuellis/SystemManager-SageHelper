@@ -12,7 +12,7 @@ from .logging_setup import konfiguriere_logger
 
 logger = konfiguriere_logger(__name__, dateiname="doc_generator.log")
 
-Berichtsmodus = Literal["voll", "loop"]
+Berichtsmodus = Literal["voll", "kompakt"]
 
 
 @dataclass(slots=True)
@@ -247,7 +247,7 @@ def _baue_dokumentmodell(
 
 def _render_dokumentmodell(modell: DokumentModell, *, berichtsmodus: Berichtsmodus) -> str:
     """Rendert das strukturierte Dokumentmodell als Markdown."""
-    ist_loop_modus = berichtsmodus == "loop"
+    ist_kompakt_modus = berichtsmodus == "kompakt"
     zeilen: list[str] = [
         "# ServerDokumentation",
         "",
@@ -256,9 +256,9 @@ def _render_dokumentmodell(modell: DokumentModell, *, berichtsmodus: Berichtsmod
         f"- Umgebung: {modell.kopf.umgebung}",
         f"- Lauf-ID: {modell.kopf.lauf_id}",
         f"- Zeit: {modell.kopf.zeitstempel.isoformat(timespec='seconds')}",
-        f"- Berichtsmodus: {'Loop (kompakt)' if ist_loop_modus else 'Vollbericht'}",
+        f"- Berichtsmodus: {'Kompaktbericht' if ist_kompakt_modus else 'Vollbericht'}",
         "",
-        "## Executive Summary",
+        "## Zusammenfassung",
         *[f"- {eintrag}" for eintrag in modell.executive_summary],
         "",
         "## Serverübersicht",
@@ -269,26 +269,28 @@ def _render_dokumentmodell(modell: DokumentModell, *, berichtsmodus: Berichtsmod
         "",
     ]
 
-    if not ist_loop_modus:
-        zeilen.extend(["## Befunde nach Kategorie", ""])
+    if not ist_kompakt_modus:
+        zeilen.extend(["## Zielgruppe: Admin", "", "### Befunde", ""])
         for kategorie in modell.befunde:
-            zeilen.append(f"### {kategorie.titel}")
+            zeilen.append(f"#### {kategorie.titel}")
             zeilen.extend(f"- {eintrag}" for eintrag in kategorie.eintraege)
             zeilen.append("")
     else:
         zeilen.extend(
             [
-                "## Entscheidungspunkte (Loop)",
+                "## Zielgruppe: Drittuser",
                 "- Fokus auf offene Risiken und priorisierte Maßnahmen.",
                 "- Technische Detailwerte und Rohlogs siehe Artefaktverweise/Anhang.",
                 "",
             ]
         )
 
-    zeilen.extend(["## Maßnahmen/Offene Punkte", "| Priorität | Maßnahme |", "| --- | --- |"])
+    zeilen.extend(["## Zielgruppe: Support", "- Priorisierte Maßnahmen für Betrieb und Entstörung.", ""])
+
+    zeilen.extend(["## Maßnahmen", "| Priorität | Maßnahme |", "| --- | --- |"])
     zeilen.extend(f"| {eintrag.prioritaet} | {eintrag.text} |" for eintrag in modell.massnahmen)
 
-    zeilen.extend(["", "## Artefaktverweise"])
+    zeilen.extend(["", "## Artefakte"])
     zeilen.append(f"- Analysebericht: {modell.artefakte.analysebericht or 'nicht gesetzt'}")
     if modell.artefakte.lauf_ids:
         zeilen.append(f"- Lauf-IDs: {', '.join(modell.artefakte.lauf_ids)}")

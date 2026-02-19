@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 ### Hinzugefügt
+- Textinventur und sprachliche Vereinheitlichung in README, Report- und Dokumentationsmodulen umgesetzt.
+- Verbindlichen Sprachleitfaden ergänzt (Anrede, Fehlermeldungsstil, Statuswörter, Fachbegriffe).
+- Berichtsstruktur auf Standardabschnitte umgestellt: Zusammenfassung, Befunde, Auswirkungen, Maßnahmen, Artefakte.
+- Zielgruppenorientierte Struktur ergänzt (Admin, Support, Drittuser).
+- Statischer Prüf-/Lint-Schritt für bekannte englische UI-Schlüsselbegriffe ergänzt.
 - Erweiterte Multi-Server-Analyse mit paralleler Verarbeitung, optionaler Netzwerkerkennung (Discovery) und serverindividueller Rollendeklaration.
 - Strukturierter Serverbericht um CPU-Daten, erkannte Sage-/Partneranwendungen und Management-Studio-Hinweise ergänzt.
 - One-Click-Windows-Installer (`Install-SystemManager-SageHelper.cmd` + `scripts/install_assistant.ps1`) für ZIP-basierte Server-Installation.
