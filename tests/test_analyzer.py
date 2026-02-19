@@ -134,7 +134,7 @@ class TestAnalyzer(unittest.TestCase):
     @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=False)
     @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[])
     @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=False)
-    def test_discovery_dns_only_treffer_wird_uebernommen(
+    def test_discovery_dns_only_treffer_wird_verworfen(
         self,
         _ping_mock,
         _sock_mock,
@@ -149,9 +149,7 @@ class TestAnalyzer(unittest.TestCase):
             konfiguration=DiscoveryKonfiguration(nutze_reverse_dns=True, max_worker=1),
         )
 
-        self.assertEqual(1, len(ergebnisse))
-        self.assertEqual("srv-dns-only.local", ergebnisse[0].hostname)
-        self.assertIn("reverse_dns", ergebnisse[0].strategien)
+        self.assertEqual([], ergebnisse)
 
     @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value="srv-duplikat.local")
     @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.0.8"])

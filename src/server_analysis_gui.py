@@ -206,7 +206,6 @@ class DiscoveryTabellenTreffer:
     erreichbar: bool
     dienste: str
     vertrauensgrad: float
-    nur_reverse_dns: bool = False
 
 
 def _bewerte_vertrauen_als_sterne(vertrauensgrad: float) -> str:
@@ -279,8 +278,8 @@ def _filter_discovery_treffer(
 ) -> list[DiscoveryTabellenTreffer]:
     """Filtert Discovery-Treffer nach Suchtext und Erreichbarkeit.
 
-    Nicht erreichbare Treffer (insb. reine Reverse-DNS-Treffer) werden standardmäßig
-    ausgeblendet, wenn ``nur_erreichbare`` aktiv ist.
+    Nicht erreichbare Treffer werden standardmäßig ausgeblendet, wenn
+    ``nur_erreichbare`` aktiv ist.
     """
     suchbegriff = filtertext.strip().lower()
     gefiltert: list[DiscoveryTabellenTreffer] = []
@@ -303,7 +302,6 @@ class DiscoveryTrefferDialog:
                 erreichbar=item.erreichbar,
                 dienste=", ".join(item.erkannte_dienste) or "-",
                 vertrauensgrad=item.vertrauensgrad,
-                nur_reverse_dns=(not item.erreichbar and "reverse_dns" in item.strategien),
             )
             for item in treffer
         ]
