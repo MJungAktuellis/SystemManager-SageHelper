@@ -11,6 +11,7 @@ from systemmanager_sagehelper.analyzer import (
     _klassifiziere_anwendungen,
     _normalisiere_rollen,
     entdecke_server_ergebnisse,
+    entdecke_server_namen,
     analysiere_server,
     analysiere_mehrere_server,
     schlage_rollen_per_portsignatur_vor,
@@ -219,6 +220,27 @@ class TestAnalyzer(unittest.TestCase):
         )
 
         self.assertEqual([], ergebnisse)
+
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value="srv-01.domain.local")
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.3.10"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=True)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=True)
+    def test_discovery_servernamenliste_normalisiert_und_dedupliziert(
+        self,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _reverse_mock,
+    ) -> None:
+        ergebnisse = entdecke_server_namen(
+            ["SRV-01", "srv-01.domain.local", " srv-01. "],
+            konfiguration=DiscoveryKonfiguration(max_worker=4),
+        )
+
+        self.assertEqual(1, len(ergebnisse))
+        self.assertEqual("srv-01.domain.local", ergebnisse[0].hostname)
 
 
 if __name__ == "__main__":
