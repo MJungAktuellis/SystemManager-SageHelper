@@ -31,6 +31,7 @@ from server_analysis_gui import (
     ServerTabellenZeile,
     _baue_server_summary,
     _baue_serverziele,
+    _integriere_manuelle_anmerkungen,
     persistiere_serveranalyse_zustand,
 )
 
@@ -575,9 +576,15 @@ class OnboardingController:
             self._setze_status(f"Analyse fehlgeschlagen: {exc}")
             return
 
+        # Manuelle Ergänzungen werden direkt in die Analyseobjekte integriert,
+        # damit der Zustand konsistent für Persistenz und Reporting bleibt.
+        _integriere_manuelle_anmerkungen(self.analyse_ergebnisse, self.server_zeilen)
+
         status_index = {normalisiere_servernamen(e.server): "analysiert" for e in self.analyse_ergebnisse}
         for zeile in self.server_zeilen:
             zeile.status = status_index.get(normalisiere_servernamen(zeile.servername), "nicht analysiert")
+
+        self._oeffne_bearbeitungsansicht_nach_analyse()
 
         self._markiere_schritt(
             "analyse",
@@ -586,6 +593,103 @@ class OnboardingController:
             "Mit Schritt 4 Ergebnisse speichern und bestätigen.",
         )
         self._setze_status(f"Analyse abgeschlossen: {len(self.analyse_ergebnisse)} Server analysiert.")
+
+    def _oeffne_bearbeitungsansicht_nach_analyse(self) -> None:
+        """Bietet nach der Analyse je Server eine gezielte Nachbearbeitung inkl. Freitext an."""
+        if not self.analyse_ergebnisse:
+            return
+
+        dialog = tk.Toplevel(self._window)
+        dialog.title("Bearbeitungsansicht nach Analyse")
+        dialog.geometry("1180x620")
+        dialog.transient(self._window)
+        dialog.grab_set()
+
+        ttk.Label(
+            dialog,
+            text="Manuelle Ergänzungen (optional), damit projektspezifische Infos nicht verloren gehen.",
+            wraplength=1120,
+            justify="left",
+        ).pack(anchor="w", padx=10, pady=(10, 6))
+
+        tree = ttk.Treeview(
+            dialog,
+            columns=("server", "rollen", "ports", "status", "anmerkung"),
+            show="headings",
+            height=18,
+        )
+        tree.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        tree.heading("server", text="Server")
+        tree.heading("rollen", text="Erkannte Rollen")
+        tree.heading("ports", text="Offene Ports")
+        tree.heading("status", text="Status")
+        tree.heading("anmerkung", text="Anmerkungen/Besonderheiten")
+        tree.column("server", width=170)
+        tree.column("rollen", width=180)
+        tree.column("ports", width=180)
+        tree.column("status", width=120, anchor="center")
+        tree.column("anmerkung", width=480)
+
+        zeilenindex = {normalisiere_servernamen(zeile.servername): zeile for zeile in self.server_zeilen}
+
+        for ergebnis in self.analyse_ergebnisse:
+            norm_name = normalisiere_servernamen(ergebnis.server)
+            zeile = zeilenindex.get(norm_name)
+            rollen = ", ".join(ergebnis.rollen) or "keine Rolle"
+            offene_ports = ", ".join(str(port.port) for port in ergebnis.ports if port.offen) or "keine"
+            status = "erreichbar" if any(port.offen for port in ergebnis.ports) else "nicht erreichbar"
+            anmerkung = (zeile.manuelle_anmerkung if zeile else ergebnis.manuelle_anmerkung).strip()
+            tree.insert("", "end", iid=norm_name, values=(ergebnis.server, rollen, offene_ports, status, anmerkung))
+
+        anmerkung_var = tk.StringVar(value="")
+        ttk.Label(dialog, text="Anmerkungen/Besonderheiten:").pack(anchor="w", padx=10)
+        eintrag = ttk.Entry(dialog, textvariable=anmerkung_var, width=120)
+        eintrag.pack(fill="x", padx=10, pady=(0, 8))
+
+        def auswahl_uebernehmen(_event: tk.Event[tk.Misc] | None = None) -> None:
+            auswahl = tree.selection()
+            if not auswahl:
+                anmerkung_var.set("")
+                return
+            anmerkung_var.set(str(tree.set(auswahl[0], "anmerkung") or ""))
+
+        def anmerkung_speichern() -> None:
+            auswahl = tree.selection()
+            if not auswahl:
+                self._setze_status("Bitte zuerst einen Server in der Bearbeitungsansicht auswählen.")
+                return
+
+            item_id = auswahl[0]
+            neue_anmerkung = anmerkung_var.get().strip()
+            tree.set(item_id, "anmerkung", neue_anmerkung)
+
+            for zeile in self.server_zeilen:
+                if normalisiere_servernamen(zeile.servername) == item_id:
+                    zeile.manuelle_anmerkung = neue_anmerkung
+                    break
+
+            for ergebnis in self.analyse_ergebnisse:
+                if normalisiere_servernamen(ergebnis.server) != item_id:
+                    continue
+                bisherige_anmerkung = ergebnis.manuelle_anmerkung.strip()
+                ergebnis.hinweise = [
+                    hinweis
+                    for hinweis in ergebnis.hinweise
+                    if hinweis.strip() and hinweis.strip() != bisherige_anmerkung
+                ]
+                ergebnis.manuelle_anmerkung = neue_anmerkung
+                if neue_anmerkung:
+                    ergebnis.hinweise.append(neue_anmerkung)
+                break
+
+            self._setze_status("Anmerkung gespeichert und in den Analysezustand übernommen.")
+
+        tree.bind("<<TreeviewSelect>>", auswahl_uebernehmen)
+
+        button_rahmen = ttk.Frame(dialog)
+        button_rahmen.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Button(button_rahmen, text="Anmerkung übernehmen", command=anmerkung_speichern).pack(side="left")
+        ttk.Button(button_rahmen, text="Fertig", command=dialog.destroy).pack(side="right")
 
     def schritt_speichern_und_abschliessen(self) -> None:
         """Schritt 4: Persistiert Moduldaten + Onboarding-Status atomar im Gesamtzustand."""

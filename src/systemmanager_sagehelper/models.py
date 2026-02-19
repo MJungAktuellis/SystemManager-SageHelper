@@ -183,6 +183,7 @@ class AnalyseErgebnis:
     rollenquelle: str | None = None
     auto_rollen: list[str] = field(default_factory=list)
     manuell_ueberschrieben: bool = False
+    manuelle_anmerkung: str = ""
     ports: list[PortStatus] = field(default_factory=list)
     cpu_logische_kerne: int | None = None
     cpu_modell: str | None = None
