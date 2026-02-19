@@ -169,6 +169,32 @@ python scripts/install.py --mode cli --non-interactive --desktop-icon
 python scripts/install.py --mode cli --non-interactive --no-desktop-icon
 ```
 
+### Installation ohne Python (Bootstrap über PowerShell-Launcher)
+
+Wenn auf dem Zielsystem noch kein Python verfügbar ist, übernimmt `scripts/install_assistant.ps1` vor dem Start von `scripts/install.py` automatisch einen Bootstrap-Schritt.
+
+Erwartbares Verhalten:
+
+1. Der Launcher prüft nacheinander `py -3`, `python` und `python3`.
+2. Falls kein Launcher gefunden wird, startet automatisch die Installation in dieser Reihenfolge:
+   - zuerst `winget` (`Python.Python.3.11`),
+   - danach als Fallback `choco install python --yes`.
+3. Nach erfolgreicher Installation wird die PATH-Auflösung im laufenden Prozess aktualisiert und `scripts/install.py` erneut gestartet.
+4. Alle Ergebnisse inkl. Ursachenklassifikation und Exit-Codes werden in `logs/install_assistant_ps.log` protokolliert.
+
+Troubleshooting:
+
+- Wenn `winget` und `choco` beide fehlen, installiert der Launcher Python nicht automatisch.
+- In diesem Fall Python manuell installieren und den Launcher erneut ausführen:
+
+```powershell
+winget install --id Python.Python.3.11 -e
+# oder, falls winget nicht verfügbar ist
+choco install python --yes
+```
+
+- Bei wiederholten Fehlern bitte die Logdatei `logs/install_assistant_ps.log` mit den Kategorien `PYTHON_FEHLT`, `INSTALLER_FEHLGESCHLAGEN` und den jeweiligen `EXITCODE`-Einträgen prüfen.
+
 ## Windows-Build & distributierbares Installer-Paket
 
 Für Enterprise-Umgebungen ist ein reproduzierbarer Windows-Buildpfad enthalten:
