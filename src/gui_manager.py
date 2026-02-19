@@ -97,7 +97,8 @@ class OnboardingController:
 
         self._window = tk.Toplevel(self.gui.master)
         self._window.title("Erststart-Assistent")
-        self._window.geometry("760x460")
+        self._window.geometry("980x720")
+        self._window.minsize(900, 620)
         self._window.transient(self.gui.master)
         self._window.grab_set()
         self._window.protocol("WM_DELETE_WINDOW", self._abbrechen)
@@ -107,8 +108,35 @@ class OnboardingController:
         self._scanbereich_var = tk.StringVar(value="Scanbereich wird automatisch aus der lokalen Netzwerkkonfiguration ermittelt …")
         self._erweitert_aktiv_var = tk.BooleanVar(value=False)
 
-        rahmen = ttk.Frame(self._window, padding=16)
-        rahmen.pack(fill="both", expand=True)
+        # Kleines Display-Fallback: Bei niedriger Bildschirmhöhe wird der Wizard-Inhalt
+        # in einen Canvas mit vertikalem Scrollbar gerendert, damit keine Felder abgeschnitten werden.
+        nutzt_scrollcontainer = self._window.winfo_screenheight() <= 800
+        rahmen: ttk.Frame
+        if nutzt_scrollcontainer:
+            scroll_host = ttk.Frame(self._window)
+            scroll_host.pack(fill="both", expand=True)
+
+            inhalt_canvas = tk.Canvas(scroll_host, highlightthickness=0)
+            vertikale_scrollbar = ttk.Scrollbar(scroll_host, orient="vertical", command=inhalt_canvas.yview)
+            inhalt_canvas.configure(yscrollcommand=vertikale_scrollbar.set)
+
+            inhalt_canvas.pack(side="left", fill="both", expand=True)
+            vertikale_scrollbar.pack(side="right", fill="y")
+
+            rahmen = ttk.Frame(inhalt_canvas, padding=16)
+            canvas_window = inhalt_canvas.create_window((0, 0), window=rahmen, anchor="nw")
+
+            def _aktualisiere_scrollregion(_event: tk.Event) -> None:
+                inhalt_canvas.configure(scrollregion=inhalt_canvas.bbox("all"))
+
+            def _aktualisiere_rahmenbreite(event: tk.Event) -> None:
+                inhalt_canvas.itemconfigure(canvas_window, width=event.width)
+
+            rahmen.bind("<Configure>", _aktualisiere_scrollregion)
+            inhalt_canvas.bind("<Configure>", _aktualisiere_rahmenbreite)
+        else:
+            rahmen = ttk.Frame(self._window, padding=16)
+            rahmen.pack(fill="both", expand=True)
 
         ttk.Label(
             rahmen,
@@ -122,6 +150,7 @@ class OnboardingController:
                 "Der Standardpfad nutzt automatisch den lokalen Netzbereich und hält den Ablauf bewusst geführt."
             ),
             justify="left",
+            wraplength=900,
         ).pack(anchor="w", pady=(4, 14))
 
         ttk.Label(rahmen, text="Automatisch abgeleiteter Netzscanbereich:").pack(anchor="w")
@@ -141,6 +170,7 @@ class OnboardingController:
             erweitert_rahmen,
             text="Standard: kein freier Bereichseintrag. Optional kann ein CIDR/Bereich hinterlegt werden.",
             justify="left",
+            wraplength=860,
         )
         self._erweitert_hinweis.pack(anchor="w", padx=8, pady=(0, 4))
 
@@ -196,7 +226,12 @@ class OnboardingController:
         except ValueError as exc:
             self._setze_status(str(exc))
 
-        ttk.Label(rahmen, textvariable=self._status_var, wraplength=700, justify="left").pack(anchor="w", pady=(8, 0))
+        # UI-Testplan:
+        # 1) Auflösung 1366x768: Wizard öffnen, prüfen ob alle Elemente erreichbar sind
+        #    (inkl. vertikalem Scrollen) und keine Bedienelemente abgeschnitten werden.
+        # 2) Auflösung 1920x1080: Wizard öffnen, prüfen ob Layout ohne Scrollbar sauber
+        #    ausgerichtet ist und Texte im erwarteten Umbruch dargestellt werden.
+        ttk.Label(rahmen, textvariable=self._status_var, wraplength=900, justify="left").pack(anchor="w", pady=(8, 0))
 
     def schritt_discovery(self) -> None:
         """Schritt 1: Führt die Discovery durch und befüllt das Tabellenmodell."""
