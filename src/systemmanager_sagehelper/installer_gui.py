@@ -40,6 +40,11 @@ from systemmanager_sagehelper.update_strategy import ermittle_update_kontext, si
 from systemmanager_sagehelper.texte import (
     INSTALLER_ABSCHLUSS_NAECHSTE_SCHRITTE,
     INSTALLER_ABSCHLUSS_WAS_GETAN,
+    INSTALLER_OPTIONEN_HINWEIS_TEXT,
+    INSTALLER_OPTIONEN_INFO_ICON_TOOLTIP,
+    INSTALLER_OPTIONEN_UEBERNEHMEN_BUTTON,
+    INSTALLER_OPTIONEN_UEBERNOMMEN_LOG,
+    INSTALLER_OPTIONEN_UEBERNOMMEN_STATUS,
     INSTALLER_STATUS_ERFOLGREICH,
     INSTALLER_STATUS_FEHLER,
     INSTALLER_STATUS_INFO,
@@ -201,9 +206,9 @@ class InstallerWizardGUI:
         self.window.destroy()
 
     def _speichere_optionen(self) -> None:
-        """Persistiert keine Dateien, sondern bestätigt die aktuelle Wizard-Konfiguration."""
-        self.shell.setze_status(self._status_text(INSTALLER_STATUS_INFO, "Optionen wurden übernommen."))
-        self._log_info("Optionen wurden gespeichert.")
+        """Übernimmt die aktuelle Auswahl nur für den laufenden Wizard-Kontext."""
+        self.shell.setze_status(self._status_text(INSTALLER_STATUS_INFO, INSTALLER_OPTIONEN_UEBERNOMMEN_STATUS))
+        self._log_info(INSTALLER_OPTIONEN_UEBERNOMMEN_LOG)
         LOGGER.info(
             "Optionen übernommen (%s): Pfad=%s | Marker=%s | Report=%s | DesktopIcon=%s",
             self.mode,
@@ -212,6 +217,41 @@ class InstallerWizardGUI:
             self.option_report_var.get(),
             self.option_desktop_icon_var.get(),
         )
+
+    def _binde_einfachen_tooltip(self, widget: tk.Widget, text: str) -> None:
+        """Bindet einen schlanken Tooltip ohne externe Abhängigkeiten an ein Widget."""
+
+        tooltip_fenster: tk.Toplevel | None = None
+
+        def _zeige_tooltip(_event: tk.Event) -> None:
+            nonlocal tooltip_fenster
+            if tooltip_fenster is not None:
+                return
+            tooltip_fenster = tk.Toplevel(self.window)
+            tooltip_fenster.wm_overrideredirect(True)
+            x = widget.winfo_rootx() + 18
+            y = widget.winfo_rooty() + 18
+            tooltip_fenster.wm_geometry(f"+{x}+{y}")
+            ttk.Label(
+                tooltip_fenster,
+                text=text,
+                style="Muted.TLabel",
+                relief="solid",
+                borderwidth=1,
+                padding=(6, 4),
+                wraplength=360,
+                justify="left",
+            ).pack()
+
+        def _verstecke_tooltip(_event: tk.Event) -> None:
+            nonlocal tooltip_fenster
+            if tooltip_fenster is None:
+                return
+            tooltip_fenster.destroy()
+            tooltip_fenster = None
+
+        widget.bind("<Enter>", _zeige_tooltip)
+        widget.bind("<Leave>", _verstecke_tooltip)
 
     def _render_schritt(self) -> None:
         for child in self.inhalt.winfo_children():
@@ -298,14 +338,28 @@ class InstallerWizardGUI:
         ttk.Checkbutton(optionen, text="Installationsreport schreiben", variable=self.option_report_var).pack(anchor="w")
         ttk.Checkbutton(optionen, text="Installationsmarker aktualisieren", variable=self.option_marker_var).pack(anchor="w")
 
-        # Optionales Speichern der gewählten Optionen als explizite Schrittaktion
-        # (kein globaler Shell-Button), damit die Navigation eindeutig bleibt.
+        # Die Auswahl wird bewusst nur für den aktuellen Lauf übernommen.
+        # Das verhindert Missverständnisse über eine vermeintliche Persistenz in Dateien.
+        optionen_aktion = ttk.Frame(optionen)
+        optionen_aktion.pack(anchor="w", fill="x", pady=(8, 0))
         ttk.Button(
-            optionen,
-            text="Optionen speichern",
+            optionen_aktion,
+            text=INSTALLER_OPTIONEN_UEBERNEHMEN_BUTTON,
             style="Secondary.TButton",
             command=self._speichere_optionen,
-        ).pack(anchor="w", pady=(8, 0))
+        ).pack(side="left")
+
+        # Ein kompaktes Info-Icon erklärt ohne externe Doku den Zweck der Aktion.
+        info_icon = ttk.Label(optionen_aktion, text="ℹ", style="Muted.TLabel", cursor="question_arrow")
+        info_icon.pack(side="left", padx=(8, 0))
+        self._binde_einfachen_tooltip(info_icon, INSTALLER_OPTIONEN_INFO_ICON_TOOLTIP)
+        ttk.Label(
+            optionen,
+            text=INSTALLER_OPTIONEN_HINWEIS_TEXT,
+            style="Muted.TLabel",
+            wraplength=840,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 0))
         if self._ist_wartungsmodus:
             # Im Wartungsmodus wird keine Vollinstallation angestoßen, daher sind
             # One-Click-Artefakte wie ein neues Desktop-Icon hier bewusst ausgeblendet.
