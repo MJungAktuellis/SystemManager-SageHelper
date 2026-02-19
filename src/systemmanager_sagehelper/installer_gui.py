@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import logging
 from pathlib import Path
 import threading
+import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Literal
@@ -35,6 +36,14 @@ from systemmanager_sagehelper.installer_options import (
     mappe_inno_tasks,
 )
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id
+from systemmanager_sagehelper.texte import (
+    INSTALLER_ABSCHLUSS_NAECHSTE_SCHRITTE,
+    INSTALLER_ABSCHLUSS_WAS_GETAN,
+    INSTALLER_STATUS_ERFOLGREICH,
+    INSTALLER_STATUS_FEHLER,
+    INSTALLER_STATUS_INFO,
+    INSTALLER_STATUS_WARNUNG,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -86,6 +95,7 @@ class InstallerWizardGUI:
             on_back=None,
             on_exit=None,
             show_actions=False,
+            kurze_endnutzerhinweise=True,
         )
 
         self.lauf_id = erstelle_lauf_id()
@@ -105,7 +115,7 @@ class InstallerWizardGUI:
         self.option_report_var = tk.BooleanVar(value=True)
         # One-Click-Installationen sollen standardmäßig eine Desktop-Verknüpfung anlegen.
         self.option_desktop_icon_var = tk.BooleanVar(value=True)
-        self.statustext_var = tk.StringVar(value=f"Noch kein {self._vorgang_nomen.lower()} gestartet.")
+        self.statustext_var = tk.StringVar(value=self._status_text(INSTALLER_STATUS_INFO, f"Noch keine {self._vorgang_nomen.lower()} gestartet."))
 
         self.log_datei: Path | None = None
         self.report_datei: Path | None = None
@@ -114,6 +124,8 @@ class InstallerWizardGUI:
         self.desktop_icon_fehler: str | None = None
         self.desktop_icon_pfad: Path | None = None
         self.installation_laueft = False
+        self.abschluss_was_getan: list[str] = []
+        self.abschluss_naechste_schritte: list[str] = []
 
         self.komponenten = erstelle_standard_komponenten(self.repo_root)
         self.komponenten_vars = {
@@ -158,6 +170,22 @@ class InstallerWizardGUI:
     def _vorgang_verb(self) -> str:
         return "Wartung" if self._ist_wartungsmodus else "Installation"
 
+    def _status_text(self, statusstufe: str, nachricht: str) -> str:
+        """Formatiert den Statustext konsistent für alle Wizard-Bereiche."""
+        return f"{statusstufe}: {nachricht}"
+
+    def _log_info(self, nachricht: str) -> None:
+        """Zeigt eine kurze, handlungsorientierte Information im UI-Log."""
+        self._fuege_fortschrittslog_hinzu(self._status_text(INSTALLER_STATUS_INFO, nachricht))
+
+    def _log_warnung(self, nachricht: str) -> None:
+        """Zeigt eine kurze Warnung im UI-Log."""
+        self._fuege_fortschrittslog_hinzu(self._status_text(INSTALLER_STATUS_WARNUNG, nachricht))
+
+    def _log_erfolg(self, nachricht: str) -> None:
+        """Zeigt eine Erfolgsmeldung im UI-Log."""
+        self._fuege_fortschrittslog_hinzu(self._status_text(INSTALLER_STATUS_ERFOLGREICH, nachricht))
+
     def _beenden(self) -> None:
         """Schließt das Wizard-Fenster geordnet."""
         if self.installation_laueft:
@@ -171,11 +199,15 @@ class InstallerWizardGUI:
 
     def _speichere_optionen(self) -> None:
         """Persistiert keine Dateien, sondern bestätigt die aktuelle Wizard-Konfiguration."""
-        self.shell.setze_status("Wizard-Optionen übernommen")
-        self.shell.logge_meldung(
-            f"Optionen übernommen ({self.mode}): Pfad={self.installationspfad_var.get()} | "
-            f"Marker={self.option_marker_var.get()} | Report={self.option_report_var.get()} | "
-            f"DesktopIcon={self.option_desktop_icon_var.get()}"
+        self.shell.setze_status(self._status_text(INSTALLER_STATUS_INFO, "Optionen wurden übernommen."))
+        self._log_info("Optionen wurden gespeichert.")
+        LOGGER.info(
+            "Optionen übernommen (%s): Pfad=%s | Marker=%s | Report=%s | DesktopIcon=%s",
+            self.mode,
+            self.installationspfad_var.get(),
+            self.option_marker_var.get(),
+            self.option_report_var.get(),
+            self.option_desktop_icon_var.get(),
         )
 
     def _render_schritt(self) -> None:
@@ -183,7 +215,9 @@ class InstallerWizardGUI:
             child.destroy()
 
         schritt = self.schritte[self.aktiver_schritt]
-        self.shell.setze_status(f"Schritt {self.aktiver_schritt + 1}/{len(self.schritte)}: {schritt.titel}")
+        self.shell.setze_status(
+            self._status_text(INSTALLER_STATUS_INFO, f"Schritt {self.aktiver_schritt + 1}/{len(self.schritte)}: {schritt.titel}")
+        )
 
         renderer = {
             "willkommen": self._render_willkommen,
@@ -341,30 +375,39 @@ class InstallerWizardGUI:
         rahmen = ttk.LabelFrame(self.inhalt, text="Abschluss", style="Section.TLabelframe")
         rahmen.pack(fill="both", expand=True)
 
-        status = (
-            f"{self._vorgang_nomen} erfolgreich abgeschlossen."
-            if not self.installationsfehler
-            else f"{self._vorgang_nomen} fehlgeschlagen."
+        status = self._status_text(
+            INSTALLER_STATUS_ERFOLGREICH if not self.installationsfehler else INSTALLER_STATUS_FEHLER,
+            f"{self._vorgang_nomen} erfolgreich abgeschlossen." if not self.installationsfehler else f"{self._vorgang_nomen} fehlgeschlagen.",
         )
         ttk.Label(rahmen, text=status).pack(anchor="w", padx=10, pady=(12, 8))
 
-        details: list[str] = []
         if self.log_datei:
-            details.append(f"Logdatei: {self.log_datei}")
-        if self.report_datei:
-            details.append(f"Installationsreport: {self.report_datei}")
-        if self.marker_datei:
-            details.append(f"Installationsmarker: {self.marker_datei}")
-        if self.desktop_icon_pfad:
-            details.append(f"Desktop-Verknüpfung: {self.desktop_icon_pfad}")
-        if self.desktop_icon_fehler:
-            details.append(f"Desktop-Verknüpfung Fehler: {self.desktop_icon_fehler}")
-        if self.installationsfehler:
-            details.append(f"Fehler: {self.installationsfehler}")
+            ttk.Label(
+                rahmen,
+                text=f"Technisches Detailprotokoll: {self.log_datei}",
+                style="Muted.TLabel",
+                wraplength=840,
+            ).pack(anchor="w", padx=10, pady=(0, 8))
 
-        ttk.Label(rahmen, text="\n".join(details) or "Keine Detaildaten verfügbar.", justify="left").pack(
-            anchor="w", padx=10, pady=(0, 10)
+        was_getan_rahmen = ttk.LabelFrame(rahmen, text=INSTALLER_ABSCHLUSS_WAS_GETAN, style="Section.TLabelframe")
+        was_getan_rahmen.pack(fill="x", padx=10, pady=(4, 8))
+        was_getan = self.abschluss_was_getan or ["Keine Aktionen protokolliert."]
+        ttk.Label(was_getan_rahmen, text="\n".join(f"• {eintrag}" for eintrag in was_getan), justify="left").pack(
+            anchor="w", padx=10, pady=8
         )
+
+        naechste_schritte_rahmen = ttk.LabelFrame(
+            rahmen,
+            text=INSTALLER_ABSCHLUSS_NAECHSTE_SCHRITTE,
+            style="Section.TLabelframe",
+        )
+        naechste_schritte_rahmen.pack(fill="x", padx=10, pady=(0, 10))
+        naechste_schritte = self.abschluss_naechste_schritte or ["Keine weiteren Schritte erforderlich."]
+        ttk.Label(
+            naechste_schritte_rahmen,
+            text="\n".join(f"• {eintrag}" for eintrag in naechste_schritte),
+            justify="left",
+        ).pack(anchor="w", padx=10, pady=8)
 
     def _waehle_installationspfad(self) -> None:
         ausgewaehlt = filedialog.askdirectory(parent=self.window)
@@ -396,7 +439,9 @@ class InstallerWizardGUI:
         self.desktop_icon_pfad = None
         self.report_datei = None
         self.marker_datei = None
-        self.statustext_var.set(f"{self._vorgang_nomen} läuft …")
+        self.statustext_var.set(self._status_text(INSTALLER_STATUS_INFO, f"{self._vorgang_nomen} wird vorbereitet."))
+        self.abschluss_was_getan = []
+        self.abschluss_naechste_schritte = []
 
         self.aktiver_schritt = 3
         self._render_schritt()
@@ -405,8 +450,8 @@ class InstallerWizardGUI:
         worker = threading.Thread(target=self._fuehre_installation_hintergrund_aus, daemon=True)
         worker.start()
 
-    def _fuege_fortschrittslog_hinzu(self, text: str) -> None:
-        self.shell.logge_meldung(text)
+    def _fuege_fortschrittslog_hinzu(self, text: str, *, technisch: bool = False) -> None:
+        self.shell.logge_meldung(text, technisch=technisch)
         if not hasattr(self, "fortschritt_log"):
             return
         self.fortschritt_log.config(state="normal")
@@ -423,12 +468,13 @@ class InstallerWizardGUI:
 
             ergebnisse = self._fuehre_komponenten_mit_fortschritt_aus(self.komponenten, auswahl)
             if self._ist_wartungsmodus:
-                self.window.after(0, self._fuege_fortschrittslog_hinzu, "Integritätsprüfung abgeschlossen.")
-                self.window.after(0, self._fuege_fortschrittslog_hinzu, "Versions-/Komponentencheck abgeschlossen.")
+                self.window.after(0, self._log_erfolg, "Integritätsprüfung abgeschlossen.")
+                self.window.after(0, self._log_erfolg, "Versions-/Komponentencheck abgeschlossen.")
             desktop_verknuepfung_status = "Desktop-Verknüpfung: Deaktiviert"
 
             if self.option_marker_var.get():
                 self.marker_datei = schreibe_installations_marker(repo_root=ziel_root)
+                self.window.after(0, self._log_erfolg, "Installationsmarker wurde aktualisiert.")
 
             # Persistiert den Installer-Zustand zentral, damit Dashboard und weitere GUI-Module
             # den Erfolg unabhängig vom aktuellen Fenster reproduzierbar auslesen können.
@@ -443,28 +489,21 @@ class InstallerWizardGUI:
             installer_optionen = InstallerOptionen(desktop_icon=self.option_desktop_icon_var.get())
             inno_tasks = mappe_inno_tasks(installer_optionen)
             inno_parameter = baue_inno_setup_parameter(installer_optionen)
-            self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Inno-Tasks aus Optionen: {inno_tasks or 'keine'}")
-            self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Inno-Parameter: {' '.join(inno_parameter)}")
+            self.window.after(0, self._log_info, "Installationsoptionen wurden angewendet.")
+            LOGGER.info("Inno-Tasks aus Optionen: %s", inno_tasks or "keine")
+            LOGGER.info("Inno-Parameter: %s", " ".join(inno_parameter))
 
             if installer_optionen.desktop_icon and not self._ist_wartungsmodus:
                 try:
                     self.desktop_icon_pfad = erstelle_desktop_verknuepfung_fuer_python_installation(ziel_root)
                     desktop_verknuepfung_status = f"Desktop-Verknüpfung: Erfolgreich erstellt ({self.desktop_icon_pfad})"
                     LOGGER.info("Desktop-Verknüpfung erfolgreich erstellt: %s", self.desktop_icon_pfad)
-                    self.window.after(
-                        0,
-                        self._fuege_fortschrittslog_hinzu,
-                        f"Desktop-Verknüpfung erstellt: {self.desktop_icon_pfad}",
-                    )
+                    self.window.after(0, self._log_erfolg, "Desktop-Verknüpfung wurde erstellt.")
                 except InstallationsFehler as exc:
                     self.desktop_icon_fehler = str(exc)
                     desktop_verknuepfung_status = f"Desktop-Verknüpfung: Fehler ({self.desktop_icon_fehler})"
                     LOGGER.warning("Desktop-Verknüpfung nicht erstellt: %s", self.desktop_icon_fehler)
-                    self.window.after(
-                        0,
-                        self._fuege_fortschrittslog_hinzu,
-                        f"[WARN] Desktop-Verknüpfung nicht erstellt: {self.desktop_icon_fehler}",
-                    )
+                    self.window.after(0, self._log_warnung, "Desktop-Verknüpfung konnte nicht erstellt werden.")
             else:
                 LOGGER.info("Desktop-Verknüpfung wurde im GUI-Wizard deaktiviert.")
 
@@ -482,13 +521,17 @@ class InstallerWizardGUI:
                         "Desktop-Icon": "aktiv" if self.option_desktop_icon_var.get() else "deaktiviert",
                     },
                 )
+                self.window.after(0, self._log_erfolg, "Installationsreport wurde erstellt.")
 
             self.window.after(0, self._installation_erfolgreich_abschliessen)
         except InstallationsFehler as exc:
-            self.installationsfehler = str(exc)
+            self.installationsfehler = "Ein Installationsschritt konnte nicht abgeschlossen werden."
+            LOGGER.error("Installationsfehler im Wizard: %s", exc, exc_info=True)
             self.window.after(0, self._installation_mit_fehler_abschliessen)
         except Exception as exc:  # noqa: BLE001
-            self.installationsfehler = f"Unerwarteter Fehler: {exc}"
+            self.installationsfehler = "Es ist ein unerwarteter Fehler aufgetreten."
+            LOGGER.exception("Unerwarteter Fehler im Wizard: %s", exc)
+            LOGGER.debug("Stacktrace: %s", traceback.format_exc())
             self.window.after(0, self._installation_mit_fehler_abschliessen)
 
     def _fuehre_komponenten_mit_fortschritt_aus(
@@ -505,9 +548,10 @@ class InstallerWizardGUI:
                 continue
             komponente = komponenten[komponenten_id]
             if self._ist_wartungsmodus:
-                self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Integritätsprüfung: {komponente.name}")
-            self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Starte: {komponente.name}")
+                self.window.after(0, self._log_info, f"Prüfe Integrität von {komponente.name}.")
+            self.window.after(0, self._log_info, f"Starte {komponente.name}.")
             install_nachricht = komponente.install_fn()
+            LOGGER.info("Installationsausgabe %s: %s", komponente.name, install_nachricht)
             erfolgreich, verify_nachricht = komponente.verify_fn()
             if not erfolgreich:
                 raise InstallationsFehler(
@@ -524,17 +568,47 @@ class InstallerWizardGUI:
                     naechste_aktion="Keine Aktion erforderlich.",
                 )
             )
-            self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Versions-/Komponentencheck: {verify_nachricht}")
-            self.window.after(0, self._fuege_fortschrittslog_hinzu, f"Abgeschlossen: {komponente.name}")
+            LOGGER.info("Verifikation %s: %s", komponente.name, verify_nachricht)
+            self.window.after(0, self._log_erfolg, f"{komponente.name} ist abgeschlossen.")
 
         return ergebnisse
+
+    def _baue_abschlussbereiche(self, *, installiert_ok: bool) -> None:
+        """Erstellt die Abschlussinhalte für Endnutzer ohne technische Details."""
+        was_getan: list[str] = [f"{self._vorgang_nomen} wurde gestartet und verarbeitet."]
+        naechste_schritte: list[str] = []
+
+        if self.report_datei:
+            was_getan.append("Ein Installationsreport wurde erstellt.")
+        if self.marker_datei:
+            was_getan.append("Der Installationsmarker wurde aktualisiert.")
+        if self.desktop_icon_pfad:
+            was_getan.append("Eine Desktop-Verknüpfung wurde erstellt.")
+        if self.desktop_icon_fehler:
+            was_getan.append("Die Desktop-Verknüpfung konnte nicht erstellt werden.")
+
+        if installiert_ok:
+            naechste_schritte.append("Bitte öffnen Sie die Anwendung und prüfen Sie die wichtigsten Funktionen.")
+            if self.report_datei:
+                naechste_schritte.append("Prüfen Sie den Installationsreport für die Dokumentation.")
+        else:
+            naechste_schritte.append("Bitte führen Sie den Assistenten erneut aus.")
+            if self.log_datei:
+                naechste_schritte.append("Geben Sie die Logdatei an den Support weiter.")
+
+        if self.installationsfehler:
+            naechste_schritte.append("Fehler prüfen und danach den Vorgang wiederholen.")
+
+        self.abschluss_was_getan = was_getan
+        self.abschluss_naechste_schritte = naechste_schritte
 
     def _installation_erfolgreich_abschliessen(self) -> None:
         self.installation_laueft = False
         if hasattr(self, "progress"):
             self.progress.stop()
-        self.statustext_var.set(f"{self._vorgang_nomen} erfolgreich abgeschlossen.")
-        self.shell.setze_status(f"{self._vorgang_nomen} abgeschlossen")
+        self._baue_abschlussbereiche(installiert_ok=True)
+        self.statustext_var.set(self._status_text(INSTALLER_STATUS_ERFOLGREICH, f"{self._vorgang_nomen} abgeschlossen."))
+        self.shell.setze_status(self._status_text(INSTALLER_STATUS_ERFOLGREICH, f"{self._vorgang_nomen} abgeschlossen."))
         self.aktiver_schritt = 4
         self._render_schritt()
         if self.on_finished:
@@ -544,10 +618,11 @@ class InstallerWizardGUI:
         self.installation_laueft = False
         if hasattr(self, "progress"):
             self.progress.stop()
-        self.statustext_var.set(f"{self._vorgang_nomen} fehlgeschlagen.")
-        self.shell.setze_status(f"{self._vorgang_nomen} fehlgeschlagen")
+        self._baue_abschlussbereiche(installiert_ok=False)
+        self.statustext_var.set(self._status_text(INSTALLER_STATUS_FEHLER, f"{self._vorgang_nomen} fehlgeschlagen."))
+        self.shell.setze_status(self._status_text(INSTALLER_STATUS_FEHLER, f"{self._vorgang_nomen} fehlgeschlagen."))
         if self.installationsfehler:
-            self.shell.logge_meldung(f"[ERROR] {self.installationsfehler}")
+            self.shell.logge_fehler(self.installationsfehler)
         self.aktiver_schritt = 4
         self._render_schritt()
         if self.on_finished:

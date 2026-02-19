@@ -75,6 +75,12 @@ class _FakeGuiShell:
     def setze_status(self, _text: str) -> None:
         return
 
+    def logge_meldung(self, _text: str, *, technisch: bool = False) -> None:
+        return
+
+    def logge_fehler(self, _text: str) -> None:
+        return
+
 
 def test_installer_deaktiviert_globale_shell_aktionen(monkeypatch) -> None:
     """Der Wizard soll nur seine schrittspezifische Navigation anzeigen."""
@@ -94,6 +100,7 @@ def test_installer_deaktiviert_globale_shell_aktionen(monkeypatch) -> None:
 
     assert _FakeGuiShell.letzte_kwargs is not None
     assert _FakeGuiShell.letzte_kwargs["show_actions"] is False
+    assert _FakeGuiShell.letzte_kwargs["kurze_endnutzerhinweise"] is True
 
 
 def test_navigation_verwendet_eine_einheitliche_button_logik() -> None:

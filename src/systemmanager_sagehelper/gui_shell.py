@@ -17,7 +17,11 @@ from systemmanager_sagehelper.texte import (
     BUTTON_BEENDEN,
     BUTTON_SPEICHERN,
     BUTTON_ZURUECK,
-    STATUS_HINWEIS,
+    INSTALLER_STATUS_FEHLER,
+    INSTALLER_STATUS_INFO,
+    SHELL_BEREICH_STATUS_MELDUNGEN,
+    SHELL_OPTION_TECHNISCHE_LOGS,
+    SHELL_STATUS_BEREIT,
 )
 from systemmanager_sagehelper.ui_theme import LAYOUT, PALETTE, TYPO, ThemeManager
 
@@ -38,14 +42,17 @@ class GuiShell:
         show_save_action: bool = True,
         show_back_action: bool = True,
         show_exit_action: bool = True,
+        kurze_endnutzerhinweise: bool = False,
     ) -> None:
         self.master = master
         self.master.title(titel)
         self.theme = ThemeManager(master)
         self.theme.anwenden()
+        self.kurze_endnutzerhinweise = kurze_endnutzerhinweise
 
-        self.status_var = tk.StringVar(value=f"{STATUS_HINWEIS} Bereit")
+        self.status_var = tk.StringVar(value=f"{INSTALLER_STATUS_INFO}: {SHELL_STATUS_BEREIT}")
         self.lauf_id_var = tk.StringVar(value="-")
+        self.zeige_technische_logs_var = tk.BooleanVar(value=not kurze_endnutzerhinweise)
 
         container = ttk.Frame(master, padding=LAYOUT.padding_gesamt)
         container.pack(fill="both", expand=True)
@@ -105,10 +112,17 @@ class GuiShell:
             ttk.Button(leiste, text=BUTTON_BEENDEN, style="Secondary.TButton", command=on_exit).pack(side="right")
 
     def _baue_statusbereich(self, parent: ttk.Frame) -> None:
-        rahmen = ttk.LabelFrame(parent, text="Status / Meldungen", style="Section.TLabelframe")
+        rahmen = ttk.LabelFrame(parent, text=SHELL_BEREICH_STATUS_MELDUNGEN, style="Section.TLabelframe")
         rahmen.pack(fill="both", expand=False)
 
         ttk.Label(rahmen, textvariable=self.status_var).pack(anchor="w", padx=8, pady=(8, 4))
+
+        if self.kurze_endnutzerhinweise:
+            ttk.Checkbutton(
+                rahmen,
+                text=SHELL_OPTION_TECHNISCHE_LOGS,
+                variable=self.zeige_technische_logs_var,
+            ).pack(anchor="w", padx=8, pady=(0, 4))
 
         self.meldungen = tk.Text(
             rahmen,
@@ -151,9 +165,16 @@ class GuiShell:
         """Setzt den aktuellen Status im Statusbereich."""
         self.status_var.set(nachricht)
 
-    def logge_meldung(self, nachricht: str) -> None:
-        """Fügt eine Zeile in die Meldungsbox ein und scrollt ans Ende."""
+    def logge_meldung(self, nachricht: str, *, technisch: bool = False) -> None:
+        """Fügt eine Zeile in die Meldungsbox ein und filtert optional technische Inhalte."""
+        if self.kurze_endnutzerhinweise and technisch and not self.zeige_technische_logs_var.get():
+            return
+
         self.meldungen.config(state="normal")
         self.meldungen.insert(tk.END, nachricht + "\n")
         self.meldungen.config(state="disabled")
         self.meldungen.see(tk.END)
+
+    def logge_fehler(self, kurztext: str) -> None:
+        """Schreibt eine kurze Endnutzer-Fehlermeldung ohne technische Details."""
+        self.logge_meldung(f"{INSTALLER_STATUS_FEHLER}: {kurztext}")
