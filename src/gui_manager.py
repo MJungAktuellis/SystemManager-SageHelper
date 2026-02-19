@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import ipaddress
 import re
 import subprocess
 import sys
@@ -82,10 +83,19 @@ class OnboardingController:
             justify="left",
         ).pack(anchor="w", pady=(4, 14))
 
-        ttk.Label(rahmen, text="Netzwerkerkennungs-Bereich (CIDR oder Basis wie 192.168.178):").pack(anchor="w")
+        ttk.Label(rahmen, text="Netzwerkerkennungs-Bereich (CIDR, Basisbereich oder Kurzformat):").pack(anchor="w")
         self._discovery_entry = ttk.Entry(rahmen, width=40)
         self._discovery_entry.insert(0, "192.168.178")
         self._discovery_entry.pack(anchor="w", pady=(2, 10))
+
+        ttk.Label(
+            rahmen,
+            text=(
+                "Gültige Beispiele: 192.168.178.0/24, 192.168.178 + Start=1/Ende=30, "
+                "192.168.178.1-30"
+            ),
+            justify="left",
+        ).pack(anchor="w", pady=(0, 10))
 
         start_ende_rahmen = ttk.Frame(rahmen)
         start_ende_rahmen.pack(anchor="w", pady=(0, 10))
@@ -127,19 +137,29 @@ class OnboardingController:
         ende_eingabe = self._discovery_ende_entry.get().strip() if self._window else ""
 
         try:
-            discovery_basis, start, ende = self._parse_discovery_eingabe(discovery_eingabe, start_eingabe, ende_eingabe)
+            discovery_bereiche, gespeicherte_eingabe = self._parse_discovery_eingabe(
+                discovery_eingabe,
+                start_eingabe,
+                ende_eingabe,
+            )
         except ValueError as exc:
             self._setze_status(str(exc))
             return
 
         self._setze_status("Netzwerkerkennung läuft …")
+        ergebnisse = []
         try:
-            ergebnisse = entdecke_server_ergebnisse(
-                basis=discovery_basis,
-                start=start,
-                ende=ende,
-                konfiguration=DiscoveryKonfiguration(),
-            )
+            # Vorhandene Discovery-Pipeline bleibt unverändert nutzbar:
+            # CIDR- oder Kurzformat-Eingaben werden intern auf Basis+Start/Ende gemappt.
+            for basis, start, ende in discovery_bereiche:
+                ergebnisse.extend(
+                    entdecke_server_ergebnisse(
+                        basis=basis,
+                        start=start,
+                        ende=ende,
+                        konfiguration=DiscoveryKonfiguration(),
+                    )
+                )
         except Exception as exc:  # noqa: BLE001 - Wizard soll robust weiterlaufen.
             logger.exception("Netzwerkerkennung im Onboarding fehlgeschlagen")
             self._setze_status(f"Netzwerkerkennung fehlgeschlagen: {exc}")
@@ -165,21 +185,61 @@ class OnboardingController:
                 )
             )
 
-        self.gui.modulzustand["letzte_discovery_range"] = f"{discovery_basis}.{start}-{ende}"
+        self.gui.modulzustand["letzte_discovery_range"] = gespeicherte_eingabe
         self._setze_status(f"Netzwerkerkennung abgeschlossen: {len(self.server_zeilen)} Server übernommen.")
 
     @staticmethod
-    def _parse_discovery_eingabe(discovery_eingabe: str, start_eingabe: str, ende_eingabe: str) -> tuple[str, int, int]:
-        """Parst Eingaben der Netzwerkerkennung robust für Basis + Start/Ende inklusive Kurzformat.
+    def _parse_discovery_eingabe(
+        discovery_eingabe: str,
+        start_eingabe: str,
+        ende_eingabe: str,
+    ) -> tuple[list[tuple[str, int, int]], str]:
+        """Parst Eingaben der Netzwerkerkennung robust inkl. CIDR-Unterstützung.
 
         Unterstützte Eingaben:
+        * CIDR (z. B. 192.168.0.0/24)
         * Basis + getrennte Start/Ende-Felder (z. B. 192.168.0 + 1/30)
         * Kurzformat in einem Feld (z. B. 192.168.0.1-30)
         """
 
-        beispiel = "192.168.0 + Start=1 und Ende=30 oder 192.168.0.1-30"
+        beispiel = "192.168.0.0/24 oder 192.168.0 + Start=1 und Ende=30 oder 192.168.0.1-30"
         if not discovery_eingabe:
             raise ValueError(f"Ungültige Eingabe für die Netzwerkerkennung. Beispiele: {beispiel}")
+
+        if "/" in discovery_eingabe:
+            try:
+                netz = ipaddress.ip_network(discovery_eingabe, strict=False)
+            except ValueError as exc:
+                raise ValueError(f"Ungültiges CIDR-Format. Beispiele: {beispiel}") from exc
+            if netz.version != 4:
+                raise ValueError(f"Nur IPv4-CIDR wird unterstützt. Beispiele: {beispiel}")
+
+            host_ips = [str(host) for host in netz.hosts()]
+            if not host_ips:
+                raise ValueError(f"CIDR-Bereich enthält keine nutzbaren Hosts. Beispiele: {beispiel}")
+
+            # Gruppiert Hosts je /24-Basis und bildet daraus zusammenhängende Start/Ende-Bereiche,
+            # damit die bestehende Discovery-Funktion ohne Umbau wiederverwendet werden kann.
+            host_oktette = sorted((ip.split(".") for ip in host_ips), key=lambda teile: tuple(int(wert) for wert in teile))
+            discovery_bereiche: list[tuple[str, int, int]] = []
+            aktuelle_basis = ""
+            start = ende = -1
+
+            for teil_1, teil_2, teil_3, teil_4 in host_oktette:
+                basis = f"{teil_1}.{teil_2}.{teil_3}"
+                host = int(teil_4)
+
+                if basis != aktuelle_basis or host != ende + 1:
+                    if aktuelle_basis:
+                        discovery_bereiche.append((aktuelle_basis, start, ende))
+                    aktuelle_basis = basis
+                    start = host
+                    ende = host
+                else:
+                    ende = host
+
+            discovery_bereiche.append((aktuelle_basis, start, ende))
+            return discovery_bereiche, str(netz)
 
         kurzformat = re.fullmatch(r"(?P<basis>(?:\d{1,3}\.){2}\d{1,3})\.(?P<start>\d{1,3})-(?P<ende>\d{1,3})", discovery_eingabe)
         if kurzformat:
@@ -206,7 +266,7 @@ class OnboardingController:
         if start > ende:
             raise ValueError(f"Start darf nicht größer als Ende sein. Beispiele: {beispiel}")
 
-        return basis, start, ende
+        return [(basis, start, ende)], f"{basis}.{start}-{ende}"
 
     def schritt_rollen_pruefen(self) -> None:
         """Schritt 2: Ermöglicht eine einfache Rollenanpassung pro gefundenem Server."""

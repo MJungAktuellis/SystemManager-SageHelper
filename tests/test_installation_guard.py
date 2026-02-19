@@ -258,16 +258,28 @@ def test_dashboard_installationsstatus_zeigt_teilweise_konfiguration_ohne_marker
 
 def test_onboarding_discovery_parse_gueltiger_bereich() -> None:
     """Der Discovery-Parser soll Basis plus Start/Ende korrekt übernehmen."""
-    basis, start, ende = gui_manager.OnboardingController._parse_discovery_eingabe("192.168.0", "1", "30")
+    bereiche, gespeichert = gui_manager.OnboardingController._parse_discovery_eingabe("192.168.0", "1", "30")
+    basis, start, ende = bereiche[0]
 
     assert basis == "192.168.0"
     assert start == 1
     assert ende == 30
+    assert gespeichert == "192.168.0.1-30"
 
-    basis_kurz, start_kurz, ende_kurz = gui_manager.OnboardingController._parse_discovery_eingabe("192.168.0.10-25", "", "")
+    bereiche_kurz, gespeichert_kurz = gui_manager.OnboardingController._parse_discovery_eingabe("192.168.0.10-25", "", "")
+    basis_kurz, start_kurz, ende_kurz = bereiche_kurz[0]
     assert basis_kurz == "192.168.0"
     assert start_kurz == 10
     assert ende_kurz == 25
+    assert gespeichert_kurz == "192.168.0.10-25"
+
+
+def test_onboarding_discovery_parse_cidr_mapped_auf_discovery_bereiche() -> None:
+    """CIDR-Eingaben sollen in wiederverwendbare Basis-Start-Ende-Bereiche zerlegt werden."""
+    bereiche, gespeichert = gui_manager.OnboardingController._parse_discovery_eingabe("192.168.1.0/24", "", "")
+
+    assert bereiche == [("192.168.1", 1, 254)]
+    assert gespeichert == "192.168.1.0/24"
 
 
 def test_onboarding_discovery_parse_vertauschte_grenzen() -> None:
@@ -287,4 +299,5 @@ def test_onboarding_discovery_parse_ungueltiges_format() -> None:
         raise AssertionError("Es hätte eine ValueError ausgelöst werden müssen")
     except ValueError as exc:
         assert "Ungültiges Format für die Netzwerkerkennung" in str(exc)
+        assert "192.168.0.0/24" in str(exc)
         assert "192.168.0.1-30" in str(exc)
