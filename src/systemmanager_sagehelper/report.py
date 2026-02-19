@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from .models import AnalyseErgebnis
+from .models import AnalyseErgebnis, ServerDetailkarte
+from .viewmodel import baue_server_detailkarte
 from .texte import (
     BERICHT_KOPFBEREICH,
     BERICHT_MANAGEMENT_ZUSAMMENFASSUNG,
@@ -103,16 +104,12 @@ def _baue_serverliste_tabelle(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
 
 
 def _baue_massnahmen(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
-    """Sammelt Maßnahmen und offene Punkte aus Ports und Hinweisen."""
+    """Sammelt Maßnahmen und offene Punkte aus dem gemeinsamen ViewModel."""
     massnahmen: list[str] = []
     for ergebnis in ergebnisse:
-        for port in ergebnis.ports:
-            if not port.offen:
-                massnahmen.append(
-                    f"{STATUS_WARNUNG}: {ergebnis.server} - Port {port.port} ({port.bezeichnung}) prüfen/freischalten"
-                )
-        for hinweis in ergebnis.hinweise:
-            massnahmen.append(f"{STATUS_WARNUNG}: {ergebnis.server} - {hinweis}")
+        karte = baue_server_detailkarte(ergebnis)
+        massnahmen.extend(f"{STATUS_WARNUNG}: {karte.server} - {eintrag}" for eintrag in karte.empfehlungen)
+        massnahmen.extend(f"{STATUS_WARNUNG}: {karte.server} - {hinweis}" for hinweis in karte.freitext_hinweise)
 
     if not massnahmen:
         return [f"- {STATUS_ERFOLG}: Keine offenen Punkte erkannt."]
@@ -120,19 +117,18 @@ def _baue_massnahmen(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
 
 
 def _render_detailblock(ergebnis: AnalyseErgebnis) -> list[str]:
-    """Erzeugt den technischen Detailblock je Server für den Vollbericht."""
+    """Erzeugt den technischen Detailblock je Server über das gemeinsame ViewModel."""
+    karte: ServerDetailkarte = baue_server_detailkarte(ergebnis)
     os_details = ergebnis.betriebssystem_details
     hw_details = ergebnis.hardware_details
     zeilen = [
-        f"## Server: {ergebnis.server}",
-        f"- Zeitpunkt: {ergebnis.zeitpunkt.isoformat(timespec='seconds')}",
+        f"## Server: {karte.server}",
+        f"- Zeitpunkt: {karte.zeitpunkt.isoformat(timespec='seconds')}",
         f"- Lauf-ID: {ergebnis.lauf_id or 'nicht gesetzt'}",
-        f"- Rollen: {', '.join(ergebnis.rollen) if ergebnis.rollen else 'nicht gesetzt'}",
-        f"- Rollenquelle: {ergebnis.rollenquelle or 'unbekannt'}",
-        f"- Auto-Rollenvorschlag: {', '.join(ergebnis.auto_rollen) if ergebnis.auto_rollen else 'nicht vorhanden'}",
-        f"- Manuell überschrieben: {'ja' if ergebnis.manuell_ueberschrieben else 'nein'}",
-        f"- Betriebssystem: {ergebnis.betriebssystem or 'unbekannt'}",
-        f"- OS-Version: {ergebnis.os_version or 'unbekannt'}",
+        f"- Rollen: {', '.join(karte.rollen) if karte.rollen else 'nicht gesetzt'}",
+        f"- Rollenquelle: {karte.rollenquelle or 'unbekannt'}",
+        f"- Betriebssystem: {karte.betriebssystem or 'unbekannt'}",
+        f"- OS-Version: {karte.os_version or 'unbekannt'}",
         f"- CPU (logische Kerne): {ergebnis.cpu_logische_kerne if ergebnis.cpu_logische_kerne is not None else 'unbekannt'}",
         f"- CPU-Modell: {ergebnis.cpu_modell or 'unbekannt'}",
         f"- Sage-Version: {ergebnis.sage_version or 'nicht erkannt'}",
@@ -146,58 +142,30 @@ def _render_detailblock(ergebnis: AnalyseErgebnis) -> list[str]:
         "",
         "### Hardware-Details",
         f"- CPU: {hw_details.cpu_modell or 'unbekannt'}",
-        (
-            "- Logische Kerne: "
-            + (str(hw_details.cpu_logische_kerne) if hw_details.cpu_logische_kerne is not None else "unbekannt")
-        ),
-        (
-            "- Arbeitsspeicher (GB): "
-            + (str(hw_details.arbeitsspeicher_gb) if hw_details.arbeitsspeicher_gb is not None else "unbekannt")
-        ),
+        "- Logische Kerne: " + (str(hw_details.cpu_logische_kerne) if hw_details.cpu_logische_kerne is not None else "unbekannt"),
+        "- Arbeitsspeicher (GB): " + (str(hw_details.arbeitsspeicher_gb) if hw_details.arbeitsspeicher_gb is not None else "unbekannt"),
         "",
         "### Rollenprüfung",
-        (
-            "- SQL: "
-            + ("erkannt" if ergebnis.rollen_details.sql.erkannt else "nicht erkannt")
-            + f" | Instanzen: {', '.join(ergebnis.rollen_details.sql.instanzen) or 'keine'}"
-            + f" | Dienste: {', '.join(ergebnis.rollen_details.sql.dienste) or 'keine'}"
-        ),
-        (
-            "- APP: "
-            + ("erkannt" if ergebnis.rollen_details.app.erkannt else "nicht erkannt")
-            + f" | Sage-Pfade: {', '.join(ergebnis.rollen_details.app.sage_pfade) or 'keine'}"
-            + f" | Sage-Versionen: {', '.join(ergebnis.rollen_details.app.sage_versionen) or 'keine'}"
-        ),
-        (
-            "- CTX: "
-            + ("erkannt" if ergebnis.rollen_details.ctx.erkannt else "nicht erkannt")
-            + f" | Terminaldienste: {', '.join(ergebnis.rollen_details.ctx.terminaldienste) or 'keine'}"
-            + f" | Session-Indikatoren: {', '.join(ergebnis.rollen_details.ctx.session_indikatoren) or 'keine'}"
-        ),
-        "",
-        "### Portprüfung",
     ]
+    for check in karte.rollen_checks:
+        zeilen.append(f"- {check.rolle}: {'erkannt' if check.erkannt else 'nicht erkannt'} | {' | '.join(check.details)}")
 
-    for port in ergebnis.ports:
-        status = f"{STATUS_ERFOLG}: offen" if port.offen else f"{STATUS_WARNUNG}: blockiert/unerreichbar"
-        zeilen.append(f"- {port.port} ({port.bezeichnung}): {status}")
+    zeilen.extend(["", "### Portprüfung"])
+    for eintrag in karte.ports_und_dienste:
+        if eintrag.typ != "Port":
+            continue
+        status = f"{STATUS_ERFOLG}: offen" if eintrag.status == "offen" else f"{STATUS_WARNUNG}: blockiert/unerreichbar"
+        zeilen.append(f"- {eintrag.name} ({eintrag.details or 'Port'}): {status}")
 
     zeilen.extend(["", "### Freigegebene/relevante Ports"])
-    offene_ports = [f"{STATUS_ERFOLG}: {port.port} ({port.bezeichnung})" for port in ergebnis.ports if port.offen]
+    offene_ports = [f"{STATUS_ERFOLG}: {eintrag.name} ({eintrag.details or 'Port'})" for eintrag in karte.ports_und_dienste if eintrag.typ == 'Port' and eintrag.status == 'offen']
     zeilen.extend(_render_bullet_liste(offene_ports))
 
     zeilen.extend(["", "### Dienste (Auszug)"])
-    zeilen.extend(_render_bullet_liste([f"{dienst.name} ({dienst.status or 'unbekannt'})" for dienst in ergebnis.dienste]))
+    zeilen.extend(_render_bullet_liste([f"{eintrag.name} ({eintrag.status})" for eintrag in karte.ports_und_dienste if eintrag.typ == 'Dienst']))
 
     zeilen.extend(["", "### Software (Auszug)"])
-    zeilen.extend(
-        _render_bullet_liste(
-            [
-                f"{eintrag.name} {eintrag.version}".strip() if eintrag.version else eintrag.name
-                for eintrag in ergebnis.software
-            ]
-        )
-    )
+    zeilen.extend(_render_bullet_liste(karte.software))
 
     zeilen.extend(["", "### Partneranwendungen"])
     zeilen.extend(_render_bullet_liste(ergebnis.partner_anwendungen))
@@ -205,9 +173,9 @@ def _render_detailblock(ergebnis: AnalyseErgebnis) -> list[str]:
     zeilen.extend(["", "### Installierte Anwendungen (Auszug)"])
     zeilen.extend(_render_bullet_liste(ergebnis.installierte_anwendungen))
 
-    if ergebnis.hinweise:
+    if karte.freitext_hinweise:
         zeilen.extend(["", "### Hinweise"])
-        zeilen.extend(f"- {STATUS_WARNUNG}: {hinweis}" for hinweis in ergebnis.hinweise)
+        zeilen.extend(f"- {STATUS_WARNUNG}: {hinweis}" for hinweis in karte.freitext_hinweise)
 
     zeilen.append("")
     return zeilen

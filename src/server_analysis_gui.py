@@ -19,9 +19,10 @@ from systemmanager_sagehelper.gui_shell import GuiShell
 from systemmanager_sagehelper.installation_state import pruefe_installationszustand, verarbeite_installations_guard
 from systemmanager_sagehelper.gui_state import GUIStateStore
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
-from systemmanager_sagehelper.models import AnalyseErgebnis, DiscoveryErgebnis, ServerZiel
+from systemmanager_sagehelper.models import AnalyseErgebnis, DiscoveryErgebnis, ServerDetailkarte, ServerZiel
 from systemmanager_sagehelper.config import STANDARD_PORTS
 from systemmanager_sagehelper.report import render_markdown
+from systemmanager_sagehelper.viewmodel import baue_server_detailkarte, baue_server_detailkarten
 from systemmanager_sagehelper.targeting import normalisiere_servernamen, rollen_aus_bool_flags
 from systemmanager_sagehelper.texte import (
     BERICHT_MANAGEMENT_ZUSAMMENFASSUNG,
@@ -514,30 +515,20 @@ def _rollen_aus_discovery_treffer(treffer: DiscoveryTabellenTreffer) -> list[str
         rollen = [beste_rolle]
     return rollen
 def _detailzeilen(ergebnis: AnalyseErgebnis) -> list[str]:
-    """Liefert strukturierte Detailzeilen je Server für die aufklappbare Ansicht."""
+    """Liefert einen kompakten Freitext-Überblick als Ergänzung zur Detailkarte."""
+    karte = baue_server_detailkarte(ergebnis)
     details: list[str] = [
-        f"Betriebssystem: {ergebnis.betriebssystem or 'unbekannt'} ({ergebnis.os_version or 'unbekannt'})",
-        f"Rollenquelle: {ergebnis.rollenquelle or 'unbekannt'}",
-        (
-            "SQL-Prüfung: "
-            + ("erkannt" if ergebnis.rollen_details.sql.erkannt else "nicht erkannt")
-            + f" | Instanzen: {', '.join(ergebnis.rollen_details.sql.instanzen) or 'keine'}"
-        ),
-        (
-            "APP-Prüfung: "
-            + ("erkannt" if ergebnis.rollen_details.app.erkannt else "nicht erkannt")
-            + f" | Sage-Versionen: {', '.join(ergebnis.rollen_details.app.sage_versionen) or 'keine'}"
-        ),
-        (
-            "CTX-Prüfung: "
-            + ("erkannt" if ergebnis.rollen_details.ctx.erkannt else "nicht erkannt")
-            + f" | Indikatoren: {', '.join(ergebnis.rollen_details.ctx.session_indikatoren) or 'keine'}"
-        ),
+        f"Betriebssystem: {karte.betriebssystem or 'unbekannt'} ({karte.os_version or 'unbekannt'})",
+        f"Rollenquelle: {karte.rollenquelle or 'unbekannt'}",
     ]
 
-    if ergebnis.hinweise:
+    for check in karte.rollen_checks:
+        status = "erkannt" if check.erkannt else "nicht erkannt"
+        details.append(f"{check.rolle}-Prüfung: {status} | {' | '.join(check.details)}")
+
+    if karte.freitext_hinweise:
         details.append("Hinweise:")
-        details.extend(f"- {hinweis}" for hinweis in ergebnis.hinweise)
+        details.extend(f"- {hinweis}" for hinweis in karte.freitext_hinweise)
     else:
         details.append("Hinweise: keine")
 
@@ -565,6 +556,9 @@ class MehrserverAnalyseGUI:
 
         self._zeilen_nach_id: dict[str, ServerTabellenZeile] = {}
         self._letzte_ergebnisse: list[AnalyseErgebnis] = []
+        # Strukturierte Detailkarten dienen als gemeinsame Datenbasis für Tabs und Reporting.
+        self._detailkarten: list[ServerDetailkarte] = []
+        self._server_auswahl_var = tk.StringVar(value="")
         # Strukturierter Snapshot der letzten Analyse für modulübergreifende Übersichten.
         self._server_summary: list[dict[str, object]] = self.modulzustand.get("server_summary", [])
         self._letzte_discovery_range = tk.StringVar(value=self.modulzustand.get("letzte_discovery_range", ""))
@@ -721,7 +715,7 @@ class MehrserverAnalyseGUI:
         self.btn_analyse.pack(side="right", padx=4)
 
     def _baue_ergebnisbereich(self, parent: ttk.Frame) -> None:
-        frame = ttk.LabelFrame(parent, text="Analyseergebnis je Server (Drilldown)", style="Section.TLabelframe")
+        frame = ttk.LabelFrame(parent, text="Analyseergebnis je Server", style="Section.TLabelframe")
         frame.pack(fill="both", expand=True)
 
         summary_frame = ttk.LabelFrame(frame, text=BERICHT_MANAGEMENT_ZUSAMMENFASSUNG, style="Section.TLabelframe")
@@ -732,16 +726,91 @@ class MehrserverAnalyseGUI:
             anchor="w", padx=8, pady=(0, 6)
         )
 
-        self.tree_ergebnisse = ttk.Treeview(frame, columns=("details",), show="tree headings", height=10)
-        self.tree_ergebnisse.heading("#0", text="Server / Kurzüberblick")
-        self.tree_ergebnisse.heading("details", text="Detailansicht")
-        self.tree_ergebnisse.column("#0", width=320)
-        self.tree_ergebnisse.column("details", width=720)
-        self.tree_ergebnisse.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
+        auswahl_frame = ttk.Frame(frame)
+        auswahl_frame.pack(fill="x", padx=8, pady=(4, 0))
+        ttk.Label(auswahl_frame, text="Serverauswahl:").pack(side="left")
+        self.cmb_serverauswahl = ttk.Combobox(
+            auswahl_frame,
+            textvariable=self._server_auswahl_var,
+            state="readonly",
+            values=[],
+            width=42,
+        )
+        self.cmb_serverauswahl.pack(side="left", padx=(8, 0))
+        self.cmb_serverauswahl.bind("<<ComboboxSelected>>", lambda _event: self._aktualisiere_tab_inhalte())
 
-        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.tree_ergebnisse.yview)
-        scrollbar.pack(side="right", fill="y", pady=8, padx=8)
-        self.tree_ergebnisse.configure(yscrollcommand=scrollbar.set)
+        self.notebook_ergebnisse = ttk.Notebook(frame)
+        self.notebook_ergebnisse.pack(fill="both", expand=True, padx=8, pady=8)
+
+        self.txt_tab_uebersicht = self._erstelle_tab_textfeld("Übersicht")
+        self.txt_tab_rollen = self._erstelle_tab_textfeld("Rollen")
+        self.txt_tab_ports_dienste = self._erstelle_tab_textfeld("Ports/Dienste")
+        self.txt_tab_software = self._erstelle_tab_textfeld("Software")
+        self.txt_tab_empfehlungen = self._erstelle_tab_textfeld("Empfehlungen")
+
+    def _erstelle_tab_textfeld(self, titel: str) -> tk.Text:
+        """Erstellt ein wiederverwendbares, schreibgeschütztes Textfeld innerhalb eines Ergebnis-Tabs."""
+        tab = ttk.Frame(self.notebook_ergebnisse)
+        self.notebook_ergebnisse.add(tab, text=titel)
+        textfeld = tk.Text(tab, wrap="word", height=10)
+        textfeld.pack(side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(tab, orient="vertical", command=textfeld.yview)
+        scrollbar.pack(side="right", fill="y")
+        textfeld.configure(yscrollcommand=scrollbar.set, state="disabled")
+        return textfeld
+
+    def _setze_textfeld_inhalt(self, textfeld: tk.Text, zeilen: list[str]) -> None:
+        """Schreibt Zeilen konsistent in ein Tab-Textfeld."""
+        textfeld.configure(state="normal")
+        textfeld.delete("1.0", "end")
+        textfeld.insert("1.0", "\n".join(zeilen) if zeilen else "Keine Daten vorhanden.")
+        textfeld.configure(state="disabled")
+
+    def _aktualisiere_tab_inhalte(self) -> None:
+        """Aktualisiert alle Ergebnis-Tabs anhand der aktuell gewählten Serverkarte."""
+        servername = self._server_auswahl_var.get().strip()
+        karte = next((eintrag for eintrag in self._detailkarten if eintrag.server == servername), None)
+        if not karte:
+            for feld in (
+                self.txt_tab_uebersicht,
+                self.txt_tab_rollen,
+                self.txt_tab_ports_dienste,
+                self.txt_tab_software,
+                self.txt_tab_empfehlungen,
+            ):
+                self._setze_textfeld_inhalt(feld, ["Noch kein Server ausgewählt."])
+            return
+
+        self._setze_textfeld_inhalt(
+            self.txt_tab_uebersicht,
+            [
+                f"Server: {karte.server}",
+                f"Zeitpunkt: {karte.zeitpunkt.isoformat(timespec='seconds')}",
+                f"Rollen: {', '.join(karte.rollen) if karte.rollen else 'nicht gesetzt'}",
+                f"Rollenquelle: {karte.rollenquelle or 'unbekannt'}",
+                f"Betriebssystem: {karte.betriebssystem or 'unbekannt'} ({karte.os_version or 'unbekannt'})",
+                "",
+                "Freitext-Hinweise:",
+                *(karte.freitext_hinweise or ["keine"]),
+            ],
+        )
+        self._setze_textfeld_inhalt(
+            self.txt_tab_rollen,
+            [
+                f"{check.rolle}: {'erkannt' if check.erkannt else 'nicht erkannt'} | {' | '.join(check.details)}"
+                for check in karte.rollen_checks
+            ],
+        )
+        self._setze_textfeld_inhalt(
+            self.txt_tab_ports_dienste,
+            [
+                f"{eintrag.typ}: {eintrag.name} | Status: {eintrag.status}"
+                + (f" | Details: {eintrag.details}" if eintrag.details else "")
+                for eintrag in karte.ports_und_dienste
+            ],
+        )
+        self._setze_textfeld_inhalt(self.txt_tab_software, karte.software or ["Keine Software erkannt."])
+        self._setze_textfeld_inhalt(self.txt_tab_empfehlungen, karte.empfehlungen or ["Keine Empfehlungen vorhanden."])
 
     def _aktualisiere_button_zustaende(self, _event: tk.Event[tk.Misc] | None = None) -> None:
         """Aktiviert oder deaktiviert Aktionen abhängig vom aktuellen GUI-Zustand."""
@@ -1002,27 +1071,15 @@ class MehrserverAnalyseGUI:
         self._aktualisiere_button_zustaende()
 
     def _zeige_ergebnisse_aufklappbar(self, ergebnisse: list[AnalyseErgebnis]) -> None:
-        for item_id in self.tree_ergebnisse.get_children(""):
-            self.tree_ergebnisse.delete(item_id)
-
+        """Aktualisiert Management-Zusammenfassung und Tab-basierte Detailkarten."""
         self.lbl_executive_summary.configure(text="\n".join(_baue_executive_summary(ergebnisse)))
+        self._detailkarten = baue_server_detailkarten(ergebnisse)
 
-        for ergebnis in ergebnisse:
-            server_knoten = self.tree_ergebnisse.insert(
-                "",
-                "end",
-                text=ergebnis.server,
-                values=(_kurzstatus(ergebnis),),
-                open=False,
-            )
-            for detail in _detailzeilen(ergebnis):
-                self.tree_ergebnisse.insert(server_knoten, "end", text="Überblick", values=(detail,))
-
-            drilldown = _drilldown_knoten(ergebnis)
-            for kategorie, eintraege in drilldown.items():
-                kategorie_knoten = self.tree_ergebnisse.insert(server_knoten, "end", text=kategorie, values=("",), open=False)
-                for eintrag in eintraege:
-                    self.tree_ergebnisse.insert(kategorie_knoten, "end", text="", values=(eintrag,))
+        servernamen = [karte.server for karte in self._detailkarten]
+        self.cmb_serverauswahl.configure(values=servernamen)
+        if servernamen:
+            self._server_auswahl_var.set(servernamen[0])
+        self._aktualisiere_tab_inhalte()
 
     def _setze_server_status(self, status: str) -> None:
         for item_id, zeile in self._zeilen_nach_id.items():
