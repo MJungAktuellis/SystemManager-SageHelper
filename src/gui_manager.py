@@ -26,7 +26,13 @@ from systemmanager_sagehelper.texte import (
     STATUS_PREFIX,
 )
 from systemmanager_sagehelper.ui_theme import LAYOUT, baue_card_baustein
-from server_analysis_gui import MehrserverAnalyseGUI, ServerTabellenZeile, _baue_server_summary, _baue_serverziele
+from server_analysis_gui import (
+    ServerAnalysePersistenzDaten,
+    ServerTabellenZeile,
+    _baue_server_summary,
+    _baue_serverziele,
+    persistiere_serveranalyse_zustand,
+)
 
 logger = konfiguriere_logger(__name__, dateiname="gui_manager.log")
 
@@ -54,7 +60,7 @@ def _formatiere_server_summary_fuer_dashboard(server_summary: list[dict[str, obj
     return " | ".join(zeilen)
 
 _ONBOARDING_VERSION = "1.0.0"
-_ONBOARDING_ABBRUCH_AKTION = "app_schliessen"
+_STANDARD_ONBOARDING_ABBRUCH_AKTION = "app_schliessen"
 
 
 class OnboardingController:
@@ -597,28 +603,48 @@ class OnboardingController:
             self._setze_status("Es gibt keine Daten zum Speichern. Bitte vorher Schritt 1 ausführen.")
             return
 
-        # Persistenzlogik der Serveranalyse-GUI wiederverwenden, um Datenmodell konsistent zu halten.
-        self._speichere_serveranalyse_zustand_ueber_gui_methode()
+        try:
+            # Persistenzlogik der Serveranalyse zentral über einen datenbasierten Service ausführen.
+            self._speichere_serveranalyse_zustand_ueber_gui_methode()
 
-        onboarding_status = self.state_store.lade_onboarding_status()
-        now_iso = datetime.now().isoformat(timespec="seconds")
-        onboarding_status.update(
-            {
-                "onboarding_abgeschlossen": True,
-                "onboarding_status": "abgeschlossen",
-                "onboarding_version": _ONBOARDING_VERSION,
-                "erststart_zeitpunkt": onboarding_status.get("erststart_zeitpunkt") or now_iso,
-                "letzter_abschluss_zeitpunkt": now_iso,
-                "abbruch_zeitpunkt": "",
-            }
-        )
+            onboarding_status = self.state_store.lade_onboarding_status()
+            now_iso = datetime.now().isoformat(timespec="seconds")
+            onboarding_status.update(
+                {
+                    "onboarding_abgeschlossen": True,
+                    "onboarding_status": "abgeschlossen",
+                    "onboarding_version": _ONBOARDING_VERSION,
+                    "erststart_zeitpunkt": onboarding_status.get("erststart_zeitpunkt") or now_iso,
+                    "letzter_abschluss_zeitpunkt": now_iso,
+                    "abbruch_zeitpunkt": "",
+                }
+            )
 
-        gesamtzustand = self.state_store.lade_gesamtzustand()
-        gesamtzustand["onboarding"] = onboarding_status
-        self.state_store.speichere_gesamtzustand(gesamtzustand)
+            gesamtzustand = self.state_store.lade_gesamtzustand()
+            gesamtzustand["onboarding"] = onboarding_status
+            self.state_store.speichere_gesamtzustand(gesamtzustand)
 
-        self.gui.modulzustand = self.state_store.lade_modulzustand("gui_manager")
-        self.gui.aktiviere_dashboardmodus_nach_onboarding()
+            self.gui.modulzustand = self.state_store.lade_modulzustand("gui_manager")
+            self.gui.aktiviere_dashboardmodus_nach_onboarding()
+        except Exception as exc:  # noqa: BLE001 - Benutzer bekommt einen klaren Dialog statt stiller Ausnahme.
+            logger.exception("Onboarding-Schritt 'Speichern/Bestätigen' fehlgeschlagen")
+            self._markiere_schritt(
+                "speichern",
+                "fehler",
+                "Speichern fehlgeschlagen.",
+                "Eingaben prüfen und Schritt erneut starten.",
+            )
+            self._setze_status(f"Speichern fehlgeschlagen: {exc}")
+            messagebox.showerror(
+                "Speichern fehlgeschlagen",
+                (
+                    "Die Daten konnten nicht vollständig gespeichert werden.\n\n"
+                    f"Technischer Hinweis: {exc}\n\n"
+                    "Bitte prüfen Sie Eingaben/Dateirechte und versuchen Sie es erneut."
+                ),
+                parent=self._window,
+            )
+            return
 
         self._markiere_schritt(
             "speichern",
@@ -636,33 +662,46 @@ class OnboardingController:
             self._window.destroy()
 
     def _speichere_serveranalyse_zustand_ueber_gui_methode(self) -> None:
-        """Nutzt `MehrserverAnalyseGUI.speichern()`, ohne die gesamte GUI zu öffnen.
+        """Persistiert Onboarding-Ergebnisse über eine UI-unabhängige Service-Funktion."""
+        modulzustand_serveranalyse = self.state_store.lade_modulzustand("server_analysis")
+        discovery_eingabe = modulzustand_serveranalyse.get("letzte_discovery_eingabe", {})
 
-        Damit bleibt die bestehende Persistenzstruktur zentral an einer Stelle,
-        und der Onboarding-Controller muss diese Logik nicht duplizieren.
-        """
-
-        adapter = object.__new__(MehrserverAnalyseGUI)
-        adapter.state_store = self.state_store
-        adapter.modulzustand = self.state_store.lade_modulzustand("server_analysis")
-        adapter._zeilen_nach_id = {f"row-{index}": zeile for index, zeile in enumerate(self.server_zeilen, start=1)}
-        adapter._letzte_ergebnisse = self.analyse_ergebnisse
-        adapter._server_summary = _baue_server_summary(self.analyse_ergebnisse)
-        adapter._letzte_discovery_range = tk.StringVar(value=self.gui.modulzustand.get("letzte_discovery_range", ""))
-        adapter._ausgabe_pfad = tk.StringVar(value=(self._analyse_pfad_var.get().strip() if self._analyse_pfad_var else "docs/serverbericht.md"))
-        adapter._letzter_export_pfad = adapter.modulzustand.get("letzter_exportpfad", "")
-        adapter._letzter_exportzeitpunkt = adapter.modulzustand.get("letzter_exportzeitpunkt", "")
-        adapter._letzte_export_lauf_id = adapter.modulzustand.get("letzte_export_lauf_id", "")
-        adapter.shell = type(
-            "OnboardingShell",
-            (),
-            {
-                "setze_status": lambda _self, _status: None,
-                "logge_meldung": lambda _self, _meldung: None,
+        persistenzdaten = ServerAnalysePersistenzDaten(
+            serverlisten=[zeile.__dict__.copy() for zeile in self.server_zeilen],
+            rollen={zeile.servername: zeile.rollen() for zeile in self.server_zeilen},
+            letzte_discovery_range=self.gui.modulzustand.get("letzte_discovery_range", "").strip(),
+            letzter_discovery_modus=str(modulzustand_serveranalyse.get("letzter_discovery_modus", "range") or "range").strip(),
+            letzte_discovery_namen=str(modulzustand_serveranalyse.get("letzte_discovery_namen", "") or "").strip(),
+            letzte_discovery_eingabe={
+                "basis": str(discovery_eingabe.get("basis", "") or "").strip(),
+                "start": str(discovery_eingabe.get("start", "") or "").strip(),
+                "ende": str(discovery_eingabe.get("ende", "") or "").strip(),
             },
-        )()
-
-        MehrserverAnalyseGUI.speichern(adapter)
+            ausgabepfade={
+                "analyse_report": (self._analyse_pfad_var.get().strip() if self._analyse_pfad_var else "docs/serverbericht.md")
+                or "docs/serverbericht.md",
+                "log_report": "logs/log_dokumentation.md",
+            },
+            server_summary=_baue_server_summary(self.analyse_ergebnisse),
+            letzte_kerninfos=[
+                f"Analyse-Status: {len(self.server_zeilen)} Server zuletzt geprüft.",
+                "Server-Status: " + _formatiere_server_summary_fuer_dashboard(_baue_server_summary(self.analyse_ergebnisse), limit=5),
+                f"Netzwerkerkennungs-Bereich: {self.gui.modulzustand.get('letzte_discovery_range', '').strip() or 'nicht gesetzt'}",
+            ],
+            bericht_verweise=[
+                (self._analyse_pfad_var.get().strip() if self._analyse_pfad_var else "docs/serverbericht.md") or "docs/serverbericht.md",
+                "logs/log_dokumentation.md",
+            ],
+            letzter_exportpfad=str(modulzustand_serveranalyse.get("letzter_exportpfad", "") or ""),
+            letzter_exportzeitpunkt=str(modulzustand_serveranalyse.get("letzter_exportzeitpunkt", "") or ""),
+            letzte_export_lauf_id=str(modulzustand_serveranalyse.get("letzte_export_lauf_id", "") or ""),
+        )
+        persistiere_serveranalyse_zustand(
+            state_store=self.state_store,
+            modulzustand=modulzustand_serveranalyse,
+            daten=persistenzdaten,
+            shell=None,
+        )
 
         # Synchronisiere die wichtigsten Übersichtsdaten zusätzlich mit dem Launcher-Modul.
         self.gui.modulzustand.setdefault("letzte_kerninfos", [])
@@ -671,12 +710,25 @@ class OnboardingController:
             f"Server in Ersterfassung: {len(self.server_zeilen)}",
         ]
         self.gui.modulzustand.setdefault("bericht_verweise", [])
-        analyse_report = adapter._ausgabe_pfad.get().strip() or "docs/serverbericht.md"
+        analyse_report = persistenzdaten.ausgabepfade["analyse_report"]
         self.gui.modulzustand["bericht_verweise"] = [analyse_report]
         self.state_store.speichere_modulzustand("gui_manager", self.gui.modulzustand)
 
     def _abbrechen(self) -> None:
-        """Bricht das Onboarding kontrolliert ab und erzwingt den konfigurierten Modus."""
+        """Bricht das Onboarding kontrolliert mit expliziter Benutzerbestätigung ab."""
+        if not messagebox.askyesno(
+            "Onboarding wirklich abbrechen?",
+            (
+                "Möchten Sie den Erststart wirklich abbrechen?\n\n"
+                "Ja = Abbrechen und Anwendung schließen\n"
+                "Nein = Im Assistenten bleiben"
+            ),
+            parent=self._window,
+            icon="warning",
+        ):
+            self._setze_status("Onboarding wird fortgesetzt.")
+            return
+
         abbruch_zeitpunkt = datetime.now().isoformat(timespec="seconds")
         self.state_store.speichere_onboarding_status(
             {
@@ -685,11 +737,13 @@ class OnboardingController:
                 "abbruch_zeitpunkt": abbruch_zeitpunkt,
             }
         )
-        self._setze_status("Erststart abgebrochen: Anwendung wird gemäß Richtlinie geschlossen.")
+
+        abbruch_aktion = self.gui.onboarding_abbruch_aktion
+        self._setze_status(f"Erststart abgebrochen: Aktion '{abbruch_aktion}' wird ausgeführt.")
         if self._window:
             self._window.destroy()
 
-        if _ONBOARDING_ABBRUCH_AKTION == "app_schliessen":
+        if abbruch_aktion == "app_schliessen":
             self.gui.master.after(50, self.gui.master.quit)
 
     def _setze_status(self, text: str) -> None:
@@ -897,6 +951,12 @@ class SystemManagerGUI:
 
         self.state_store = GUIStateStore()
         self.modulzustand = self.state_store.lade_modulzustand("gui_manager")
+        # Deployment-spezifische Abbruchrichtlinie: modulzustand > onboarding-status > Standard.
+        self.onboarding_abbruch_aktion = str(
+            self.modulzustand.get("onboarding_abbruch_aktion")
+            or self.state_store.lade_onboarding_status().get("onboarding_abbruch_aktion")
+            or _STANDARD_ONBOARDING_ABBRUCH_AKTION
+        ).strip() or _STANDARD_ONBOARDING_ABBRUCH_AKTION
         self.onboarding_status = self._initialisiere_onboarding_status()
         self._onboarding_aktiv = not self.onboarding_status.get("onboarding_abgeschlossen", False)
 
@@ -940,7 +1000,18 @@ class SystemManagerGUI:
             onboarding_status["erststart_zeitpunkt"] = datetime.now().isoformat(timespec="seconds")
             onboarding_status["onboarding_version"] = onboarding_status.get("onboarding_version") or _ONBOARDING_VERSION
             onboarding_status.setdefault("onboarding_status", "ausstehend")
+            onboarding_status["onboarding_abbruch_aktion"] = getattr(
+                self,
+                "onboarding_abbruch_aktion",
+                _STANDARD_ONBOARDING_ABBRUCH_AKTION,
+            )
             self.state_store.speichere_onboarding_status(onboarding_status)
+            return onboarding_status
+
+        onboarding_status.setdefault(
+            "onboarding_abbruch_aktion",
+            getattr(self, "onboarding_abbruch_aktion", _STANDARD_ONBOARDING_ABBRUCH_AKTION),
+        )
         return onboarding_status
 
     def _pruefe_onboarding_guard(self) -> None:

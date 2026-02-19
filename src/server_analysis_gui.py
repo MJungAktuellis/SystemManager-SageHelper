@@ -101,7 +101,7 @@ def _rollenquelle_fuer_zeile(zeile: ServerTabellenZeile) -> str:
     if zeile.quelle.lower() in {"discovery", "netzwerkerkennung", "automatisch erkannt"} and not zeile.manuell_ueberschrieben:
         return "automatisch erkannt"
     if zeile.manuell_ueberschrieben:
-        return "manuell angepasst"
+        return "nachträglich geändert"
     return "manuell gesetzt"
 
 
@@ -237,6 +237,47 @@ class DiscoveryTabellenTreffer:
     rollenhinweise: tuple[str, ...] = ()
     namensquelle: str | None = None
     erklaerung: str = ""
+
+
+@dataclass
+class ServerAnalysePersistenzDaten:
+    """Serialisierbares Persistenz-DTO für die Serveranalyse ohne direkte GUI-Abhängigkeit."""
+
+    serverlisten: list[dict[str, object]]
+    rollen: dict[str, list[str]]
+    letzte_discovery_range: str
+    letzter_discovery_modus: str
+    letzte_discovery_namen: str
+    letzte_discovery_eingabe: dict[str, str]
+    ausgabepfade: dict[str, str]
+    server_summary: list[dict[str, object]]
+    letzte_kerninfos: list[str]
+    bericht_verweise: list[str]
+    letzter_exportpfad: str
+    letzter_exportzeitpunkt: str
+    letzte_export_lauf_id: str
+
+
+def persistiere_serveranalyse_zustand(
+    *,
+    state_store: GUIStateStore,
+    modulzustand: dict[str, object],
+    daten: ServerAnalysePersistenzDaten,
+    shell: GuiShell | None = None,
+) -> dict[str, object]:
+    """Schreibt den konsolidierten Persistenzzustand für das Modul `server_analysis`.
+
+    Die Funktion arbeitet ausschließlich mit einem Datenobjekt und kann deshalb
+    aus der GUI sowie aus Wizard-/Onboarding-Kontexten genutzt werden.
+    """
+    modulzustand.update(asdict(daten))
+    state_store.speichere_modulzustand("server_analysis", modulzustand)
+
+    if shell is not None:
+        shell.setze_status("Zustand gespeichert")
+        shell.logge_meldung(f"Persistiert nach: {state_store.dateipfad}")
+
+    return modulzustand
 
 
 def _bewerte_vertrauen_als_sterne(vertrauensgrad: float) -> str:
@@ -1173,40 +1214,63 @@ class MehrserverAnalyseGUI:
             f"Netzwerkerkennungs-Bereich: {self._letzte_discovery_range.get() or 'nicht gesetzt'}",
         ]
 
-    def speichern(self) -> None:
-        """Persistiert Serverlisten, Rollen, Discovery-Range und Ausgabepfade."""
-        self._letzte_discovery_namen.set(self.text_discovery_namen.get("1.0", "end").strip())
+    def _baue_persistenzdaten(
+        self,
+        *,
+        letzte_discovery_namen: str | None = None,
+        discovery_range: str | None = None,
+        discovery_modus: str | None = None,
+        discovery_eingabe: dict[str, str] | None = None,
+        ausgabe_pfad: str | None = None,
+    ) -> ServerAnalysePersistenzDaten:
+        """Erzeugt ein reines Persistenzobjekt aus GUI-Zustand und optionalen Overrides."""
+        if letzte_discovery_namen is None and hasattr(self, "text_discovery_namen"):
+            letzte_discovery_namen = self.text_discovery_namen.get("1.0", "end").strip()
+        letzte_discovery_namen = (letzte_discovery_namen or "").strip()
+        self._letzte_discovery_namen.set(letzte_discovery_namen)
+
         serverlisten = [asdict(zeile) for zeile in self._zeilen_nach_id.values()]
         rollen = {zeile.servername: zeile.rollen() for zeile in self._zeilen_nach_id.values()}
-        ausgabepfade = {
-            "analyse_report": self._ausgabe_pfad.get().strip() or "docs/serverbericht.md",
-            "log_report": "logs/log_dokumentation.md",
-        }
 
-        self.modulzustand.update(
-            {
-                "serverlisten": serverlisten,
-                "rollen": rollen,
-                "letzte_discovery_range": self._letzte_discovery_range.get().strip(),
-                "letzter_discovery_modus": self._letzter_discovery_modus.get().strip() or "range",
-                "letzte_discovery_namen": self._letzte_discovery_namen.get().strip(),
-                "letzte_discovery_eingabe": {
-                    "basis": self._discovery_basis_var.get().strip(),
-                    "start": self._discovery_start_var.get().strip(),
-                    "ende": self._discovery_ende_var.get().strip(),
-                },
-                "ausgabepfade": ausgabepfade,
-                "server_summary": self._server_summary,
-                "letzte_kerninfos": self._baue_kerninfos(),
-                "bericht_verweise": [ausgabepfade["analyse_report"], ausgabepfade["log_report"]],
-                "letzter_exportpfad": self._letzter_export_pfad,
-                "letzter_exportzeitpunkt": self._letzter_exportzeitpunkt,
-                "letzte_export_lauf_id": self._letzte_export_lauf_id,
-            }
+        aufgeloeste_range = (discovery_range or self._letzte_discovery_range.get() or "").strip()
+        aufgeloester_modus = (discovery_modus or self._letzter_discovery_modus.get() or "range").strip() or "range"
+        aufgeloeste_eingabe = {
+            "basis": (discovery_eingabe or {}).get("basis", self._discovery_basis_var.get()).strip(),
+            "start": (discovery_eingabe or {}).get("start", self._discovery_start_var.get()).strip(),
+            "ende": (discovery_eingabe or {}).get("ende", self._discovery_ende_var.get()).strip(),
+        }
+        analyse_report = (ausgabe_pfad or self._ausgabe_pfad.get() or "docs/serverbericht.md").strip() or "docs/serverbericht.md"
+        ausgabepfade = {"analyse_report": analyse_report, "log_report": "logs/log_dokumentation.md"}
+
+        return ServerAnalysePersistenzDaten(
+            serverlisten=serverlisten,
+            rollen=rollen,
+            letzte_discovery_range=aufgeloeste_range,
+            letzter_discovery_modus=aufgeloester_modus,
+            letzte_discovery_namen=letzte_discovery_namen,
+            letzte_discovery_eingabe=aufgeloeste_eingabe,
+            ausgabepfade=ausgabepfade,
+            server_summary=self._server_summary,
+            letzte_kerninfos=self._baue_kerninfos(),
+            bericht_verweise=[ausgabepfade["analyse_report"], ausgabepfade["log_report"]],
+            letzter_exportpfad=self._letzter_export_pfad,
+            letzter_exportzeitpunkt=self._letzter_exportzeitpunkt,
+            letzte_export_lauf_id=self._letzte_export_lauf_id,
         )
-        self.state_store.speichere_modulzustand("server_analysis", self.modulzustand)
-        self.shell.setze_status("Zustand gespeichert")
-        self.shell.logge_meldung(f"Persistiert nach: {self.state_store.dateipfad}")
+
+    def speichern(self, daten: ServerAnalysePersistenzDaten | None = None) -> None:
+        """Persistiert Serverlisten, Rollen, Discovery-Range und Ausgabepfade.
+
+        Optional kann ein vorbereitetes Datenobjekt übergeben werden, damit die
+        Persistenz auch in Nicht-GUI-Kontexten robust genutzt werden kann.
+        """
+        persistenzdaten = daten or self._baue_persistenzdaten()
+        self.modulzustand = persistiere_serveranalyse_zustand(
+            state_store=self.state_store,
+            modulzustand=self.modulzustand,
+            daten=persistenzdaten,
+            shell=self.shell,
+        )
 
     def _zurueck(self) -> None:
         """Navigationsaktion: in dieser Ansicht entspricht Zurück dem Schließen."""
