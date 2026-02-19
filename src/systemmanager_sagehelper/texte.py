@@ -71,5 +71,18 @@ SHELL_STATUS_BEREIT = "Bereit"
 INSTALLER_ABSCHLUSS_WAS_GETAN = "Was wurde getan"
 INSTALLER_ABSCHLUSS_NAECHSTE_SCHRITTE = "Was ist als Nächstes zu tun?"
 
+
+# Pfad-/Optionsschritt im Installer-Wizard.
+INSTALLER_OPTIONEN_UEBERNEHMEN_BUTTON = "Auswahl übernehmen (nur für diesen Lauf)"
+INSTALLER_OPTIONEN_UEBERNOMMEN_STATUS = "Optionen wurden übernommen."
+INSTALLER_OPTIONEN_UEBERNOMMEN_LOG = "Auswahl wurde für diesen Lauf übernommen."
+INSTALLER_OPTIONEN_HINWEIS_TEXT = (
+    "Hinweis: Es wird keine Datei geschrieben. Die Auswahl gilt nur für den aktuellen "
+    "Installationslauf. Die eigentliche Installation beginnt erst mit \"Installation starten\"."
+)
+INSTALLER_OPTIONEN_INFO_ICON_TOOLTIP = (
+    "Übernimmt die aktuelle Auswahl nur temporär für den laufenden Wizard."
+)
+
 # Rückwärtskompatibler Alias für bestehende GUI-Importe.
 BERICHT_MANAGEMENT_ZUSAMMENFASSUNG = BERICHT_ZUSAMMENFASSUNG
