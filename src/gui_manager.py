@@ -25,7 +25,7 @@ from systemmanager_sagehelper.update_strategy import ermittle_update_kontext
 from systemmanager_sagehelper.texte import (
     STATUS_PREFIX,
 )
-from systemmanager_sagehelper.ui_theme import LAYOUT
+from systemmanager_sagehelper.ui_theme import LAYOUT, baue_card_baustein
 from server_analysis_gui import MehrserverAnalyseGUI, ServerTabellenZeile, _baue_server_summary, _baue_serverziele
 
 logger = konfiguriere_logger(__name__, dateiname="gui_manager.log")
@@ -782,7 +782,7 @@ class SystemManagerGUI:
         untertitel = (
             "Geführter Erststart: Bitte den Assistenten vollständig abschließen"
             if self._onboarding_aktiv
-            else "Dashboard für Analyse, Ordnermanagement und Dokumentation"
+            else "Zentrale Modulübersicht für Analyse, Ordnerverwaltung und Dokumentation"
         )
         self.shell = GuiShell(
             master,
@@ -799,6 +799,7 @@ class SystemManagerGUI:
         self._karten_titel: dict[str, tk.StringVar] = {}
         self._karten_beschreibung: dict[str, tk.StringVar] = {}
         self._karten_experten_buttons: dict[str, ttk.Button] = {}
+        self._karten_technische_details: dict[str, tk.StringVar] = {}
         self._dashboard_gebaut = False
         self._onboarding_controller = OnboardingController(self)
 
@@ -911,47 +912,40 @@ class SystemManagerGUI:
         status_key: str,
         button_text: str,
     ) -> None:
-        """Erzeugt eine modulare Card mit Statusindikator und Primäraktion."""
-        card = ttk.Frame(parent, style="Card.TFrame", padding=LAYOUT.padding_block)
-        card.grid(row=zeile, column=spalte, sticky="nsew", padx=6, pady=6)
-
+        """Erzeugt eine modulare Card mit wiederverwendetem Card-Baustein."""
         titel_var = tk.StringVar(value=titel)
         beschreibung_var = tk.StringVar(value=beschreibung)
+        status_var = tk.StringVar(value=f"{STATUS_PREFIX} unbekannt")
+        technische_details_var = tk.StringVar(value="Technische Details: Noch keine Daten vorhanden.")
+
         self._karten_titel[status_key] = titel_var
         self._karten_beschreibung[status_key] = beschreibung_var
-
-        ttk.Label(card, textvariable=titel_var, style="Card.TLabel", font=("Segoe UI", 12, "bold")).pack(anchor="w")
-        ttk.Label(card, textvariable=beschreibung_var, style="Card.TLabel", wraplength=LAYOUT.card_breite).pack(
-            anchor="w", pady=(6, 10)
-        )
-
-        status_var = tk.StringVar(value=f"{STATUS_PREFIX} unbekannt")
         self._karten_status[status_key] = status_var
-        ttk.Label(card, textvariable=status_var, style="Card.TLabel").pack(anchor="w", pady=(0, 10))
+        self._karten_technische_details[status_key] = technische_details_var
 
-        # Der Button wird je nach Installationszustand dynamisch umbenannt bzw. deaktiviert.
-        primar_button = ttk.Button(
-            card,
-            text=button_text,
-            style="Primary.TButton",
-            width=LAYOUT.button_breite,
-            command=command,
-        )
-        primar_button.pack(anchor="w")
-        self._karten_buttons[status_key] = primar_button
-
+        sekundaer_text = None
+        sekundaer_aktion = None
         if status_key == "installation":
-            # Expertenpfad bleibt bewusst separat, damit reguläre Nutzer nicht versehentlich
-            # eine Vollinstallation auslösen. Die Primäraktion wird dynamisch gewartet.
-            experten_button = ttk.Button(
-                card,
-                text="Vollinstallation (Expertenmodus)",
-                style="Secondary.TButton",
-                width=LAYOUT.button_breite,
-                command=lambda: self.installieren(expertenmodus=True),
-            )
-            experten_button.pack(anchor="w", pady=(6, 0))
-            self._karten_experten_buttons[status_key] = experten_button
+            sekundaer_text = "Vollinstallation (Expertenmodus)"
+            sekundaer_aktion = lambda: self.installieren(expertenmodus=True)
+
+        card_elemente = baue_card_baustein(
+            parent,
+            titel=titel_var,
+            beschreibung=beschreibung_var,
+            status=status_var,
+            primaer_text=button_text,
+            primaer_aktion=command,
+            sekundaer_text=sekundaer_text,
+            sekundaer_aktion=sekundaer_aktion,
+            technische_details=technische_details_var,
+        )
+        card = card_elemente["card"]
+        card.grid(row=zeile, column=spalte, sticky="nsew", padx=6, pady=6)
+
+        self._karten_buttons[status_key] = card_elemente["primaer_button"]  # type: ignore[assignment]
+        if status_key == "installation" and card_elemente["sekundaer_button"] is not None:
+            self._karten_experten_buttons[status_key] = card_elemente["sekundaer_button"]  # type: ignore[assignment]
 
     def _baue_uebersichtsseite(self) -> None:
         """Stellt je Modul Kerninfos und Berichtverweise aus der Persistenz dar."""
@@ -1038,8 +1032,20 @@ class SystemManagerGUI:
         if module.get("doc_generator", {}).get("letzte_kerninfos"):
             status_texte["dokumentation"] = "Dokumentation vorhanden"
 
+        technische_details = {
+            "installation": "Marker-/Integritätsprüfung und optionaler Update-Kontext aus Installerzustand.",
+            "serveranalyse": "Snapshot aus server_summary inkl. Rollenquelle und Erreichbarkeit.",
+            "ordnerverwaltung": "Laufhistorie und letztes Protokoll aus Modulzustand folder_manager.",
+            "dokumentation": "Berichtverweise und Kerninfos aus dem Dokumentationsmodul.",
+        }
+
+        karten_technische_details = getattr(self, "_karten_technische_details", {})
         for key, var in self._karten_status.items():
             var.set(f"{STATUS_PREFIX} {status_texte.get(key, 'unbekannt')}")
+            if key in karten_technische_details:
+                karten_technische_details[key].set(
+                    f"Technische Details: {technische_details.get(key, 'Keine Zusatzinformationen verfügbar.')}"
+                )
 
         self._aktualisiere_installationskarte(installationspruefung.installiert, update_kontext.update_erforderlich)
 

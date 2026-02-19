@@ -61,11 +61,11 @@ class FolderWizardGUI:
         haupt = ttk.Frame(self.window, padding=16)
         haupt.pack(fill="both", expand=True)
 
-        ttk.Label(haupt, text="Onboarding: Ordner/Freigaben", style="Headline.TLabel").pack(anchor="w")
+        ttk.Label(haupt, text="Ordner- und Freigabeverwaltung", style="Headline.TLabel").pack(anchor="w")
         ttk.Label(
             haupt,
             text=(
-                "Schritte: Basispfad wählen → Soll/Ist-Diff prüfen → Änderungen bestätigen → Abschluss auswerten."
+                "Ablauf: Basispfad wählen → Soll/Ist-Diff prüfen → Änderungen bestätigen → Abschluss auswerten."
             ),
         ).pack(anchor="w", pady=(4, 12))
 
