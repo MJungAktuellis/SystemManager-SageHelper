@@ -340,6 +340,20 @@ Beispielauszug:
 Für technische Tiefenanalysen kann `erstelle_dokumentation(..., berichtsmodus="voll")` verwendet werden.
 
 
+
+## UI-Screenshot-Referenzworkflow (für künftige Änderungen)
+
+Bei sichtbaren UI-Anpassungen (Layout, Farben, Buttons, Cards, Statusanzeigen) sollte eine visuelle Referenz mitgeführt werden:
+
+1. Anwendung mit den geänderten Modulen starten (lokal oder im Testcontainer).
+2. Vorher/Nachher-Screenshot mit identischer Fenstergröße erfassen.
+3. Artefakte mit sprechenden Namen speichern, z. B. `artifacts/gui_dashboard_after.png`.
+4. Im PR oder Änderungsprotokoll als Markdown verlinken:  
+   `![Dashboard nach Redesign](artifacts/gui_dashboard_after.png)`
+5. Kurz dokumentieren, welche Nutzeraktion im Screenshot sichtbar ist (z. B. „Primäraktion Installation“, „Technikdetails eingeklappt“).
+
+Hinweis: Technische Details nach Möglichkeit nur in optionalen UI-Bereichen zeigen, damit Screenshots den Endnutzerfluss fokussieren.
+
 ## Logging, Berichte und Lauf-ID-Korrelation
 
 - **Zentrales Analyse-Log:** `logs/server_analysis.log`

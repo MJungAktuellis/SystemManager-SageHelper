@@ -557,7 +557,7 @@ class MehrserverAnalyseGUI:
         self.shell = GuiShell(
             master,
             titel="SystemManager-SageHelper – Mehrserveranalyse",
-            untertitel="Erfassung, Netzwerkerkennung, Rollenpflege und Analyse auf mehreren Zielservern",
+            untertitel="Zielserver erfassen, Netzwerkerkennung ausführen und Analyseergebnisse auswerten",
             on_save=self.speichern,
             on_back=self._zurueck,
             on_exit=self.master.destroy,

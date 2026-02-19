@@ -162,8 +162,8 @@ class InstallerWizardGUI:
     @property
     def _wizard_untertitel(self) -> str:
         if self._ist_wartungsmodus:
-            return "Integrität prüfen, Komponentenstatus bewerten und gezielt reparieren"
-        return "Schrittweise Installation für SystemManager-SageHelper"
+            return "Geführte Wartung: Integrität prüfen und Komponenten gezielt reparieren"
+        return "Geführte Installation: Komponenten prüfen, ausführen und Abschluss dokumentieren"
 
     @property
     def _vorgang_nomen(self) -> str:
