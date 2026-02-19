@@ -130,6 +130,8 @@ class DiscoveryErgebnis:
     vertrauensgrad: float = 0.0
     strategien: list[str] = field(default_factory=list)
     fehlerursachen: list[str] = field(default_factory=list)
+    rollenhinweise: list[str] = field(default_factory=list)
+    namensquelle: str | None = None
 
 
 @dataclass

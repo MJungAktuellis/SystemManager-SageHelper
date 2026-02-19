@@ -42,6 +42,8 @@ _PARTNER_KEYWORDS = ["dms", "crm", "edi", "shop", "bi", "isv"]
 _MANAGEMENT_STUDIO_KEYWORDS = ["sql server management studio", "ssms"]
 _SQL_SERVICE_KEYWORDS = ("mssql", "sql server", "sqlserveragent")
 _CTX_SERVICE_KEYWORDS = ("termservice", "sessionenv", "umrdpservice", "rdp")
+_SQL_DISCOVERY_PORTS = {1433, 1434, 4022}
+_SQL_DISCOVERY_SERVICE_HINTS = ("mssql", "sql", "sqlbrowser", "sqlserveragent")
 
 # Präfixe zur strukturierten Fehlerklassifikation für Remote-Ziele.
 _HINWEIS_DNS = "[DNS]"
@@ -59,7 +61,7 @@ class DiscoveryKonfiguration:
     ping_timeout: float = 0.8
     tcp_timeout: float = 0.5
     max_worker: int = 48
-    tcp_ports: tuple[int, ...] = (135, 139, 445, 1433, 3389)
+    tcp_ports: tuple[int, ...] = (135, 139, 445, 1433, 1434, 3389, 4022)
     nutze_reverse_dns: bool = True
     nutze_ad_ldap: bool = False
 
@@ -760,6 +762,15 @@ def _ping_host(host: str, timeout: float) -> bool:
     return result.returncode == 0
 
 
+def _resolve_forward_dns(host: str) -> str | None:
+    """Löst einen Hostnamen via Forward-DNS auf und liefert den kanonischen Namen."""
+    try:
+        kanonisch, _aliasliste, _adressen = socket.gethostbyname_ex(host)
+    except (socket.herror, socket.gaierror, TimeoutError):
+        return None
+    return kanonisch.strip() or None
+
+
 def _resolve_reverse_dns(ip_adresse: str) -> str | None:
     """Löst optionalen Reverse-DNS-Namen auf und kapselt Fehler."""
     try:
@@ -841,6 +852,36 @@ def _ad_ldap_hinweis() -> str | None:
     return None
 
 
+def _sql_rollenhinweise_aus_discovery(
+    erkannte_dienste: list[str],
+    remote_daten: RemoteSystemdaten | None,
+) -> list[str]:
+    """Leitet SQL-Indikatoren für Discovery aus Ports, Diensten und Remote-Inventar ab."""
+    hinweise: list[str] = []
+    erkannte_ports = {int(eintrag) for eintrag in erkannte_dienste if eintrag.isdigit()}
+    if 1433 in erkannte_ports:
+        hinweise.append("sql_port_1433")
+    if 1434 in erkannte_ports:
+        hinweise.append("sql_browser_port_1434")
+    if 4022 in erkannte_ports:
+        hinweise.append("sql_service_broker_4022")
+    if erkannte_ports & _SQL_DISCOVERY_PORTS:
+        hinweise.append("sql_portsignatur")
+
+    for dienst in erkannte_dienste:
+        if not dienst.isdigit() and any(token in dienst.lower() for token in _SQL_DISCOVERY_SERVICE_HINTS):
+            hinweise.append(f"sql_dienst:{dienst.lower()}")
+
+    if remote_daten is not None:
+        if remote_daten.sql_instanzen:
+            hinweise.extend(f"sql_instanz:{instanz.instanzname.lower()}" for instanz in remote_daten.sql_instanzen)
+        for dienst in remote_daten.dienste:
+            if any(token in dienst.name.lower() for token in _SQL_DISCOVERY_SERVICE_HINTS):
+                hinweise.append(f"sql_remote_dienst:{dienst.name.lower()}")
+
+    return _normalisiere_liste_ohne_duplikate(hinweise)
+
+
 def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -> DiscoveryErgebnis | None:
     """Führt alle Discovery-Strategien für genau einen Host zusammen."""
     strategien: list[str] = []
@@ -849,6 +890,12 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
     ip_adresse = host
     erreichbar = False
     vertrauensgrad = 0.0
+    namensquelle = "eingabe"
+
+    forward_name = _resolve_forward_dns(host)
+    if forward_name:
+        strategien.append("forward_dns")
+        namensquelle = "forward_dns"
 
     ip_adressen = _ermittle_ip_adressen(host)
     if ip_adressen:
@@ -875,14 +922,20 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
     elif "icmp" not in strategien:
         fehlerursachen.append("tcp_timeout")
 
-    hostname = host
+    hostname = forward_name or host
     # Reverse-DNS dient ausschließlich der Namensanreicherung bereits erreichbarer Hosts.
     if erreichbar and konfiguration.nutze_reverse_dns and ip_adressen:
         reverse = _resolve_reverse_dns(ip_adresse)
         if reverse:
             strategien.append("reverse_dns")
             hostname = reverse
+            namensquelle = "reverse_dns"
             vertrauensgrad += 0.1
+        else:
+            fehlerursachen.append("reverse_dns_nicht_aufloesbar")
+
+    if not forward_name and namensquelle == "eingabe":
+        fehlerursachen.append("forward_dns_nicht_aufloesbar")
 
     if konfiguration.nutze_ad_ldap:
         ad_hinweis = _ad_ldap_hinweis()
@@ -898,6 +951,18 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
     if not erreichbar:
         return None
 
+    remote_daten: RemoteSystemdaten | None = None
+    provider = KombinierterRemoteProvider()
+    if provider.ist_verfuegbar():
+        try:
+            remote_daten = provider.lese_systemdaten(host)
+            if remote_daten is not None:
+                strategien.append("remote_inventory")
+        except RemoteAbrufFehler:
+            fehlerursachen.append("remote_inventory_nicht_verfuegbar")
+
+    rollenhinweise = _sql_rollenhinweise_aus_discovery(erkannte_dienste, remote_daten)
+
     return DiscoveryErgebnis(
         hostname=hostname,
         ip_adresse=ip_adresse,
@@ -906,6 +971,8 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
         vertrauensgrad=min(1.0, vertrauensgrad),
         strategien=_normalisiere_liste_ohne_duplikate(strategien),
         fehlerursachen=_normalisiere_liste_ohne_duplikate(fehlerursachen),
+        rollenhinweise=rollenhinweise,
+        namensquelle=namensquelle,
     )
 
 

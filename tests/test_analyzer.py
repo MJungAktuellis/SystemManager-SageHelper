@@ -15,6 +15,7 @@ from systemmanager_sagehelper.analyzer import (
     analysiere_server,
     analysiere_mehrere_server,
     schlage_rollen_per_portsignatur_vor,
+    _entdecke_einzelnen_host,
 )
 from systemmanager_sagehelper.models import ServerZiel
 
@@ -241,6 +242,69 @@ class TestAnalyzer(unittest.TestCase):
 
         self.assertEqual(1, len(ergebnisse))
         self.assertEqual("srv-01.domain.local", ergebnisse[0].hostname)
+
+    @patch("systemmanager_sagehelper.analyzer.KombinierterRemoteProvider")
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value=None)
+    @patch("systemmanager_sagehelper.analyzer._resolve_forward_dns", return_value=None)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.4.20"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", side_effect=lambda _k, timeout=0.5: True)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=True)
+    def test_discovery_sql_hinweise_ohne_1433_durch_remote_inventory(
+        self,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _forward_mock,
+        _reverse_mock,
+        provider_cls,
+    ) -> None:
+        from systemmanager_sagehelper.analyzer import RemoteSystemdaten, SQLInstanzInfo, DienstInfo
+
+        provider = Mock()
+        provider.ist_verfuegbar.return_value = True
+        provider.lese_systemdaten.return_value = RemoteSystemdaten(
+            sql_instanzen=[SQLInstanzInfo(instanzname="SAGE")],
+            dienste=[DienstInfo(name="SQLBrowser", status="Running")],
+        )
+        provider_cls.return_value = provider
+
+        treffer = _entdecke_einzelnen_host("srv-sql-20", DiscoveryKonfiguration(max_worker=1))
+
+        self.assertIsNotNone(treffer)
+        assert treffer is not None
+        self.assertIn("sql_browser_port_1434", treffer.rollenhinweise)
+        self.assertTrue(any(h.startswith("sql_instanz:") for h in treffer.rollenhinweise))
+
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value=None)
+    @patch("systemmanager_sagehelper.analyzer._resolve_forward_dns", return_value=None)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.5.10"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=True)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=True)
+    @patch("systemmanager_sagehelper.analyzer.KombinierterRemoteProvider")
+    def test_discovery_dns_inkonsistenz_namensquelle_eingabe(
+        self,
+        provider_cls,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _forward_mock,
+        _reverse_mock,
+    ) -> None:
+        provider = Mock()
+        provider.ist_verfuegbar.return_value = False
+        provider_cls.return_value = provider
+
+        treffer = _entdecke_einzelnen_host("srv-ohne-dns", DiscoveryKonfiguration(max_worker=1))
+
+        self.assertIsNotNone(treffer)
+        assert treffer is not None
+        self.assertEqual("eingabe", treffer.namensquelle)
+        self.assertIn("forward_dns_nicht_aufloesbar", treffer.fehlerursachen)
+        self.assertEqual("srv-ohne-dns", treffer.hostname)
 
 
 if __name__ == "__main__":
