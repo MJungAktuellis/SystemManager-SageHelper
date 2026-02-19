@@ -48,6 +48,7 @@ class ServerTabellenZeile:
     namensquelle: str = ""
     erreichbarkeitsstatus: str = ""
     vertrauensgrad: float = 0.0
+    manuelle_anmerkung: str = ""
 
     def rollen(self) -> list[str]:
         """Leitet die Rollenliste aus den gesetzten Checkboxen ab."""
@@ -178,10 +179,37 @@ def _baue_server_summary(ergebnisse: list[AnalyseErgebnis]) -> list[dict[str, ob
                 "erreichbar": _ist_server_erreichbar(ergebnis),
                 "rollen": ergebnis.rollen,
                 "rollenquelle": ergebnis.rollenquelle or "unbekannt",
+                "manuelle_anmerkung": "\n".join(ergebnis.hinweise).strip(),
                 "letzte_pruefung": ergebnis.zeitpunkt.isoformat(timespec="seconds"),
             }
         )
     return server_summary
+
+
+def _mappe_manuelle_anmerkungen(zeilen: list[ServerTabellenZeile]) -> dict[str, str]:
+    """Liefert eine normalisierte Zuordnung von Servernamen zu manuellen Ergänzungen."""
+    return {
+        normalisiere_servernamen(zeile.servername): zeile.manuelle_anmerkung.strip()
+        for zeile in zeilen
+        if zeile.servername.strip() and zeile.manuelle_anmerkung.strip()
+    }
+
+
+def _integriere_manuelle_anmerkungen(ergebnisse: list[AnalyseErgebnis], zeilen: list[ServerTabellenZeile]) -> None:
+    """Erweitert Analyseergebnisse um manuelle Hinweise für GUI und Markdown-Report."""
+    anmerkungen_pro_server = _mappe_manuelle_anmerkungen(zeilen)
+    if not anmerkungen_pro_server:
+        return
+
+    for ergebnis in ergebnisse:
+        server_schluessel = normalisiere_servernamen(ergebnis.server)
+        anmerkung = anmerkungen_pro_server.get(server_schluessel)
+        if not anmerkung:
+            continue
+
+        ergebnis.manuelle_anmerkung = anmerkung
+        if anmerkung not in ergebnis.hinweise:
+            ergebnis.hinweise.append(anmerkung)
 
 
 def _schreibe_analyse_report(ergebnisse: list[AnalyseErgebnis], ausgabe_pfad: str) -> tuple[str, str]:
@@ -605,6 +633,7 @@ class MehrserverAnalyseGUI:
         # Strukturierte Detailkarten dienen als gemeinsame Datenbasis für Tabs und Reporting.
         self._detailkarten: list[ServerDetailkarte] = []
         self._server_auswahl_var = tk.StringVar(value="")
+        self._manuelle_anmerkung_var = tk.StringVar(value="")
         # Strukturierter Snapshot der letzten Analyse für modulübergreifende Übersichten.
         self._server_summary: list[dict[str, object]] = self.modulzustand.get("server_summary", [])
         self._letzte_discovery_range = tk.StringVar(value=self.modulzustand.get("letzte_discovery_range", ""))
@@ -785,6 +814,19 @@ class MehrserverAnalyseGUI:
         self.cmb_serverauswahl.pack(side="left", padx=(8, 0))
         self.cmb_serverauswahl.bind("<<ComboboxSelected>>", lambda _event: self._aktualisiere_tab_inhalte())
 
+        anmerkung_frame = ttk.LabelFrame(frame, text="Manuelle Ergänzungen", style="Section.TLabelframe")
+        anmerkung_frame.pack(fill="x", padx=8, pady=(0, 2))
+        ttk.Label(
+            anmerkung_frame,
+            text="Manuelle Ergänzungen (optional), damit projektspezifische Infos nicht verloren gehen.",
+            justify="left",
+            wraplength=980,
+        ).pack(anchor="w", padx=8, pady=(6, 2))
+        ttk.Entry(anmerkung_frame, textvariable=self._manuelle_anmerkung_var, width=90).pack(
+            fill="x", padx=8, pady=(0, 6)
+        )
+        self._manuelle_anmerkung_var.trace_add("write", self._uebernehme_manuelle_anmerkung_aus_ui)
+
         self.notebook_ergebnisse = ttk.Notebook(frame)
         self.notebook_ergebnisse.pack(fill="both", expand=True, padx=8, pady=8)
 
@@ -817,6 +859,7 @@ class MehrserverAnalyseGUI:
         servername = self._server_auswahl_var.get().strip()
         karte = next((eintrag for eintrag in self._detailkarten if eintrag.server == servername), None)
         if not karte:
+            self._manuelle_anmerkung_var.set("")
             for feld in (
                 self.txt_tab_uebersicht,
                 self.txt_tab_rollen,
@@ -826,6 +869,12 @@ class MehrserverAnalyseGUI:
             ):
                 self._setze_textfeld_inhalt(feld, ["Noch kein Server ausgewählt."])
             return
+
+        zeile = next(
+            (eintrag for eintrag in self._zeilen_nach_id.values() if normalisiere_servernamen(eintrag.servername) == normalisiere_servernamen(karte.server)),
+            None,
+        )
+        self._manuelle_anmerkung_var.set((zeile.manuelle_anmerkung if zeile else "").strip())
 
         self._setze_textfeld_inhalt(
             self.txt_tab_uebersicht,
@@ -857,6 +906,37 @@ class MehrserverAnalyseGUI:
         )
         self._setze_textfeld_inhalt(self.txt_tab_software, karte.software or ["Keine Software erkannt."])
         self._setze_textfeld_inhalt(self.txt_tab_empfehlungen, karte.empfehlungen or ["Keine Empfehlungen vorhanden."])
+
+    def _uebernehme_manuelle_anmerkung_aus_ui(self, *_: object) -> None:
+        """Synchronisiert manuelle Ergänzungen aus dem Eingabefeld mit Tabellen- und Analysemodell."""
+        servername = self._server_auswahl_var.get().strip()
+        if not servername:
+            return
+
+        anmerkung = self._manuelle_anmerkung_var.get().strip()
+        norm_name = normalisiere_servernamen(servername)
+
+        for zeile in self._zeilen_nach_id.values():
+            if normalisiere_servernamen(zeile.servername) == norm_name:
+                zeile.manuelle_anmerkung = anmerkung
+                break
+
+        for ergebnis in self._letzte_ergebnisse:
+            if normalisiere_servernamen(ergebnis.server) != norm_name:
+                continue
+            vorherige_anmerkung = ergebnis.manuelle_anmerkung.strip()
+            ergebnis.hinweise = [
+                hinweis
+                for hinweis in ergebnis.hinweise
+                if hinweis.strip() and hinweis.strip() != vorherige_anmerkung
+            ]
+            ergebnis.manuelle_anmerkung = anmerkung
+            if anmerkung:
+                ergebnis.hinweise.append(anmerkung)
+            break
+
+        if self._letzte_ergebnisse:
+            self._server_summary = _baue_server_summary(self._letzte_ergebnisse)
 
     def _aktualisiere_button_zustaende(self, _event: tk.Event[tk.Misc] | None = None) -> None:
         """Aktiviert oder deaktiviert Aktionen abhängig vom aktuellen GUI-Zustand."""
@@ -1160,6 +1240,7 @@ class MehrserverAnalyseGUI:
             return
 
         self._letzte_ergebnisse = ergebnisse
+        _integriere_manuelle_anmerkungen(ergebnisse, zeilen)
         # Unmittelbar nach erfolgreicher Analyse den strukturierten Snapshot aktualisieren.
         self._server_summary = _baue_server_summary(ergebnisse)
         status_nach_server = {normalisiere_servernamen(ergebnis.server): "analysiert" for ergebnis in ergebnisse}
