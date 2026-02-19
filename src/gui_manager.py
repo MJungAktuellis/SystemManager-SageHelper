@@ -24,9 +24,32 @@ from systemmanager_sagehelper.texte import (
     STATUS_PREFIX,
 )
 from systemmanager_sagehelper.ui_theme import LAYOUT
-from server_analysis_gui import MehrserverAnalyseGUI, ServerTabellenZeile, _baue_serverziele
+from server_analysis_gui import MehrserverAnalyseGUI, ServerTabellenZeile, _baue_server_summary, _baue_serverziele
 
 logger = konfiguriere_logger(__name__, dateiname="gui_manager.log")
+
+
+def _formatiere_server_summary_fuer_dashboard(server_summary: list[dict[str, object]], *, limit: int = 5) -> str:
+    """Erzeugt gut lesbare Statuszeilen aus dem persistierten Server-Snapshot.
+
+    Die Darstellung ist bewusst kompakt gehalten, damit sie in der
+    Dashboard-Übersicht mit weiteren Modulen zusammen lesbar bleibt.
+    """
+    if not server_summary:
+        return "Keine Analyse vorhanden – bitte zuerst Serveranalyse starten."
+
+    zeilen: list[str] = []
+    for server in server_summary[:limit]:
+        name = str(server.get("name") or "unbekannt")
+        rollen = ", ".join(server.get("rollen", [])) or "keine Rolle"
+        status = "erreichbar" if bool(server.get("erreichbar")) else "nicht erreichbar"
+        quelle = str(server.get("rollenquelle") or "unbekannt")
+        zeilen.append(f"{name}: {rollen} ({status}, Quelle: {quelle})")
+
+    if len(server_summary) > limit:
+        zeilen.append(f"… +{len(server_summary) - limit} weitere Server")
+
+    return " | ".join(zeilen)
 
 _ONBOARDING_VERSION = "1.0.0"
 
@@ -390,6 +413,7 @@ class OnboardingController:
         adapter.modulzustand = self.state_store.lade_modulzustand("server_analysis")
         adapter._zeilen_nach_id = {f"row-{index}": zeile for index, zeile in enumerate(self.server_zeilen, start=1)}
         adapter._letzte_ergebnisse = self.analyse_ergebnisse
+        adapter._server_summary = _baue_server_summary(self.analyse_ergebnisse)
         adapter._letzte_discovery_range = tk.StringVar(value=self.gui.modulzustand.get("letzte_discovery_range", ""))
         adapter._ausgabe_pfad = tk.StringVar(value=(self._analyse_pfad_var.get().strip() if self._analyse_pfad_var else "docs/serverbericht.md"))
         adapter._letzter_export_pfad = adapter.modulzustand.get("letzter_exportpfad", "")
@@ -601,7 +625,13 @@ class SystemManagerGUI:
 
         zustand = self.state_store.lade_gesamtzustand().get("modules", {})
         for modulname, modulwerte in zustand.items():
-            infos = "; ".join(modulwerte.get("letzte_kerninfos", [])) or "Keine Daten"
+            kerninfos = modulwerte.get("letzte_kerninfos", [])
+            infos = "; ".join(kerninfos) if kerninfos else "Keine Daten"
+
+            # Für die Serveranalyse werden die wichtigsten Server gezielt hervorgehoben.
+            if modulname == "server_analysis":
+                infos = _formatiere_server_summary_fuer_dashboard(modulwerte.get("server_summary", []), limit=5)
+
             berichte = "; ".join(modulwerte.get("bericht_verweise", [])) or "Keine Verweise"
             self.uebersicht.insert("", "end", values=(modulname, infos, berichte))
 
@@ -629,8 +659,12 @@ class SystemManagerGUI:
         elif installer_modul.get("installiert"):
             status_texte["installation"] = "Teilweise installiert (Prüfung erforderlich)"
 
-        if module.get("server_analysis", {}).get("letzte_kerninfos"):
-            status_texte["serveranalyse"] = "Analyseergebnisse vorhanden"
+        serveranalyse_modul = module.get("server_analysis", {})
+        if serveranalyse_modul.get("server_summary"):
+            anzahl_server = len(serveranalyse_modul.get("server_summary", []))
+            status_texte["serveranalyse"] = f"Analyseergebnisse vorhanden ({anzahl_server} Server)"
+        elif serveranalyse_modul.get("letzte_kerninfos"):
+            status_texte["serveranalyse"] = "Analyse vorbereitet (ohne Ergebnis-Snapshot)"
         if module.get("folder_manager", {}).get("letzte_kerninfos"):
             status_texte["ordnerverwaltung"] = "Ordnerprüfung abgeschlossen"
         if module.get("doc_generator", {}).get("letzte_kerninfos"):

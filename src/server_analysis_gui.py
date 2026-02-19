@@ -157,6 +157,27 @@ def _baue_report_verweistext(exportpfad: str | None, exportzeitpunkt: str | None
     return f"Letzter Analysebericht: {exportpfad} | Exportzeit: {zeit} | Lauf-ID: {lauf}"
 
 
+def _ist_server_erreichbar(ergebnis: AnalyseErgebnis) -> bool:
+    """Leitet den Erreichbarkeitsstatus robust aus dem Analyseergebnis ab."""
+    return any(port.offen for port in ergebnis.ports)
+
+
+def _baue_server_summary(ergebnisse: list[AnalyseErgebnis]) -> list[dict[str, object]]:
+    """Erstellt eine persistierbare Kurzstruktur je Server für Dashboard und Modulzustand."""
+    server_summary: list[dict[str, object]] = []
+    for ergebnis in ergebnisse:
+        server_summary.append(
+            {
+                "name": ergebnis.server,
+                "erreichbar": _ist_server_erreichbar(ergebnis),
+                "rollen": ergebnis.rollen,
+                "rollenquelle": ergebnis.rollenquelle or "unbekannt",
+                "letzte_pruefung": ergebnis.zeitpunkt.isoformat(timespec="seconds"),
+            }
+        )
+    return server_summary
+
+
 def _schreibe_analyse_report(ergebnisse: list[AnalyseErgebnis], ausgabe_pfad: str) -> tuple[str, str]:
     """Rendert und schreibt den Analysebericht in den gewünschten Dateipfad."""
     zielpfad = Path(ausgabe_pfad).expanduser()
@@ -491,6 +512,8 @@ class MehrserverAnalyseGUI:
 
         self._zeilen_nach_id: dict[str, ServerTabellenZeile] = {}
         self._letzte_ergebnisse: list[AnalyseErgebnis] = []
+        # Strukturierter Snapshot der letzten Analyse für modulübergreifende Übersichten.
+        self._server_summary: list[dict[str, object]] = self.modulzustand.get("server_summary", [])
         self._letzte_discovery_range = tk.StringVar(value=self.modulzustand.get("letzte_discovery_range", ""))
         self._letzter_discovery_modus = tk.StringVar(value=self.modulzustand.get("letzter_discovery_modus", "range"))
         self._letzte_discovery_namen = tk.StringVar(value=self.modulzustand.get("letzte_discovery_namen", ""))
@@ -981,6 +1004,8 @@ class MehrserverAnalyseGUI:
             return
 
         self._letzte_ergebnisse = ergebnisse
+        # Unmittelbar nach erfolgreicher Analyse den strukturierten Snapshot aktualisieren.
+        self._server_summary = _baue_server_summary(ergebnisse)
         status_nach_server = {normalisiere_servernamen(ergebnis.server): "analysiert" for ergebnis in ergebnisse}
         for item_id, zeile in self._zeilen_nach_id.items():
             zeile.status = status_nach_server.get(normalisiere_servernamen(zeile.servername), "unbekannt")
@@ -1013,13 +1038,23 @@ class MehrserverAnalyseGUI:
 
     def _baue_kerninfos(self) -> list[str]:
         """Erzeugt kompakte Übersichtsinfos für die Übersichtsseite im Launcher."""
-        if not self._letzte_ergebnisse:
-            return [f"Server in Liste: {len(self._zeilen_nach_id)}"]
+        if not self._server_summary:
+            return [
+                "Analyse-Status: Noch keine Analyse vorhanden.",
+                f"Server in Liste: {len(self._zeilen_nach_id)}",
+                "Führen Sie die Analyse aus, um Rollen und Erreichbarkeit zu sehen.",
+            ]
 
-        servernamen = ", ".join(ergebnis.server for ergebnis in self._letzte_ergebnisse[:3])
+        top_server = self._server_summary[:5]
+        statuszeilen = []
+        for server in top_server:
+            rollen = ", ".join(server.get("rollen", [])) or "keine Rolle"
+            status = "erreichbar" if server.get("erreichbar") else "nicht erreichbar"
+            statuszeilen.append(f"{server.get('name', 'unbekannt')}: {rollen} ({status})")
+
         return [
-            f"Analysierte Server: {len(self._letzte_ergebnisse)}",
-            f"Beispiele: {servernamen}",
+            f"Analyse-Status: {len(self._server_summary)} Server zuletzt geprüft.",
+            "Server-Status: " + " | ".join(statuszeilen),
             f"Netzwerkerkennungs-Bereich: {self._letzte_discovery_range.get() or 'nicht gesetzt'}",
         ]
 
@@ -1046,6 +1081,7 @@ class MehrserverAnalyseGUI:
                     "ende": self._discovery_ende_var.get().strip(),
                 },
                 "ausgabepfade": ausgabepfade,
+                "server_summary": self._server_summary,
                 "letzte_kerninfos": self._baue_kerninfos(),
                 "bericht_verweise": [ausgabepfade["analyse_report"], ausgabepfade["log_report"]],
                 "letzter_exportpfad": self._letzter_export_pfad,
