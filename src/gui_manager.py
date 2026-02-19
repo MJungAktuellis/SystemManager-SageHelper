@@ -621,8 +621,10 @@ class SystemManagerGUI:
         installer_modul = module.get("installer", {}) if isinstance(module.get("installer"), dict) else {}
         if installationspruefung.installiert:
             version = installer_modul.get("version") or installationspruefung.erkannte_version or ""
+            letzte_aktion = installer_modul.get("letzte_aktion")
+            modus_text = "Wartung" if letzte_aktion == "maintenance" else "Installation"
             status_texte["installation"] = (
-                f"Installiert ({version})" if version else "Installiert"
+                f"Installiert ({version}) · Letzte Aktion: {modus_text}" if version else f"Installiert · Letzte Aktion: {modus_text}"
             )
         elif installer_modul.get("installiert"):
             status_texte["installation"] = "Teilweise installiert (Prüfung erforderlich)"
@@ -651,7 +653,7 @@ class SystemManagerGUI:
             return
 
         if installiert:
-            installations_button.configure(text="Installation prüfen/aktualisieren")
+            installations_button.configure(text="Wartung starten")
         else:
             installations_button.configure(text="Installation starten")
 
@@ -700,15 +702,17 @@ class SystemManagerGUI:
     def installieren(self, *, bestaetigung_erforderlich: bool = True, expertenmodus: bool = False) -> None:
         """Öffnet den Installationsassistenten mit Guard gegen unbeabsichtigte Vollinstallationen."""
         installationspruefung = pruefe_installationszustand()
+        modus = "install"
 
         if installationspruefung.installiert and not expertenmodus:
+            modus = "maintenance"
             if bestaetigung_erforderlich and not self.shell.bestaetige_aktion(
-                "Installation prüfen oder aktualisieren",
-                "Das System ist bereits installiert. Es wird keine Vollinstallation gestartet.",
+                "Wartung starten",
+                "Das System ist bereits installiert. Es wird der Wartungsmodus geöffnet.",
             ):
-                self.shell.setze_status("Prüfung/Aktualisierung abgebrochen")
+                self.shell.setze_status("Wartung abgebrochen")
                 return
-            self.shell.setze_status("Installationsprüfung/Aktualisierung wird geöffnet")
+            self.shell.setze_status("Wartungsassistent wird geöffnet")
         else:
             if bestaetigung_erforderlich and not self.shell.bestaetige_aktion(
                 "Installation bestätigen",
@@ -722,30 +726,33 @@ class SystemManagerGUI:
             self.shell.setze_status("Installationsassistent wird geöffnet")
 
         lauf_id = self._starte_neuen_lauf()
-        self.shell.setze_status("Installationsassistent geöffnet")
-        self.shell.logge_meldung(f"[{lauf_id}] Öffne grafischen Installationsassistenten")
+        status_label = "Wartungsassistent geöffnet" if modus == "maintenance" else "Installationsassistent geöffnet"
+        self.shell.setze_status(status_label)
+        self.shell.logge_meldung(f"[{lauf_id}] Öffne grafischen Assistenten im Modus: {modus}")
 
         InstallerWizardGUI(
             self.master,
-            on_finished=lambda erfolgreich: self._nach_installation(erfolgreich, lauf_id),
+            mode=modus,
+            on_finished=lambda erfolgreich: self._nach_installation(erfolgreich, lauf_id, modus),
         )
 
-    def _nach_installation(self, erfolgreich: bool, lauf_id: str) -> None:
+    def _nach_installation(self, erfolgreich: bool, lauf_id: str, modus: str) -> None:
         """Synchronisiert Dashboard und Status nach Abschluss des Installer-Dialogs."""
+        vorgang = "Wartung" if modus == "maintenance" else "Installation"
         if erfolgreich:
             self.shell.zeige_erfolg(
                 "Erfolg",
-                f"Installation abgeschlossen.\nLauf-ID: {lauf_id}",
+                f"{vorgang} abgeschlossen.\nLauf-ID: {lauf_id}",
                 "Prüfen Sie die Übersicht und speichern Sie bei Bedarf den Zustand.",
             )
-            self.shell.setze_status("Installation abgeschlossen")
+            self.shell.setze_status(f"{vorgang} abgeschlossen")
         else:
             self.shell.zeige_warnung(
-                "Installation unvollständig",
-                f"Die Installation wurde mit Fehlern beendet.\nLauf-ID: {lauf_id}",
+                f"{vorgang} unvollständig",
+                f"Die {vorgang.lower()} wurde mit Fehlern beendet.\nLauf-ID: {lauf_id}",
                 "Prüfen Sie die Meldungen im Installer-Fenster und wiederholen Sie den Vorgang.",
             )
-            self.shell.setze_status("Installation mit Warnungen beendet")
+            self.shell.setze_status(f"{vorgang} mit Warnungen beendet")
 
         self._lade_uebersichtszeilen()
         self._aktualisiere_dashboard_status()
