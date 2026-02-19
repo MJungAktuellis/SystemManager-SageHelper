@@ -193,7 +193,7 @@ function Invoke-DownloadWithRetry {
 
     for ($attempt = 1; $attempt -le $RetryCount; $attempt++) {
         try {
-            Write-PsLog -Category "INFO" -Cause "DOWNLOAD_VERSUCH" -Candidate "online-download" -Message "Versuch $attempt/$RetryCount: $Url"
+            Write-PsLog -Category "INFO" -Cause "DOWNLOAD_VERSUCH" -Candidate "online-download" -Message "Versuch $attempt/${RetryCount}: $Url"
             $progressPreferenceBackup = $ProgressPreference
             $ProgressPreference = "SilentlyContinue"
             Invoke-WebRequest -Uri $Url -OutFile $Destination -TimeoutSec $TimeoutSeconds -UseBasicParsing
