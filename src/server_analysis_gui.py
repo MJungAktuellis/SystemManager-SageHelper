@@ -43,6 +43,11 @@ class ServerTabellenZeile:
     status: str = "neu"
     auto_rolle: str | None = None
     manuell_ueberschrieben: bool = False
+    aufgeloester_hostname: str = ""
+    ip_adresse: str = ""
+    namensquelle: str = ""
+    erreichbarkeitsstatus: str = ""
+    vertrauensgrad: float = 0.0
 
     def rollen(self) -> list[str]:
         """Leitet die Rollenliste aus den gesetzten Checkboxen ab."""
@@ -93,10 +98,10 @@ def _baue_serverziele(zeilen: list[ServerTabellenZeile]) -> list[ServerZiel]:
 
 def _rollenquelle_fuer_zeile(zeile: ServerTabellenZeile) -> str:
     """Ermittelt die Herkunft der finalen Rollendeklaration für einen Server."""
-    if zeile.quelle.lower() in {"discovery", "netzwerkerkennung"} and not zeile.manuell_ueberschrieben:
+    if zeile.quelle.lower() in {"discovery", "netzwerkerkennung", "automatisch erkannt"} and not zeile.manuell_ueberschrieben:
         return "automatisch erkannt"
-    if zeile.manuell_ueberschrieben and zeile.auto_rolle:
-        return "nachträglich geändert"
+    if zeile.manuell_ueberschrieben:
+        return "manuell angepasst"
     return "manuell gesetzt"
 
 

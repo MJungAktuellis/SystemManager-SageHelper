@@ -280,15 +280,31 @@ class OnboardingController:
             elif "3389" in treffer.erkannte_dienste:
                 rollen = ["CTX"]
 
+            # Discovery-Metadaten werden vollständig in das Zeilenmodell übernommen,
+            # damit Folge-Schritte (Rollenprüfung, Analyse, Persistenz) konsistente
+            # Informationen zu Hostname/IP, Namensherkunft und Vertrauensstatus haben.
+            erreichbarkeitsstatus = "erreichbar" if treffer.erreichbar else "nicht erreichbar"
+            if treffer.vertrauensgrad >= 0.8:
+                vertrauensklasse = "hoch"
+            elif treffer.vertrauensgrad >= 0.5:
+                vertrauensklasse = "mittel"
+            else:
+                vertrauensklasse = "niedrig"
+
             self.server_zeilen.append(
                 ServerTabellenZeile(
                     servername=treffer.hostname,
                     sql="SQL" in rollen,
                     app="APP" in rollen,
                     ctx="CTX" in rollen,
-                    quelle="discovery",
+                    quelle="automatisch erkannt",
                     status="entdeckt",
                     auto_rolle=rollen[0],
+                    aufgeloester_hostname=treffer.hostname,
+                    ip_adresse=treffer.ip_adresse,
+                    namensquelle=treffer.namensquelle or "nicht auflösbar",
+                    erreichbarkeitsstatus=f"{erreichbarkeitsstatus} ({vertrauensklasse})",
+                    vertrauensgrad=treffer.vertrauensgrad,
                 )
             )
 
@@ -384,7 +400,7 @@ class OnboardingController:
         return [(basis, start, ende)], f"{basis}.{start}-{ende}"
 
     def schritt_rollen_pruefen(self) -> None:
-        """Schritt 2: Ermöglicht eine einfache Rollenanpassung pro gefundenem Server."""
+        """Schritt 2: Ermöglicht eine kontrollierte Mehrfach-Anpassung der Serverrollen."""
         if not self._ist_schritt_freigeschaltet("rollen"):
             return
         self._setze_aktuellen_schritt("rollen")
@@ -401,25 +417,66 @@ class OnboardingController:
 
         dialog = tk.Toplevel(self._window)
         dialog.title("Rollenprüfung")
-        dialog.geometry("700x420")
+        dialog.geometry("1140x560")
         dialog.transient(self._window)
         dialog.grab_set()
 
-        tree = ttk.Treeview(dialog, columns=("server", "rolle", "quelle"), show="headings", height=14)
-        tree.pack(fill="both", expand=True, padx=10, pady=(10, 6))
+        ttk.Label(
+            dialog,
+            text=(
+                "Mehrfachauswahl: Nutzen Sie Strg+Klick für einzelne zusätzliche Server "
+                "oder Umschalt+Klick für einen zusammenhängenden Bereich."
+            ),
+            wraplength=1080,
+            justify="left",
+        ).pack(fill="x", padx=10, pady=(10, 4))
+
+        tree = ttk.Treeview(
+            dialog,
+            columns=("server", "hostname", "ip", "status", "rolle", "quelle"),
+            show="headings",
+            height=16,
+            selectmode="extended",
+        )
+        tree.pack(fill="both", expand=True, padx=10, pady=(2, 6))
         tree.heading("server", text="Server")
+        tree.heading("hostname", text="aufgelöster Hostname")
+        tree.heading("ip", text="IP-Adresse")
+        tree.heading("status", text="Erreichbarkeit/Vertrauen")
         tree.heading("rolle", text="Rolle")
         tree.heading("quelle", text="Quelle")
-        tree.column("server", width=280)
+        tree.column("server", width=180)
+        tree.column("hostname", width=230)
+        tree.column("ip", width=130, anchor="center")
+        tree.column("status", width=220)
         tree.column("rolle", width=120, anchor="center")
         tree.column("quelle", width=180)
 
         for index, zeile in enumerate(self.server_zeilen):
             rolle = "SQL" if zeile.sql else "CTX" if zeile.ctx else "APP"
-            tree.insert("", "end", iid=str(index), values=(zeile.servername, rolle, zeile.quelle))
+            tree.insert(
+                "",
+                "end",
+                iid=str(index),
+                values=(
+                    zeile.servername,
+                    zeile.aufgeloester_hostname or zeile.servername,
+                    zeile.ip_adresse or "-",
+                    zeile.erreichbarkeitsstatus or "unbekannt",
+                    rolle,
+                    zeile.quelle,
+                ),
+            )
+
+        auswahl_geaendert_var = tk.BooleanVar(value=False)
 
         def rolle_setzen(rolle: str) -> None:
-            for item_id in tree.selection():
+            ausgewaehlt = tree.selection()
+            if not ausgewaehlt:
+                self._setze_status("Keine Auswahl getroffen. Bitte mindestens einen Server markieren.")
+                return
+
+            for item_id in ausgewaehlt:
                 zeile = self.server_zeilen[int(item_id)]
                 vorher = "SQL" if zeile.sql else "CTX" if zeile.ctx else "APP"
                 zeile.sql = rolle == "SQL"
@@ -429,23 +486,52 @@ class OnboardingController:
                 zeile.status = "rolle geprüft"
                 tree.set(item_id, "rolle", rolle)
                 if zeile.manuell_ueberschrieben:
-                    tree.set(item_id, "quelle", "onboarding-manuell")
+                    zeile.quelle = "manuell angepasst"
+                elif zeile.quelle.lower() != "manuell angepasst":
+                    zeile.quelle = "automatisch erkannt"
+                tree.set(item_id, "quelle", zeile.quelle)
+
+            auswahl_geaendert_var.set(True)
+
+        def alle_markieren() -> None:
+            tree.selection_set(tree.get_children(""))
+
+        def keine_markieren() -> None:
+            tree.selection_remove(tree.selection())
+
+        def abbrechen() -> None:
+            dialog.destroy()
+            self._setze_status("Rollenprüfung abgebrochen. Änderungen wurden nicht bestätigt.")
+
+        def uebernehmen() -> None:
+            dialog.destroy()
+            self._markiere_schritt(
+                "rollen",
+                "erfolgreich",
+                f"{len(self.server_zeilen)} Serverrollen bestätigt.",
+                "Nach Prüfung Schritt 3 Analyse ausführen.",
+            )
+            if auswahl_geaendert_var.get():
+                self._setze_status("Rollenprüfung abgeschlossen und manuelle Anpassungen übernommen.")
+            else:
+                self._setze_status("Rollenprüfung abgeschlossen: Rollen unverändert bestätigt.")
 
         button_rahmen = ttk.Frame(dialog)
         button_rahmen.pack(fill="x", padx=10, pady=(0, 10))
+
         for rolle in ("SQL", "APP", "CTX"):
             ttk.Button(button_rahmen, text=f"Als {rolle} markieren", command=lambda r=rolle: rolle_setzen(r)).pack(
                 side="left", padx=4
             )
-        ttk.Button(button_rahmen, text="Fertig", command=dialog.destroy).pack(side="right", padx=4)
 
-        self._markiere_schritt(
-            "rollen",
-            "erfolgreich",
-            f"{len(self.server_zeilen)} Server für Rollenprüfung geladen.",
-            "Nach Prüfung Schritt 3 Analyse ausführen.",
-        )
-        self._setze_status("Rollenprüfung geöffnet: Auswahl prüfen und ggf. anpassen.")
+        ttk.Separator(button_rahmen, orient="vertical").pack(side="left", fill="y", padx=8)
+        ttk.Button(button_rahmen, text="Alle markieren", command=alle_markieren).pack(side="left", padx=4)
+        ttk.Button(button_rahmen, text="Keine", command=keine_markieren).pack(side="left", padx=4)
+
+        ttk.Button(button_rahmen, text="Abbrechen", command=abbrechen).pack(side="right", padx=4)
+        ttk.Button(button_rahmen, text="Übernehmen (OK)", command=uebernehmen).pack(side="right", padx=4)
+
+        self._setze_status("Rollenprüfung geöffnet: Mehrfachauswahl und Rollenanpassung verfügbar.")
 
     def schritt_analyse(self) -> None:
         """Schritt 3: Startet die Analyse auf Basis der bestätigten Rollen."""
