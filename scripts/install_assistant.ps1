@@ -357,7 +357,14 @@ if (-not (Test-Admin)) {
     Write-Host "[INFO] Skript läuft nicht mit Administratorrechten. Starte neu als Admin..."
     Write-PsLog -Category "WARN" -Cause "ADMINRECHTE_FEHLEN" -Message "Neustart mit Erhoehung wird angefordert." -Candidate "Start-Process -Verb RunAs"
     try {
-        $elevatedProcess = Start-Process -FilePath "PowerShell" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs -PassThru -ErrorAction Stop
+        # Bevorzugt den expliziten Pfad zur Windows PowerShell, um PATH-/Alias-Probleme zu vermeiden.
+        # Fallback auf den Kommando-Namen, falls die Standardinstallation unerwartet fehlt.
+        $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+        if (-not (Test-Path -LiteralPath $psExe)) {
+            $psExe = "powershell.exe"
+        }
+
+        $elevatedProcess = Start-Process -FilePath $psExe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs -PassThru -ErrorAction Stop
         if ($null -eq $elevatedProcess) {
             Write-Host "[FEHLER] Erhoehung konnte nicht gestartet werden. Bitte PowerShell als Administrator oeffnen und das Skript erneut starten."
             Write-PsLog -Category "ERROR" -Cause "ELEVATION_START_OHNE_PROZESS" -ExitCode $ExitCodeElevationFailed -Message "Start-Process lieferte kein Prozessobjekt." -Candidate "PowerShell als Administrator manuell starten"
