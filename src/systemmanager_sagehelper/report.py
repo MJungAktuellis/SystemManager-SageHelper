@@ -141,6 +141,23 @@ def _baue_massnahmen(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
     return _render_bullet_liste(massnahmen, limit=200)
 
 
+def _baue_kundenblatt(kunde: str, umgebung: str, ergebnisse: list[AnalyseErgebnis]) -> list[str]:
+    """Erstellt einen festen Kundenblatt-Abschnitt mit Stammdaten und Umfeld."""
+    erster = ergebnisse[0] if ergebnisse else AnalyseErgebnis(server="-", zeitpunkt=datetime.now())
+    stammdaten = erster.kundenstammdaten
+    return [
+        "## Kundenblatt",
+        f"- Kunde: {kunde}",
+        f"- Umgebung: {umgebung}",
+        f"- Kundenname (Stamm): {stammdaten.kundenname or 'nicht hinterlegt'}",
+        f"- Kundennummer: {stammdaten.kundennummer or 'nicht hinterlegt'}",
+        f"- Ansprechpartner: {stammdaten.ansprechpartner or 'nicht hinterlegt'}",
+        f"- Kontakt E-Mail: {stammdaten.kontakt_email or 'nicht hinterlegt'}",
+        f"- Kontakt Telefon: {stammdaten.kontakt_telefon or 'nicht hinterlegt'}",
+        "",
+    ]
+
+
 def _render_detailblock(ergebnis: AnalyseErgebnis) -> list[str]:
     """Erzeugt den technischen Detailblock je Server über das gemeinsame ViewModel."""
     karte: ServerDetailkarte = baue_server_detailkarte(ergebnis)
@@ -170,8 +187,20 @@ def _render_detailblock(ergebnis: AnalyseErgebnis) -> list[str]:
         "- Logische Kerne: " + (str(hw_details.cpu_logische_kerne) if hw_details.cpu_logische_kerne is not None else "unbekannt"),
         "- Arbeitsspeicher (GB): " + (str(hw_details.arbeitsspeicher_gb) if hw_details.arbeitsspeicher_gb is not None else "unbekannt"),
         "",
-        "### Rollenprüfung",
+        "### Serverkarte (Netzwerkidentität)",
+        f"- Hostname: {karte.netzwerkidentitaet.hostname or 'unbekannt'}",
+        f"- FQDN: {karte.netzwerkidentitaet.fqdn or 'unbekannt'}",
+        f"- Domain: {karte.netzwerkidentitaet.domain or 'unbekannt'}",
+        "- IP-Liste: " + (", ".join(karte.netzwerkidentitaet.ip_adressen) if karte.netzwerkidentitaet.ip_adressen else "keine"),
+        "",
+        "### Technische Tabellen",
     ]
+    zeilen.extend(_render_tabelle(["CPU-Kerne", "CPU-Threads", "CPU-MHz"], [[
+        str(karte.cpu_details.physische_kerne or "unbekannt"),
+        str(karte.cpu_details.logische_threads or "unbekannt"),
+        str(karte.cpu_details.takt_mhz or "unbekannt"),
+    ]]))
+    zeilen.extend(["", "### Rollenprüfung"])
     for check in karte.rollen_checks:
         zeilen.append(f"- {check.rolle}: {'erkannt' if check.erkannt else 'nicht erkannt'} | {' | '.join(check.details)}")
 
@@ -197,6 +226,21 @@ def _render_detailblock(ergebnis: AnalyseErgebnis) -> list[str]:
 
     zeilen.extend(["", "### Installierte Anwendungen (Auszug)"])
     zeilen.extend(_render_bullet_liste(ergebnis.installierte_anwendungen))
+
+    zeilen.extend(["", "### .NET-Versionen"])
+    zeilen.extend(_render_bullet_liste([f"{v.produkt} {v.version}" for v in karte.dotnet_versionen]))
+
+    zeilen.extend(["", "### Firewall-Regeln (gruppiert)"])
+    zeilen.append(f"- Eingehend TCP: {len(karte.firewall_regeln.eingehend_tcp)}")
+    zeilen.append(f"- Eingehend UDP: {len(karte.firewall_regeln.eingehend_udp)}")
+    zeilen.append(f"- Ausgehend TCP: {len(karte.firewall_regeln.ausgehend_tcp)}")
+    zeilen.append(f"- Ausgehend UDP: {len(karte.firewall_regeln.ausgehend_udp)}")
+
+    zeilen.extend(["", "### Sage Lizenz-/Versionsdetails"])
+    zeilen.append(f"- Produkt: {karte.sage_lizenz.produkt or 'nicht erkannt'}")
+    zeilen.append(f"- Version: {karte.sage_lizenz.version or 'nicht erkannt'}")
+    zeilen.append(f"- Build: {karte.sage_lizenz.build or 'nicht erkannt'}")
+    zeilen.append(f"- Lizenztyp: {karte.sage_lizenz.lizenztyp or 'nicht hinterlegt'}")
 
     if karte.freitext_hinweise:
         zeilen.extend(["", "### Hinweise"])
@@ -236,6 +280,7 @@ def render_markdown(
         f"- Zielgruppen: {ZIELGRUPPE_ADMIN}, {ZIELGRUPPE_SUPPORT}, {ZIELGRUPPE_DRITTUSER}",
         f"- Template-Version: {template_version}",
         "",
+        *_baue_kundenblatt(kunde, umgebung, ergebnisse),
         f"## {BERICHT_ZUSAMMENFASSUNG}",
         *_baue_executive_summary(ergebnisse),
         "",
