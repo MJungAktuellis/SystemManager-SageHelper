@@ -24,6 +24,7 @@ from systemmanager_sagehelper.gui_state import GUIStateStore
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 from systemmanager_sagehelper.models import AnalyseErgebnis, DiscoveryErgebnis, ServerDetailkarte, ServerZiel
 from systemmanager_sagehelper.config import STANDARD_PORTS
+from systemmanager_sagehelper.discovery_rollen import ableite_rollen_aus_discoveryindikatoren
 from systemmanager_sagehelper.report import render_markdown
 from systemmanager_sagehelper.viewmodel import baue_server_detailkarte, baue_server_detailkarten
 from systemmanager_sagehelper.targeting import normalisiere_servernamen, rollen_aus_bool_flags
@@ -52,6 +53,8 @@ class ServerTabellenZeile:
     namensquelle: str = ""
     erreichbarkeitsstatus: str = ""
     vertrauensgrad: float = 0.0
+    erreichbar: bool = False
+    rollenhinweise: tuple[str, ...] = ()
     manuelle_anmerkung: str = ""
 
     def rollen(self) -> list[str]:
@@ -571,42 +574,12 @@ class DiscoveryTrefferDialog:
 
 
 def _rollen_aus_discovery_treffer(treffer: DiscoveryTabellenTreffer) -> list[str]:
-    """Leitet Rollenvorschläge über gewichtete Heuristiken aus Discovery-Indikatoren ab."""
-    punktestand = {"SQL": 0, "APP": 0, "CTX": 0, "DC": 0}
-
-    # Port-/Dienstgewichtung: SQL bleibt auch ohne offenen 1433 möglich.
-    erkannte_porttokens = {
-        token.strip() for token in treffer.dienste.split(",") if token.strip().isdigit()
-    }
-    if erkannte_porttokens & {"1433", "1434", "4022"}:
-        punktestand["SQL"] += 4
-    if "3389" in erkannte_porttokens:
-        punktestand["CTX"] += 4
-    if erkannte_porttokens & {"53", "88", "389", "445", "464", "636", "3268", "3269"}:
-        punktestand["DC"] += 4
-
-    # Analysevorbefunde aus Discovery (z. B. Remote-Inventar, SQL-Dienste, Instanzen).
-    for hinweis in treffer.rollenhinweise:
-        lower = hinweis.lower()
-        if lower.startswith("sql_"):
-            punktestand["SQL"] += 3
-        if lower.startswith("dc_"):
-            punktestand["DC"] += 3
-        if "termservice" in lower or "sessionenv" in lower:
-            punktestand["CTX"] += 2
-        if any(token in lower for token in ("netlogon", "kdc", "ldap", "kerberos", "dns")):
-            punktestand["DC"] += 2
-
-    # Restliche erreichbare Systeme werden als APP gewichtet, aber nicht blind bevorzugt.
-    if treffer.erreichbar:
-        punktestand["APP"] += 1
-
-    rollen = [rolle for rolle, score in punktestand.items() if score >= 3]
-    if not rollen:
-        # Fallback mit höchstem Score statt starrem APP-Default.
-        beste_rolle = max(punktestand, key=punktestand.get)
-        rollen = [beste_rolle]
-    return rollen
+    """Leitet Rollenvorschläge über die gemeinsame Discovery-Heuristik ab."""
+    return ableite_rollen_aus_discoveryindikatoren(
+        erkannte_dienste=[token.strip() for token in treffer.dienste.split(",") if token.strip()],
+        rollenhinweise=treffer.rollenhinweise,
+        erreichbar=treffer.erreichbar,
+    )
 def _detailzeilen(ergebnis: AnalyseErgebnis) -> list[str]:
     """Liefert einen kompakten Freitext-Überblick als Ergänzung zur Detailkarte."""
     karte = baue_server_detailkarte(ergebnis)
@@ -1208,6 +1181,11 @@ class MehrserverAnalyseGUI:
                     ctx="CTX" in auto_rollen,
                     dc="DC" in auto_rollen,
                     auto_rolle=auto_rolle,
+                    namensquelle=auswahl.namensquelle or "nicht auflösbar",
+                    erreichbarkeitsstatus="erreichbar" if auswahl.erreichbar else "nicht erreichbar",
+                    vertrauensgrad=auswahl.vertrauensgrad,
+                    erreichbar=auswahl.erreichbar,
+                    rollenhinweise=auswahl.rollenhinweise,
                 )
             )
             if len(self._zeilen_nach_id) > vorher:

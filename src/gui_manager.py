@@ -19,6 +19,7 @@ from systemmanager_sagehelper.installation_state import pruefe_installationszust
 from systemmanager_sagehelper.folder_gui import FolderWizardGUI
 from systemmanager_sagehelper.installer_gui import InstallerWizardGUI
 from systemmanager_sagehelper.logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
+from systemmanager_sagehelper.discovery_rollen import ableite_rollen_aus_discoveryindikatoren, formatiere_erreichbarkeitsstatus
 from systemmanager_sagehelper.models import AnalyseErgebnis
 from systemmanager_sagehelper.targeting import normalisiere_servernamen
 from systemmanager_sagehelper.update_strategy import ermittle_update_kontext
@@ -281,22 +282,13 @@ class OnboardingController:
 
         self.server_zeilen = []
         for treffer in ergebnisse:
-            rollen = ["APP"]
-            if "1433" in treffer.erkannte_dienste:
-                rollen = ["SQL"]
-            elif "3389" in treffer.erkannte_dienste:
-                rollen = ["CTX"]
-
-            # Discovery-Metadaten werden vollständig in das Zeilenmodell übernommen,
-            # damit Folge-Schritte (Rollenprüfung, Analyse, Persistenz) konsistente
-            # Informationen zu Hostname/IP, Namensherkunft und Vertrauensstatus haben.
-            erreichbarkeitsstatus = "erreichbar" if treffer.erreichbar else "nicht erreichbar"
-            if treffer.vertrauensgrad >= 0.8:
-                vertrauensklasse = "hoch"
-            elif treffer.vertrauensgrad >= 0.5:
-                vertrauensklasse = "mittel"
-            else:
-                vertrauensklasse = "niedrig"
+            # Die Rollenableitung wird identisch zur Discovery-Hauptmaske ausgeführt,
+            # damit Onboarding und reguläre Erfassung dieselbe Heuristik teilen.
+            rollen = ableite_rollen_aus_discoveryindikatoren(
+                erkannte_dienste=treffer.erkannte_dienste,
+                rollenhinweise=treffer.rollenhinweise,
+                erreichbar=treffer.erreichbar,
+            )
 
             self.server_zeilen.append(
                 ServerTabellenZeile(
@@ -306,12 +298,17 @@ class OnboardingController:
                     ctx="CTX" in rollen,
                     quelle="automatisch erkannt",
                     status="entdeckt",
-                    auto_rolle=rollen[0],
+                    auto_rolle=", ".join(rollen),
                     aufgeloester_hostname=treffer.hostname,
                     ip_adresse=treffer.ip_adresse,
                     namensquelle=treffer.namensquelle or "nicht auflösbar",
-                    erreichbarkeitsstatus=f"{erreichbarkeitsstatus} ({vertrauensklasse})",
+                    erreichbarkeitsstatus=formatiere_erreichbarkeitsstatus(
+                        erreichbar=treffer.erreichbar,
+                        vertrauensgrad=treffer.vertrauensgrad,
+                    ),
                     vertrauensgrad=treffer.vertrauensgrad,
+                    erreichbar=treffer.erreichbar,
+                    rollenhinweise=tuple(treffer.rollenhinweise),
                 )
             )
 
