@@ -23,6 +23,7 @@ from .models import (
     BetriebssystemDetails,
     CPUDetails,
     CTXRollenDetails,
+    DCRollenDetails,
     DienstInfo,
     DotNetVersion,
     FirewallRegel,
@@ -50,6 +51,14 @@ _PORT_ROLLEN_MAPPING: dict[int, str] = {
     8080: "APP",
     8443: "APP",
     3389: "CTX",
+    53: "DC",
+    88: "DC",
+    389: "DC",
+    445: "DC",
+    464: "DC",
+    636: "DC",
+    3268: "DC",
+    3269: "DC",
 }
 
 # Zentrales Rollen-Portprofil für Discovery-Signaturen je Serverrolle.
@@ -66,6 +75,21 @@ ROLLEN_PORTPROFILE: dict[str, dict[str, tuple[int, ...] | tuple[str, ...]]] = {
         "ports": (3389,),
         "diensthinweise": ("termservice", "sessionenv", "umrdpservice", "rdp"),
     },
+    "DC": {
+        "ports": (53, 88, 135, 139, 389, 445, 464, 636, 3268, 3269),
+        "diensthinweise": (
+            "adws",
+            "dns",
+            "domain controller",
+            "kdc",
+            "kerberos",
+            "ldap",
+            "lsass",
+            "netlogon",
+            "ntds",
+            "active directory",
+        ),
+    },
 }
 
 # Schlüsselwörter für die Erkennung von Sage- und Partneranwendungen.
@@ -74,6 +98,8 @@ _PARTNER_KEYWORDS = ["dms", "crm", "edi", "shop", "bi", "isv"]
 _MANAGEMENT_STUDIO_KEYWORDS = ["sql server management studio", "ssms"]
 _SQL_SERVICE_KEYWORDS = ("mssql", "sql server", "sqlserveragent")
 _CTX_SERVICE_KEYWORDS = ("termservice", "sessionenv", "umrdpservice", "rdp")
+_DC_SERVICE_KEYWORDS = ("adws", "dns", "kdc", "kerberos", "ldap", "netlogon", "ntds")
+_DC_PORTS = {53, 88, 135, 139, 389, 445, 464, 636, 3268, 3269}
 
 # Präfixe zur strukturierten Fehlerklassifikation für Remote-Ziele.
 _HINWEIS_DNS = "[DNS]"
@@ -733,12 +759,13 @@ def _pruefe_rollen(ergebnis: AnalyseErgebnis) -> None:
         f"{eintrag.name} {eintrag.version}".strip() if eintrag.version else eintrag.name
         for eintrag in ergebnis.software
     ]
+    offene_ports = {port.port for port in ergebnis.ports if port.offen}
 
     sql_dienste = [dienst.name for dienst in ergebnis.dienste if any(k in dienst.name.lower() for k in _SQL_SERVICE_KEYWORDS)]
     sql_instanzen = [instanz.instanzname for instanz in ergebnis.rollen_details.sql.instanz_details] or [
         name for name in software_namen if "sql server" in name.lower()
     ]
-    sql_erkannt = bool(sql_dienste or sql_instanzen or any(p.offen and p.port == 1433 for p in ergebnis.ports))
+    sql_erkannt = bool(sql_dienste or sql_instanzen or 1433 in offene_ports)
 
     sage_eintraege = [eintrag for eintrag in ergebnis.software if any(k in eintrag.name.lower() for k in _SAGE_KEYWORDS)]
     sage_pfade = _normalisiere_liste_ohne_duplikate(
@@ -751,13 +778,25 @@ def _pruefe_rollen(ergebnis: AnalyseErgebnis) -> None:
 
     ctx_dienste = [dienst.name for dienst in ergebnis.dienste if any(k in dienst.name.lower() for k in _CTX_SERVICE_KEYWORDS)]
     ctx_indikatoren: list[str] = []
-    if any(port.offen and port.port == 3389 for port in ergebnis.ports):
+    if 3389 in offene_ports:
         ctx_indikatoren.append("RDP-Port 3389 erreichbar")
     if any("termservice" in name for name in dienstnamen):
         ctx_indikatoren.append("TermService erkannt")
     if any("sessionenv" in name for name in dienstnamen):
         ctx_indikatoren.append("SessionEnv erkannt")
     ctx_erkannt = bool(ctx_dienste or ctx_indikatoren)
+
+    dc_dienste = [dienst.name for dienst in ergebnis.dienste if any(k in dienst.name.lower() for k in _DC_SERVICE_KEYWORDS)]
+    dc_indikatoren: list[str] = []
+    for port in sorted(offene_ports & _DC_PORTS):
+        dc_indikatoren.append(f"DC-Port {port} erreichbar")
+    if any("netlogon" in name for name in dienstnamen):
+        dc_indikatoren.append("Netlogon erkannt")
+    if any("kdc" in name for name in dienstnamen):
+        dc_indikatoren.append("KDC erkannt")
+    if any("dns" in name for name in dienstnamen):
+        dc_indikatoren.append("DNS-Dienst erkannt")
+    dc_erkannt = bool(dc_dienste or len(offene_ports & _DC_PORTS) >= 2)
 
     ergebnis.rollen_details = RollenDetails(
         sql=SQLRollenDetails(
@@ -768,6 +807,7 @@ def _pruefe_rollen(ergebnis: AnalyseErgebnis) -> None:
         ),
         app=APPRollenDetails(erkannt=app_erkannt, sage_pfade=sage_pfade, sage_versionen=sage_versionen),
         ctx=CTXRollenDetails(erkannt=ctx_erkannt, terminaldienste=ctx_dienste, session_indikatoren=ctx_indikatoren),
+        dc=DCRollenDetails(erkannt=dc_erkannt, ad_dienste=dc_dienste, netzwerk_indikatoren=dc_indikatoren),
     )
 
     ergebnis.sage_version, ergebnis.partner_anwendungen, ergebnis.management_studio_version = _klassifiziere_anwendungen(
@@ -872,6 +912,8 @@ def analysiere_server(
         erkannte_rollen.add("APP")
     if ergebnis.rollen_details.ctx.erkannt:
         erkannte_rollen.add("CTX")
+    if ergebnis.rollen_details.dc.erkannt:
+        erkannte_rollen.add("DC")
     if not ergebnis.rollen and erkannte_rollen:
         ergebnis.rollen = sorted(erkannte_rollen)
 
@@ -1152,6 +1194,10 @@ def _rollenhinweise_aus_discovery(
     if remote_daten is not None:
         if remote_daten.sql_instanzen:
             hinweise.extend(f"sql_instanz:{instanz.instanzname.lower()}" for instanz in remote_daten.sql_instanzen)
+
+        # Domäneninformationen sind ein starker Hinweis auf AD-gebundene Rollen.
+        if remote_daten.netzwerkidentitaet.domain:
+            hinweise.append(f"dc_remote_domain:{remote_daten.netzwerkidentitaet.domain.lower()}")
 
         for dienst in remote_daten.dienste:
             dienstname = dienst.name.lower()

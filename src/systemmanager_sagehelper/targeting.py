@@ -57,7 +57,7 @@ def baue_serverziele(servernamen: list[str], deklarationen: dict[str, list[str]]
     return ziele
 
 
-def rollen_aus_bool_flags(*, sql: bool, app: bool, ctx: bool) -> list[str]:
+def rollen_aus_bool_flags(*, sql: bool, app: bool, ctx: bool, dc: bool = False) -> list[str]:
     """Leitet Rollenliste aus booleschen GUI-Flags ab."""
     rollen: list[str] = []
     if sql:
@@ -66,4 +66,6 @@ def rollen_aus_bool_flags(*, sql: bool, app: bool, ctx: bool) -> list[str]:
         rollen.append("APP")
     if ctx:
         rollen.append("CTX")
+    if dc:
+        rollen.append("DC")
     return rollen

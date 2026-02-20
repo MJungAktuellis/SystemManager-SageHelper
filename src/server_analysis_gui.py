@@ -42,6 +42,7 @@ class ServerTabellenZeile:
     sql: bool = False
     app: bool = True
     ctx: bool = False
+    dc: bool = False
     quelle: str = "manuell"
     status: str = "neu"
     auto_rolle: str | None = None
@@ -55,17 +56,18 @@ class ServerTabellenZeile:
 
     def rollen(self) -> list[str]:
         """Leitet die Rollenliste aus den gesetzten Checkboxen ab."""
-        return rollen_aus_bool_flags(sql=self.sql, app=self.app, ctx=self.ctx)
+        return rollen_aus_bool_flags(sql=self.sql, app=self.app, ctx=self.ctx, dc=self.dc)
 
 
 _SPALTE_SERVERNAME = "servername"
 _SPALTE_SQL = "sql"
 _SPALTE_APP = "app"
 _SPALTE_CTX = "ctx"
+_SPALTE_DC = "dc"
 _SPALTE_QUELLE = "quelle"
 _SPALTE_STATUS = "status"
-_SPALTEN = (_SPALTE_SERVERNAME, _SPALTE_SQL, _SPALTE_APP, _SPALTE_CTX, _SPALTE_QUELLE, _SPALTE_STATUS)
-_ROLLEN_SPALTEN = {_SPALTE_SQL: "sql", _SPALTE_APP: "app", _SPALTE_CTX: "ctx"}
+_SPALTEN = (_SPALTE_SERVERNAME, _SPALTE_SQL, _SPALTE_APP, _SPALTE_CTX, _SPALTE_DC, _SPALTE_QUELLE, _SPALTE_STATUS)
+_ROLLEN_SPALTEN = {_SPALTE_SQL: "sql", _SPALTE_APP: "app", _SPALTE_CTX: "ctx", _SPALTE_DC: "dc"}
 _CHECK_AN = "☑"
 _CHECK_AUS = "☐"
 _KRITISCHE_PORTS = {port.port for port in STANDARD_PORTS}
@@ -93,7 +95,7 @@ def _baue_serverziele(zeilen: list[ServerTabellenZeile]) -> list[ServerZiel]:
                 name=name,
                 rollen=zeile.rollen(),
                 rollenquelle=_rollenquelle_fuer_zeile(zeile),
-                auto_rollen=[zeile.auto_rolle] if zeile.auto_rolle else [],
+                auto_rollen=[rolle.strip() for rolle in zeile.auto_rolle.split(",") if rolle.strip()] if zeile.auto_rolle else [],
                 manuell_ueberschrieben=zeile.manuell_ueberschrieben,
             )
         )
@@ -136,7 +138,7 @@ def _baue_executive_summary(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
     if not ergebnisse:
         return ["Keine Analyseergebnisse vorhanden."]
 
-    rollenverteilung = {"SQL": 0, "APP": 0, "CTX": 0}
+    rollenverteilung = {"SQL": 0, "APP": 0, "CTX": 0, "DC": 0}
     offene_kritische_ports = 0
     warnungen = 0
     hinweise = 0
@@ -152,7 +154,7 @@ def _baue_executive_summary(ergebnisse: list[AnalyseErgebnis]) -> list[str]:
 
     return [
         f"Analysierte Server: {len(ergebnisse)}",
-        f"Rollenverteilung: SQL={rollenverteilung['SQL']}, APP={rollenverteilung['APP']}, CTX={rollenverteilung['CTX']}",
+        f"Rollenverteilung: SQL={rollenverteilung['SQL']}, APP={rollenverteilung['APP']}, CTX={rollenverteilung['CTX']}, DC={rollenverteilung['DC']}",
         f"Offene kritische Ports: {offene_kritische_ports}",
         f"Warnungen/Hinweise gesamt: {warnungen} (davon Hinweise: {hinweise})",
     ]
@@ -241,6 +243,11 @@ def _drilldown_knoten(ergebnis: AnalyseErgebnis) -> dict[str, list[str]]:
             "CTX: "
             + ("erkannt" if ergebnis.rollen_details.ctx.erkannt else "nicht erkannt")
             + f" | Session-Indikatoren: {', '.join(ergebnis.rollen_details.ctx.session_indikatoren) or 'keine'}"
+        ),
+        (
+            "DC: "
+            + ("erkannt" if ergebnis.rollen_details.dc.erkannt else "nicht erkannt")
+            + f" | AD-Dienste: {', '.join(ergebnis.rollen_details.dc.ad_dienste) or 'keine'}"
         ),
     ]
     ports = [
@@ -565,21 +572,30 @@ class DiscoveryTrefferDialog:
 
 def _rollen_aus_discovery_treffer(treffer: DiscoveryTabellenTreffer) -> list[str]:
     """Leitet Rollenvorschläge über gewichtete Heuristiken aus Discovery-Indikatoren ab."""
-    punktestand = {"SQL": 0, "APP": 0, "CTX": 0}
+    punktestand = {"SQL": 0, "APP": 0, "CTX": 0, "DC": 0}
 
     # Port-/Dienstgewichtung: SQL bleibt auch ohne offenen 1433 möglich.
-    if any(port in treffer.dienste for port in ("1433", "1434", "4022")):
+    erkannte_porttokens = {
+        token.strip() for token in treffer.dienste.split(",") if token.strip().isdigit()
+    }
+    if erkannte_porttokens & {"1433", "1434", "4022"}:
         punktestand["SQL"] += 4
-    if "3389" in treffer.dienste:
+    if "3389" in erkannte_porttokens:
         punktestand["CTX"] += 4
+    if erkannte_porttokens & {"53", "88", "389", "445", "464", "636", "3268", "3269"}:
+        punktestand["DC"] += 4
 
     # Analysevorbefunde aus Discovery (z. B. Remote-Inventar, SQL-Dienste, Instanzen).
     for hinweis in treffer.rollenhinweise:
         lower = hinweis.lower()
         if lower.startswith("sql_"):
             punktestand["SQL"] += 3
+        if lower.startswith("dc_"):
+            punktestand["DC"] += 3
         if "termservice" in lower or "sessionenv" in lower:
             punktestand["CTX"] += 2
+        if any(token in lower for token in ("netlogon", "kdc", "ldap", "kerberos", "dns")):
+            punktestand["DC"] += 2
 
     # Restliche erreichbare Systeme werden als APP gewichtet, aber nicht blind bevorzugt.
     if treffer.erreichbar:
@@ -680,10 +696,12 @@ class MehrserverAnalyseGUI:
         self.var_sql = tk.BooleanVar(value=False)
         self.var_app = tk.BooleanVar(value=True)
         self.var_ctx = tk.BooleanVar(value=False)
+        self.var_dc = tk.BooleanVar(value=False)
 
         ttk.Checkbutton(form_frame, text="SQL", variable=self.var_sql).grid(row=0, column=2, padx=4)
         ttk.Checkbutton(form_frame, text="APP", variable=self.var_app).grid(row=0, column=3, padx=4)
         ttk.Checkbutton(form_frame, text="CTX", variable=self.var_ctx).grid(row=0, column=4, padx=4)
+        ttk.Checkbutton(form_frame, text="DC", variable=self.var_dc).grid(row=0, column=5, padx=4)
 
         self.btn_hinzufuegen = ttk.Button(
             form_frame,
@@ -692,7 +710,7 @@ class MehrserverAnalyseGUI:
             command=self.server_manuell_hinzufuegen,
             state="disabled",
         )
-        self.btn_hinzufuegen.grid(row=0, column=5, padx=8)
+        self.btn_hinzufuegen.grid(row=0, column=6, padx=8)
 
         ttk.Label(form_frame, text="Discovery-Ranges (eine Zeile pro Segment):").grid(row=1, column=0, sticky="nw", padx=8, pady=(2, 4))
         self.text_discovery_ranges = tk.Text(form_frame, width=45, height=4, wrap="none")
@@ -747,6 +765,7 @@ class MehrserverAnalyseGUI:
             _SPALTE_SQL: "SQL",
             _SPALTE_APP: "APP",
             _SPALTE_CTX: "CTX",
+            _SPALTE_DC: "DC",
             _SPALTE_QUELLE: "Quelle",
             _SPALTE_STATUS: "Status",
         }.items():
@@ -756,6 +775,7 @@ class MehrserverAnalyseGUI:
         self.tree.column(_SPALTE_SQL, width=70, anchor="center")
         self.tree.column(_SPALTE_APP, width=70, anchor="center")
         self.tree.column(_SPALTE_CTX, width=70, anchor="center")
+        self.tree.column(_SPALTE_DC, width=70, anchor="center")
         self.tree.column(_SPALTE_QUELLE, width=130)
         self.tree.column(_SPALTE_STATUS, width=180)
 
@@ -979,6 +999,7 @@ class MehrserverAnalyseGUI:
                 _checkbox_wert(zeile.sql),
                 _checkbox_wert(zeile.app),
                 _checkbox_wert(zeile.ctx),
+                _checkbox_wert(zeile.dc),
                 zeile.quelle,
                 zeile.status,
             ),
@@ -1021,6 +1042,7 @@ class MehrserverAnalyseGUI:
                 sql=self.var_sql.get(),
                 app=self.var_app.get(),
                 ctx=self.var_ctx.get(),
+                dc=self.var_dc.get(),
                 quelle="manuell",
                 status="bereit",
             )
@@ -1184,6 +1206,7 @@ class MehrserverAnalyseGUI:
                     sql="SQL" in auto_rollen,
                     app="APP" in auto_rollen,
                     ctx="CTX" in auto_rollen,
+                    dc="DC" in auto_rollen,
                     auto_rolle=auto_rolle,
                 )
             )
