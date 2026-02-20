@@ -1,4 +1,4 @@
-"""Tkinter-basierte Startoberfläche mit Dashboard und geführtem Onboarding."""
+"""Tkinter-basierte Startoberfläche mit Navigation und geführtem Onboarding."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from systemmanager_sagehelper.update_strategy import ermittle_update_kontext
 from systemmanager_sagehelper.texte import (
     STATUS_PREFIX,
 )
-from systemmanager_sagehelper.ui_theme import LAYOUT, baue_card_baustein
+from systemmanager_sagehelper.ui_theme import LAYOUT
 from server_analysis_gui import (
     ServerAnalysePersistenzDaten,
     ServerTabellenZeile,
@@ -1573,16 +1573,27 @@ class SystemManagerGUI:
             show_actions=not self._onboarding_aktiv,
         )
 
+        # Statuswerte pro Modul werden weiterhin zentral gehalten,
+        # damit bestehende Persistenz-/Statuslogik stabil weiterverwendet werden kann.
         self._karten_status: dict[str, tk.StringVar] = {}
         self._karten_buttons: dict[str, ttk.Button] = {}
         self._karten_titel: dict[str, tk.StringVar] = {}
         self._karten_beschreibung: dict[str, tk.StringVar] = {}
         self._karten_experten_buttons: dict[str, ttk.Button] = {}
         self._karten_technische_details: dict[str, tk.StringVar] = {}
+
         self._serversektion_eingeklappt = tk.BooleanVar(value=False)
         self._serversektion_toggle_text = tk.StringVar(value="▾ Übernommene Server")
         self._serverdetail_vars: dict[str, tk.StringVar] = {}
         self._serveransicht_index: dict[str, dict[str, object]] = {}
+
+        # Navigationszustand für die neue Top-Navigation.
+        self._nav_definitionen: dict[str, dict[str, object]] = {}
+        self._nav_buttons: dict[str, ttk.Button] = {}
+        self._nav_status_labels: dict[str, ttk.Label] = {}
+        self._nav_aktion_rahmen: ttk.Frame | None = None
+        self._nav_auswahl = tk.StringVar(value="installation")
+
         self._dashboard_gebaut = False
         self._onboarding_controller = OnboardingController(self)
 
@@ -1631,102 +1642,202 @@ class SystemManagerGUI:
         self.shell.setze_status("Onboarding abgeschlossen: Dashboard wurde freigeschaltet")
 
     def _baue_dashboard(self) -> None:
-        """Erzeugt die Startseite mit klaren Modul-Cards inklusive Statusanzeige."""
-        dashboard = ttk.LabelFrame(self.shell.content_frame, text="Startübersicht", style="Section.TLabelframe")
-        dashboard.pack(fill="x", pady=(0, LAYOUT.padding_block))
+        """Erzeugt die Hauptansicht mit Top-Navigation und klar getrennten Bereichen."""
+        hauptrahmen = ttk.Frame(self.shell.content_frame)
+        hauptrahmen.pack(fill="both", expand=True)
 
-        ttk.Label(
-            dashboard,
-            text="Module",
-            style="Headline.TLabel",
-        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=LAYOUT.padding_inline, pady=(10, 4))
-        ttk.Label(
-            dashboard,
-            text="Wählen Sie ein Modul und starten Sie die passende Aktion.",
-            style="Subheadline.TLabel",
-        ).grid(row=1, column=0, columnspan=2, sticky="w", padx=LAYOUT.padding_inline, pady=(0, 10))
+        # Zentrales Layoutkonzept: horizontaler Split zwischen Navigation und Primärinhalt.
+        layout = ttk.Panedwindow(hauptrahmen, orient="horizontal")
+        layout.pack(fill="both", expand=True)
 
-        self._baue_serversektion(dashboard, start_zeile=2)
+        navigation = ttk.Frame(layout, padding=(8, 6))
+        primarbereich = ttk.Frame(layout, padding=(8, 6))
+        layout.add(navigation, weight=1)
+        layout.add(primarbereich, weight=4)
 
-        cards = ttk.Frame(dashboard)
-        cards.grid(row=3, column=0, sticky="ew", padx=LAYOUT.padding_inline, pady=(0, 12))
-        cards.columnconfigure((0, 1), weight=1)
-
-        self._baue_modul_card(
-            cards,
-            zeile=0,
-            spalte=0,
-            titel="Installation",
-            beschreibung="Installiert oder aktualisiert alle Kernkomponenten.",
-            command=self.installieren,
-            status_key="installation",
-            button_text="Installation starten",
-        )
-        self._baue_modul_card(
-            cards,
-            zeile=0,
-            spalte=1,
-            titel="Serveranalyse",
-            beschreibung="Öffnet die Mehrserveranalyse mit Rollen- und Discovery-Funktionen.",
-            command=self.serveranalyse,
-            status_key="serveranalyse",
-            button_text="Analyse starten",
-        )
-        self._baue_modul_card(
-            cards,
-            zeile=1,
-            spalte=0,
-            titel="Ordnerverwaltung",
-            beschreibung="Verwaltet Zielordner und Berechtigungsstrukturen.",
-            command=self.ordner_verwalten,
-            status_key="ordnerverwaltung",
-            button_text="Ordner verwalten",
-        )
-        self._baue_modul_card(
-            cards,
-            zeile=1,
-            spalte=1,
-            titel="Dokumentation",
-            beschreibung="Erzeugt Markdown-Dokumentation auf Basis der letzten Ergebnisse.",
-            command=self.dokumentation_generieren,
-            status_key="dokumentation",
-            button_text="Dokumentation erzeugen",
-        )
-
-        self._baue_uebersichtsseite()
+        self._baue_top_navigation(navigation)
+        self._baue_serversektion(primarbereich)
+        self._baue_uebersichtsseite(primarbereich)
         self._aktualisiere_dashboard_status()
+        self._aktualisiere_navigationszustand()
 
-    def _baue_serversektion(self, parent: ttk.LabelFrame, *, start_zeile: int) -> None:
-        """Erstellt eine einklappbare Übersicht über übernommene Server.
+    def _baue_top_navigation(self, parent: ttk.Frame) -> None:
+        """Baut eine zugängliche Toolbar mit Modulwechsel und Aktionsbereich auf."""
+        kopf = ttk.LabelFrame(parent, text="Navigation", style="Section.TLabelframe")
+        kopf.pack(fill="x", pady=(0, 8))
 
-        Die Tabelle kombiniert Analyse-Snapshots (`server_summary`) mit
-        Discovery-Metadaten aus der Modulpersistenz (`serverlisten`).
-        """
-        toggle_button = ttk.Button(parent, textvariable=self._serversektion_toggle_text, command=self._toggle_serversektion)
-        toggle_button.grid(
-            row=start_zeile,
-            column=0,
-            columnspan=2,
-            sticky="ew",
-            padx=LAYOUT.padding_inline,
-            pady=(0, 6),
+        ttk.Label(
+            kopf,
+            text="Hauptmodule",
+            style="Headline.TLabel",
+        ).pack(anchor="w", padx=8, pady=(8, 2))
+        ttk.Label(
+            kopf,
+            text="Mit Alt+1 bis Alt+4 direkt wechseln. Enter startet die Primäraktion.",
+            style="Subheadline.TLabel",
+            wraplength=260,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(0, 8))
+
+        self._nav_definitionen = {
+            "installation": {
+                "titel": "Installation",
+                "aktion": self.installieren,
+                "shortcut": "<Alt-KeyPress-1>",
+                "shortcut_label": "Alt+1",
+            },
+            "serveranalyse": {
+                "titel": "Analyse",
+                "aktion": self.serveranalyse,
+                "shortcut": "<Alt-KeyPress-2>",
+                "shortcut_label": "Alt+2",
+            },
+            "ordnerverwaltung": {
+                "titel": "Ordner",
+                "aktion": self.ordner_verwalten,
+                "shortcut": "<Alt-KeyPress-3>",
+                "shortcut_label": "Alt+3",
+            },
+            "dokumentation": {
+                "titel": "Doku",
+                "aktion": self.dokumentation_generieren,
+                "shortcut": "<Alt-KeyPress-4>",
+                "shortcut_label": "Alt+4",
+            },
+        }
+
+        for key, eintrag in self._nav_definitionen.items():
+            # Die Status-/Metadaten bleiben kompatibel zu bestehenden Dashboard-Tests.
+            self._karten_status[key] = tk.StringVar(value=f"{STATUS_PREFIX} unbekannt")
+            self._karten_titel[key] = tk.StringVar(value=str(eintrag["titel"]))
+            self._karten_beschreibung[key] = tk.StringVar(value="")
+            self._karten_technische_details[key] = tk.StringVar(value="Technische Details: Noch keine Daten vorhanden.")
+
+            zeile = ttk.Frame(kopf)
+            zeile.pack(fill="x", padx=8, pady=3)
+            button = ttk.Button(
+                zeile,
+                text=f"{eintrag['titel']} ({eintrag['shortcut_label']})",
+                command=lambda modul=key: self._waehle_modul(modul, fokus_auf_aktion=True),
+                style="Secondary.TButton",
+                takefocus=True,
+            )
+            button.pack(side="left", fill="x", expand=True)
+            status_label = ttk.Label(zeile, text="Status: unbekannt", width=22, anchor="w")
+            status_label.pack(side="left", padx=(8, 0))
+            self._nav_buttons[key] = button
+            self._nav_status_labels[key] = status_label
+
+        self._nav_aktion_rahmen = ttk.LabelFrame(parent, text="Modulaktionen", style="Section.TLabelframe")
+        self._nav_aktion_rahmen.pack(fill="both", expand=True)
+
+        self._registriere_navigation_shortcuts()
+        self._waehle_modul(self._nav_auswahl.get(), fokus_auf_aktion=False)
+
+    def _registriere_navigation_shortcuts(self) -> None:
+        """Registriert Tastaturkürzel für schnelle und barriereärmere Navigation."""
+        for key, eintrag in self._nav_definitionen.items():
+            shortcut = str(eintrag["shortcut"])
+            self.master.bind_all(shortcut, lambda _event, modul=key: self._handle_shortcut(modul), add="+")
+
+    def _handle_shortcut(self, modul: str) -> str:
+        """Verarbeitet globale Alt-Shortcuts und bricht weitere Eventverarbeitung ab."""
+        self._waehle_modul(modul, fokus_auf_aktion=True)
+        return "break"
+
+    def _waehle_modul(self, modul: str, *, fokus_auf_aktion: bool) -> None:
+        """Wählt ein Modul in der Navigation aus und rendert dessen Aktionen."""
+        if modul not in self._nav_definitionen:
+            return
+
+        self._nav_auswahl.set(modul)
+        self._aktualisiere_navigationszustand()
+        self._baue_modulaktionen(modul, fokus_auf_aktion=fokus_auf_aktion)
+
+    def _aktualisiere_navigationszustand(self) -> None:
+        """Hebt das aktive Modul visuell hervor und synchronisiert Statushinweise."""
+        if not hasattr(self, "_nav_auswahl"):
+            return
+
+        aktuelles_modul = self._nav_auswahl.get()
+        for key, button in getattr(self, "_nav_buttons", {}).items():
+            button.configure(style="Primary.TButton" if key == aktuelles_modul else "Secondary.TButton")
+            status = self._karten_status.get(key)
+            if status and key in getattr(self, "_nav_status_labels", {}):
+                self._nav_status_labels[key].configure(text=status.get())
+
+    def _baue_modulaktionen(self, modul: str, *, fokus_auf_aktion: bool) -> None:
+        """Zeigt modulbezogene Primär-/Sekundäraktionen im Navigationsbereich an."""
+        if self._nav_aktion_rahmen is None:
+            return
+
+        for child in self._nav_aktion_rahmen.winfo_children():
+            child.destroy()
+
+        definition = self._nav_definitionen.get(modul, {})
+        titel = str(definition.get("titel") or modul)
+        ttk.Label(
+            self._nav_aktion_rahmen,
+            text=f"Aktionen: {titel}",
+            style="Headline.TLabel",
+        ).pack(anchor="w", padx=8, pady=(8, 4))
+
+        status_text = self._karten_status.get(modul).get() if modul in self._karten_status else "Status: unbekannt"
+        ttk.Label(
+            self._nav_aktion_rahmen,
+            text=status_text,
+            wraplength=280,
+            justify="left",
+        ).pack(anchor="w", padx=8, pady=(0, 8))
+
+        primaer_button = ttk.Button(
+            self._nav_aktion_rahmen,
+            text=self._ermittle_aktionsbutton_text(modul),
+            command=definition.get("aktion"),
+            takefocus=True,
         )
+        primaer_button.pack(fill="x", padx=8, pady=(0, 6))
+        self._karten_buttons[modul] = primaer_button
 
-        self._serversektion_frame = ttk.Frame(parent)
-        self._serversektion_frame.grid(
-            row=start_zeile + 1,
-            column=0,
-            columnspan=2,
-            sticky="nsew",
-            padx=LAYOUT.padding_inline,
-            pady=(0, 10),
-        )
+        if modul == "installation":
+            experten_button = ttk.Button(
+                self._nav_aktion_rahmen,
+                text="Vollinstallation (Expertenmodus)",
+                command=lambda: self.installieren(expertenmodus=True),
+                takefocus=True,
+            )
+            experten_button.pack(fill="x", padx=8, pady=(0, 6))
+            self._karten_experten_buttons["installation"] = experten_button
+
+        if fokus_auf_aktion:
+            primaer_button.focus_set()
+
+    @staticmethod
+    def _ermittle_aktionsbutton_text(modul: str) -> str:
+        """Liefert sprechende Beschriftungen für modulbezogene Primäraktionen."""
+        return {
+            "installation": "Installation starten",
+            "serveranalyse": "Analyse starten",
+            "ordnerverwaltung": "Ordner verwalten",
+            "dokumentation": "Dokumentation erzeugen",
+        }.get(modul, "Aktion ausführen")
+
+    def _baue_serversektion(self, parent: ttk.Frame) -> None:
+        """Erstellt den Primärbereich „Übernommene Server“ inklusive Detailpanel."""
+        panel = ttk.LabelFrame(parent, text="Übernommene Server", style="Section.TLabelframe")
+        panel.pack(fill="both", expand=True, pady=(0, LAYOUT.padding_block))
+
+        toggle_button = ttk.Button(panel, textvariable=self._serversektion_toggle_text, command=self._toggle_serversektion)
+        toggle_button.pack(fill="x", padx=LAYOUT.padding_inline, pady=(8, 6))
+
+        self._serversektion_frame = ttk.Frame(panel)
+        self._serversektion_frame.pack(fill="both", expand=True, padx=LAYOUT.padding_inline, pady=(0, 8))
 
         tabellenrahmen = ttk.Frame(self._serversektion_frame)
         tabellenrahmen.pack(fill="x", expand=False)
 
         spalten = ("server", "fqdn", "ip", "reach", "rollen", "quelle", "analyse")
-        self.server_uebersicht = ttk.Treeview(tabellenrahmen, columns=spalten, show="headings", height=6)
+        self.server_uebersicht = ttk.Treeview(tabellenrahmen, columns=spalten, show="headings", height=8)
         self.server_uebersicht.pack(side="left", fill="x", expand=True)
 
         self.server_uebersicht.heading("server", text="Servername")
@@ -1781,10 +1892,10 @@ class SystemManagerGUI:
         ist_eingeklappt = not self._serversektion_eingeklappt.get()
         self._serversektion_eingeklappt.set(ist_eingeklappt)
         if ist_eingeklappt:
-            self._serversektion_frame.grid_remove()
+            self._serversektion_frame.pack_forget()
             self._serversektion_toggle_text.set("▸ Übernommene Server")
         else:
-            self._serversektion_frame.grid()
+            self._serversektion_frame.pack(fill="both", expand=True, padx=LAYOUT.padding_inline, pady=(0, 8))
             self._serversektion_toggle_text.set("▾ Übernommene Server")
 
     def _baue_serveransicht_zeilen(self, module: dict[str, object]) -> list[dict[str, object]]:
@@ -1927,57 +2038,10 @@ class SystemManagerGUI:
             text = fallback if not serverdetails else str(serverdetails.get(schluessel) or fallback)
             self._serverdetail_vars[schluessel].set(text)
 
-    def _baue_modul_card(
-        self,
-        parent: ttk.Frame,
-        *,
-        zeile: int,
-        spalte: int,
-        titel: str,
-        beschreibung: str,
-        command: Callable[[], None],
-        status_key: str,
-        button_text: str,
-    ) -> None:
-        """Erzeugt eine modulare Card mit wiederverwendetem Card-Baustein."""
-        titel_var = tk.StringVar(value=titel)
-        beschreibung_var = tk.StringVar(value=beschreibung)
-        status_var = tk.StringVar(value=f"{STATUS_PREFIX} unbekannt")
-        technische_details_var = tk.StringVar(value="Technische Details: Noch keine Daten vorhanden.")
-
-        self._karten_titel[status_key] = titel_var
-        self._karten_beschreibung[status_key] = beschreibung_var
-        self._karten_status[status_key] = status_var
-        self._karten_technische_details[status_key] = technische_details_var
-
-        sekundaer_text = None
-        sekundaer_aktion = None
-        if status_key == "installation":
-            sekundaer_text = "Vollinstallation (Expertenmodus)"
-            sekundaer_aktion = lambda: self.installieren(expertenmodus=True)
-
-        card_elemente = baue_card_baustein(
-            parent,
-            titel=titel_var,
-            beschreibung=beschreibung_var,
-            status=status_var,
-            primaer_text=button_text,
-            primaer_aktion=command,
-            sekundaer_text=sekundaer_text,
-            sekundaer_aktion=sekundaer_aktion,
-            technische_details=technische_details_var,
-        )
-        card = card_elemente["card"]
-        card.grid(row=zeile, column=spalte, sticky="nsew", padx=6, pady=6)
-
-        self._karten_buttons[status_key] = card_elemente["primaer_button"]  # type: ignore[assignment]
-        if status_key == "installation" and card_elemente["sekundaer_button"] is not None:
-            self._karten_experten_buttons[status_key] = card_elemente["sekundaer_button"]  # type: ignore[assignment]
-
-    def _baue_uebersichtsseite(self) -> None:
+    def _baue_uebersichtsseite(self, parent: ttk.Frame) -> None:
         """Stellt je Modul Kerninfos und Berichtverweise aus der Persistenz dar."""
         rahmen = ttk.LabelFrame(
-            self.shell.content_frame,
+            parent,
             text="Übersicht: letzte Analyseinformationen",
             style="Section.TLabelframe",
         )
@@ -2021,7 +2085,7 @@ class SystemManagerGUI:
             self.uebersicht.insert("", "end", values=(modulname, infos, berichte))
 
     def _aktualisiere_dashboard_status(self) -> None:
-        """Berechnet den Status je Modul für die Dashboard-Cards."""
+        """Berechnet den Status je Modul für Navigation und Aktionsbereich."""
         module = self.state_store.lade_gesamtzustand().get("modules", {})
         status_texte = {
             "installation": "Noch nicht installiert",
@@ -2077,6 +2141,7 @@ class SystemManagerGUI:
                 )
 
         self._aktualisiere_installationskarte(installationspruefung.installiert, update_kontext.update_erforderlich)
+        self._aktualisiere_navigationszustand()
 
     def _aktualisiere_installationskarte(self, installiert: bool, update_erforderlich: bool) -> None:
         """Aktualisiert den Primärbutton der Installationskarte abhängig vom Zustand.
@@ -2089,9 +2154,6 @@ class SystemManagerGUI:
         karten_beschreibung = getattr(self, "_karten_beschreibung", {})
         karten_experten = getattr(self, "_karten_experten_buttons", {})
         installations_button = karten_buttons.get("installation")
-        if installations_button is None:
-            return
-
         titel_var = karten_titel.get("installation")
         beschreibung_var = karten_beschreibung.get("installation")
 
@@ -2110,7 +2172,8 @@ class SystemManagerGUI:
                     beschreibung_var.set(
                         "Installationszustand ist aktuell. Startet Integritätsprüfung und optionale Wartungsschritte."
                     )
-            installations_button.configure(text="Update / Wartung prüfen")
+            if installations_button is not None:
+                installations_button.configure(text="Update / Wartung prüfen")
             if karten_experten.get("installation") is not None:
                 karten_experten["installation"].configure(state="normal")
         else:
@@ -2120,7 +2183,8 @@ class SystemManagerGUI:
                 beschreibung_var.set(
                     "Installiert alle Kernkomponenten. Danach stehen Analyse-, Ordner- und Doku-Module bereit."
                 )
-            installations_button.configure(text="Installation starten")
+            if installations_button is not None:
+                installations_button.configure(text="Installation starten")
             if karten_experten.get("installation") is not None:
                 karten_experten["installation"].configure(state="disabled")
 
