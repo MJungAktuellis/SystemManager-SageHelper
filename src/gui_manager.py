@@ -5,9 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 import ipaddress
 import os
+import queue
 import re
 import subprocess
 import sys
+import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Callable
@@ -96,6 +99,16 @@ class OnboardingController:
         self._freigeschalteter_schritt_index = 0
         self._discovery_bereiche: list[tuple[str, int, int]] = []
         self._gespeicherter_scanbereich = ""
+        self._worker_thread: threading.Thread | None = None
+        self._abbruch_event: threading.Event | None = None
+        self._fortschritt_var: tk.DoubleVar | None = None
+        self._fortschritt_status_var: tk.StringVar | None = None
+        self._eta_var: tk.StringVar | None = None
+        self._progress_bar: ttk.Progressbar | None = None
+        self._abbruch_button: ttk.Button | None = None
+        self._fortschritt_gesamt = 0
+        self._fortschritt_verarbeitet = 0
+        self._laufzeiten_pro_host: list[float] = []
 
     def starte_wizard(self) -> None:
         """Öffnet den geführten Onboarding-Wizard als modalen Dialog."""
@@ -228,6 +241,7 @@ class OnboardingController:
         )
 
         self._baue_schrittstatus_anzeige(rahmen)
+        self._baue_fortschritt_anzeige(rahmen)
         self._aktualisiere_schritt_buttons()
         try:
             self._ermittle_automatischen_scanbereich()
@@ -241,8 +255,180 @@ class OnboardingController:
         #    ausgerichtet ist und Texte im erwarteten Umbruch dargestellt werden.
         ttk.Label(rahmen, textvariable=self._status_var, wraplength=900, justify="left").pack(anchor="w", pady=(8, 0))
 
+    def _baue_fortschritt_anzeige(self, parent: ttk.Frame) -> None:
+        """Erstellt die Fortschrittsanzeige inklusive ETA und Abbruchfunktion."""
+        self._fortschritt_var = tk.DoubleVar(value=0.0)
+        self._fortschritt_status_var = tk.StringVar(value="Verarbeitet 0/0")
+        self._eta_var = tk.StringVar(value="Restzeit ca. --:--")
+
+        rahmen = ttk.LabelFrame(parent, text="Ausführungsfortschritt", style="Section.TLabelframe")
+        rahmen.pack(fill="x", pady=(0, 8))
+
+        self._progress_bar = ttk.Progressbar(rahmen, variable=self._fortschritt_var, mode="indeterminate", maximum=100)
+        self._progress_bar.pack(fill="x", padx=8, pady=(8, 6))
+        ttk.Label(rahmen, textvariable=self._fortschritt_status_var).pack(anchor="w", padx=8)
+        ttk.Label(rahmen, textvariable=self._eta_var).pack(anchor="w", padx=8, pady=(0, 6))
+
+        self._abbruch_button = ttk.Button(rahmen, text="Aktuellen Lauf abbrechen", command=self._abbruch_anfordern, state="disabled")
+        self._abbruch_button.pack(anchor="e", padx=8, pady=(0, 8))
+
+    def _setze_laufende_ausfuehrung(self, laeuft: bool, *, bestimmbar: bool, gesamt: int = 0) -> None:
+        """Steuert Buttons und Fortschrittsanzeige konsistent während Langläufern."""
+        self._fortschritt_gesamt = max(0, gesamt)
+        self._fortschritt_verarbeitet = 0
+        self._laufzeiten_pro_host.clear()
+
+        if self._progress_bar and self._fortschritt_var and self._fortschritt_status_var and self._eta_var:
+            if laeuft:
+                if bestimmbar and gesamt > 0:
+                    self._progress_bar.configure(mode="determinate", maximum=gesamt)
+                    self._fortschritt_var.set(0)
+                    self._fortschritt_status_var.set(f"Verarbeitet 0/{gesamt}")
+                    self._eta_var.set("Restzeit ca. --:--")
+                else:
+                    self._progress_bar.configure(mode="indeterminate")
+                    self._progress_bar.start(10)
+                    self._fortschritt_status_var.set("Verarbeitet 0/?")
+                    self._eta_var.set("Restzeit ca. --:--")
+            else:
+                self._progress_bar.stop()
+                self._fortschritt_var.set(0)
+                self._fortschritt_status_var.set("Verarbeitet 0/0")
+                self._eta_var.set("Restzeit ca. --:--")
+
+        for button in self._schritt_buttons.values():
+            button.configure(state="disabled" if laeuft else "normal")
+        if not laeuft:
+            self._aktualisiere_schritt_buttons()
+
+        if self._abbruch_button is not None:
+            self._abbruch_button.configure(state="normal" if laeuft else "disabled")
+
+    def _abbruch_anfordern(self) -> None:
+        """Signalisiert dem Hintergrund-Thread einen sauberen Abbruch."""
+        if self._abbruch_event is not None:
+            self._abbruch_event.set()
+            self._setze_status("Abbruch angefordert … laufender Host wird noch sauber beendet.")
+
+    def _aktualisiere_fortschritt(self, verarbeitet: int) -> None:
+        """Aktualisiert Fortschritts- und ETA-Werte auf Basis gleitender Host-Laufzeiten."""
+        self._fortschritt_verarbeitet = max(0, verarbeitet)
+        if not self._fortschritt_status_var or not self._eta_var:
+            return
+        if self._fortschritt_gesamt > 0 and self._fortschritt_var:
+            self._fortschritt_var.set(min(self._fortschritt_verarbeitet, self._fortschritt_gesamt))
+            self._fortschritt_status_var.set(f"Verarbeitet {self._fortschritt_verarbeitet}/{self._fortschritt_gesamt}")
+            rest = max(0, self._fortschritt_gesamt - self._fortschritt_verarbeitet)
+        else:
+            self._fortschritt_status_var.set(f"Verarbeitet {self._fortschritt_verarbeitet}/?")
+            rest = 0
+
+        if self._laufzeiten_pro_host and rest > 0:
+            fenster = self._laufzeiten_pro_host[-5:]
+            durchschnitt = sum(fenster) / len(fenster)
+            eta_sekunden = int(rest * durchschnitt)
+            self._eta_var.set(f"Restzeit ca. {eta_sekunden // 60:02d}:{eta_sekunden % 60:02d}")
+        elif rest == 0 and self._fortschritt_verarbeitet > 0:
+            self._eta_var.set("Restzeit ca. 00:00")
+        else:
+            self._eta_var.set("Restzeit ca. --:--")
+
+    @staticmethod
+    def _klassifiziere_ablaufstatus(*, gesamt: int, erfolgreich: int, fehler: int) -> tuple[str, str]:
+        """Klassifiziert den Abschlusszustand als Erfolg, Teil-Erfolg oder Fehler."""
+        if gesamt <= 0 or erfolgreich == 0:
+            return "fehler", "Fehler"
+        if fehler > 0:
+            return "teil-erfolg", "Teil-Erfolg"
+        return "erfolg", "Erfolg"
+
+    def _starte_hintergrundlauf(
+        self,
+        *,
+        gesamt: int,
+        worker: Callable[[queue.Queue[tuple[str, object]], threading.Event], None],
+        bei_erfolg: Callable[[object], None],
+        bei_fehler: Callable[[Exception], None],
+    ) -> None:
+        """Führt Langläufer in einem Hintergrund-Thread aus und pollt Fortschrittsmeldungen."""
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._setze_status("Es läuft bereits ein Arbeitsschritt. Bitte warten oder abbrechen.")
+            return
+
+        ereignisse: queue.Queue[tuple[str, object]] = queue.Queue()
+        self._abbruch_event = threading.Event()
+        self._setze_laufende_ausfuehrung(True, bestimmbar=gesamt > 0, gesamt=gesamt)
+
+        def _thread_worker() -> None:
+            try:
+                worker(ereignisse, self._abbruch_event or threading.Event())
+            except Exception as exc:  # noqa: BLE001 - Fehler werden im GUI-Thread angezeigt.
+                ereignisse.put(("fehler", exc))
+
+        self._worker_thread = threading.Thread(target=_thread_worker, daemon=True)
+        self._worker_thread.start()
+
+        def _poll() -> None:
+            if not self._window or not self._window.winfo_exists():
+                return
+
+            abschliessen = False
+            while True:
+                try:
+                    typ, daten = ereignisse.get_nowait()
+                except queue.Empty:
+                    break
+
+                if typ == "fortschritt":
+                    payload = daten if isinstance(daten, dict) else {}
+                    self._laufzeiten_pro_host.append(float(payload.get("dauer", 0.0) or 0.0))
+                    self._aktualisiere_fortschritt(int(payload.get("verarbeitet", 0) or 0))
+                elif typ == "abgeschlossen":
+                    self._setze_laufende_ausfuehrung(False, bestimmbar=False)
+                    bei_erfolg(daten)
+                    abschliessen = True
+                elif typ == "fehler":
+                    self._setze_laufende_ausfuehrung(False, bestimmbar=False)
+                    fehler = daten if isinstance(daten, Exception) else RuntimeError(str(daten))
+                    bei_fehler(fehler)
+                    abschliessen = True
+
+            if not abschliessen and self._window and self._window.winfo_exists():
+                self._window.after(120, _poll)
+
+        self._window.after(120, _poll)
+
+    @staticmethod
+    def _uebertrage_discovery_ergebnis_zu_zeile(treffer: object) -> ServerTabellenZeile:
+        """Konvertiert ein Discovery-Ergebnis in das gemeinsame Tabellenzeilenmodell."""
+        rollen = ableite_rollen_aus_discoveryindikatoren(
+            erkannte_dienste=treffer.erkannte_dienste,
+            rollenhinweise=treffer.rollenhinweise,
+            erreichbar=treffer.erreichbar,
+        )
+
+        return ServerTabellenZeile(
+            servername=treffer.hostname,
+            sql="SQL" in rollen,
+            app="APP" in rollen,
+            ctx="CTX" in rollen,
+            quelle="automatisch erkannt",
+            status="entdeckt",
+            auto_rolle=", ".join(rollen),
+            aufgeloester_hostname=treffer.hostname,
+            ip_adresse=treffer.ip_adresse,
+            namensquelle=treffer.namensquelle or "nicht auflösbar",
+            erreichbarkeitsstatus=formatiere_erreichbarkeitsstatus(
+                erreichbar=treffer.erreichbar,
+                vertrauensgrad=treffer.vertrauensgrad,
+            ),
+            vertrauensgrad=treffer.vertrauensgrad,
+            erreichbar=treffer.erreichbar,
+            rollenhinweise=tuple(treffer.rollenhinweise),
+        )
+
     def schritt_discovery(self) -> None:
-        """Schritt 1: Führt die Discovery durch und befüllt das Tabellenmodell."""
+        """Schritt 1: Führt die Discovery im Hintergrund aus und befüllt das Tabellenmodell."""
         if not self._ist_schritt_freigeschaltet("discovery"):
             return
 
@@ -255,73 +441,72 @@ class OnboardingController:
             self._setze_status(str(exc))
             return
 
+        gesamt_hosts = sum(max(0, ende - start + 1) for _, start, ende in discovery_bereiche)
         self._setze_status("Netzwerkerkennung läuft …")
-        ergebnisse = []
-        try:
-            # Vorhandene Discovery-Pipeline bleibt unverändert nutzbar:
-            # CIDR- oder Kurzformat-Eingaben werden intern auf Basis+Start/Ende gemappt.
+
+        def worker(ereignisse: queue.Queue[tuple[str, object]], abbruch_event: threading.Event) -> None:
+            ergebnisse: list[object] = []
+            verarbeitet = 0
+            fehler = 0
             for basis, start, ende in discovery_bereiche:
-                ergebnisse.extend(
-                    entdecke_server_ergebnisse(
-                        basis=basis,
-                        start=start,
-                        ende=ende,
-                        konfiguration=DiscoveryKonfiguration(),
-                    )
-                )
-        except Exception as exc:  # noqa: BLE001 - Wizard soll robust weiterlaufen.
+                for host in range(start, ende + 1):
+                    if abbruch_event.is_set():
+                        ereignisse.put(("abgeschlossen", {"abgebrochen": True, "ergebnisse": ergebnisse, "verarbeitet": verarbeitet, "fehler": fehler}))
+                        return
+                    startzeit = time.perf_counter()
+                    try:
+                        ergebnisse.extend(
+                            entdecke_server_ergebnisse(
+                                basis=basis,
+                                start=host,
+                                ende=host,
+                                konfiguration=DiscoveryKonfiguration(),
+                            )
+                        )
+                    except Exception:
+                        fehler += 1
+                        logger.exception("Discovery-Hostlauf fehlgeschlagen: %s.%s", basis, host)
+                    verarbeitet += 1
+                    ereignisse.put(("fortschritt", {"verarbeitet": verarbeitet, "dauer": time.perf_counter() - startzeit}))
+            ereignisse.put(("abgeschlossen", {"abgebrochen": False, "ergebnisse": ergebnisse, "verarbeitet": verarbeitet, "fehler": fehler}))
+
+        def erfolg(daten: object) -> None:
+            payload = daten if isinstance(daten, dict) else {}
+            ergebnisse = payload.get("ergebnisse", []) if isinstance(payload.get("ergebnisse", []), list) else []
+            verarbeitet = int(payload.get("verarbeitet", 0) or 0)
+            fehler = int(payload.get("fehler", 0) or 0)
+            abgebrochen = bool(payload.get("abgebrochen", False))
+
+            self.server_zeilen = [self._uebertrage_discovery_ergebnis_zu_zeile(treffer) for treffer in ergebnisse]
+            self._discovery_bereiche = discovery_bereiche
+            self._gespeicherter_scanbereich = gespeicherte_eingabe
+            self.gui.modulzustand["letzte_discovery_range"] = gespeicherte_eingabe
+
+            erfolgreich = max(0, verarbeitet - fehler)
+            status_key, status_label = self._klassifiziere_ablaufstatus(gesamt=verarbeitet, erfolgreich=erfolgreich, fehler=fehler)
+            if abgebrochen:
+                status_key, status_label = "teil-erfolg", "Teil-Erfolg"
+
+            self._markiere_schritt(
+                "discovery",
+                "erfolgreich" if status_key in {"erfolg", "teil-erfolg"} else "fehler",
+                f"{status_label}: {len(self.server_zeilen)} Server erkannt (Fehlerläufe: {fehler}).",
+                "Mit Schritt 2 Rollen prüfen und bei Bedarf anpassen.",
+            )
+            self._setze_status(f"Netzwerkerkennung beendet: {status_label} – verarbeitet {verarbeitet}/{gesamt_hosts}.")
+
+        def fehler(exc: Exception) -> None:
             logger.exception("Netzwerkerkennung im Onboarding fehlgeschlagen")
             self._markiere_schritt(
                 "discovery",
                 "fehler",
-                f"Netzwerkerkennung fehlgeschlagen: {exc}",
+                f"Fehler: Netzwerkerkennung fehlgeschlagen: {exc}",
                 "Berechtigungen, Firewall und Netzbereich prüfen.",
             )
             self._setze_status(f"Netzwerkerkennung fehlgeschlagen: {exc}")
-            return
 
-        self.server_zeilen = []
-        for treffer in ergebnisse:
-            # Die Rollenableitung wird identisch zur Discovery-Hauptmaske ausgeführt,
-            # damit Onboarding und reguläre Erfassung dieselbe Heuristik teilen.
-            rollen = ableite_rollen_aus_discoveryindikatoren(
-                erkannte_dienste=treffer.erkannte_dienste,
-                rollenhinweise=treffer.rollenhinweise,
-                erreichbar=treffer.erreichbar,
-            )
+        self._starte_hintergrundlauf(gesamt=gesamt_hosts, worker=worker, bei_erfolg=erfolg, bei_fehler=fehler)
 
-            self.server_zeilen.append(
-                ServerTabellenZeile(
-                    servername=treffer.hostname,
-                    sql="SQL" in rollen,
-                    app="APP" in rollen,
-                    ctx="CTX" in rollen,
-                    quelle="automatisch erkannt",
-                    status="entdeckt",
-                    auto_rolle=", ".join(rollen),
-                    aufgeloester_hostname=treffer.hostname,
-                    ip_adresse=treffer.ip_adresse,
-                    namensquelle=treffer.namensquelle or "nicht auflösbar",
-                    erreichbarkeitsstatus=formatiere_erreichbarkeitsstatus(
-                        erreichbar=treffer.erreichbar,
-                        vertrauensgrad=treffer.vertrauensgrad,
-                    ),
-                    vertrauensgrad=treffer.vertrauensgrad,
-                    erreichbar=treffer.erreichbar,
-                    rollenhinweise=tuple(treffer.rollenhinweise),
-                )
-            )
-
-        self._discovery_bereiche = discovery_bereiche
-        self._gespeicherter_scanbereich = gespeicherte_eingabe
-        self.gui.modulzustand["letzte_discovery_range"] = gespeicherte_eingabe
-        self._markiere_schritt(
-            "discovery",
-            "erfolgreich",
-            f"{len(self.server_zeilen)} Server erkannt.",
-            "Mit Schritt 2 Rollen prüfen und bei Bedarf anpassen.",
-        )
-        self._setze_status(f"Netzwerkerkennung abgeschlossen: {len(self.server_zeilen)} Server übernommen.")
 
     @staticmethod
     def _parse_discovery_eingabe(
@@ -538,7 +723,7 @@ class OnboardingController:
         self._setze_status("Rollenprüfung geöffnet: Mehrfachauswahl und Rollenanpassung verfügbar.")
 
     def schritt_analyse(self) -> None:
-        """Schritt 3: Startet die Analyse auf Basis der bestätigten Rollen."""
+        """Schritt 3: Startet die Analyse in einem Hintergrund-Thread."""
         if not self._ist_schritt_freigeschaltet("analyse"):
             return
         self._setze_aktuellen_schritt("analyse")
@@ -565,31 +750,62 @@ class OnboardingController:
             return
 
         self._setze_status("Analyse läuft …")
-        try:
-            self.analyse_ergebnisse = analysiere_mehrere_server(ziele)
-        except Exception as exc:  # noqa: BLE001 - Wizard zeigt Fehler im UI an.
+
+        def worker(ereignisse: queue.Queue[tuple[str, object]], abbruch_event: threading.Event) -> None:
+            ergebnisse: list[AnalyseErgebnis] = []
+            verarbeitet = 0
+            fehler = 0
+            for ziel in ziele:
+                if abbruch_event.is_set():
+                    ereignisse.put(("abgeschlossen", {"abgebrochen": True, "ergebnisse": ergebnisse, "verarbeitet": verarbeitet, "fehler": fehler}))
+                    return
+                startzeit = time.perf_counter()
+                try:
+                    ergebnisse.extend(analysiere_mehrere_server([ziel]))
+                except Exception:
+                    fehler += 1
+                    logger.exception("Analyse für Server %s fehlgeschlagen", ziel.name)
+                verarbeitet += 1
+                ereignisse.put(("fortschritt", {"verarbeitet": verarbeitet, "dauer": time.perf_counter() - startzeit}))
+            ereignisse.put(("abgeschlossen", {"abgebrochen": False, "ergebnisse": ergebnisse, "verarbeitet": verarbeitet, "fehler": fehler}))
+
+        def erfolg(daten: object) -> None:
+            payload = daten if isinstance(daten, dict) else {}
+            ergebnisse = payload.get("ergebnisse", []) if isinstance(payload.get("ergebnisse", []), list) else []
+            verarbeitet = int(payload.get("verarbeitet", 0) or 0)
+            fehler = int(payload.get("fehler", 0) or 0)
+            abgebrochen = bool(payload.get("abgebrochen", False))
+
+            self.analyse_ergebnisse = ergebnisse
+            _integriere_manuelle_anmerkungen(self.analyse_ergebnisse, self.server_zeilen)
+
+            status_index = {normalisiere_servernamen(e.server): "analysiert" for e in self.analyse_ergebnisse}
+            for zeile in self.server_zeilen:
+                zeile.status = status_index.get(normalisiere_servernamen(zeile.servername), "nicht analysiert")
+
+            if self.analyse_ergebnisse:
+                self._oeffne_bearbeitungsansicht_nach_analyse()
+
+            erfolgreich = max(0, verarbeitet - fehler)
+            status_key, status_label = self._klassifiziere_ablaufstatus(gesamt=verarbeitet, erfolgreich=erfolgreich, fehler=fehler)
+            if abgebrochen:
+                status_key, status_label = "teil-erfolg", "Teil-Erfolg"
+
+            self._markiere_schritt(
+                "analyse",
+                "erfolgreich" if status_key in {"erfolg", "teil-erfolg"} else "fehler",
+                f"{status_label}: {len(self.analyse_ergebnisse)} Server analysiert (Fehlerläufe: {fehler}).",
+                "Mit Schritt 4 Ergebnisse speichern und bestätigen.",
+            )
+            self._setze_status(f"Analyse beendet: {status_label} – verarbeitet {verarbeitet}/{len(ziele)}.")
+
+        def fehler(exc: Exception) -> None:
             logger.exception("Analyse im Onboarding fehlgeschlagen")
-            self._markiere_schritt("analyse", "fehler", f"Analyse fehlgeschlagen: {exc}", "Zielserver-Erreichbarkeit prüfen.")
+            self._markiere_schritt("analyse", "fehler", f"Fehler: Analyse fehlgeschlagen: {exc}", "Zielserver-Erreichbarkeit prüfen.")
             self._setze_status(f"Analyse fehlgeschlagen: {exc}")
-            return
 
-        # Manuelle Ergänzungen werden direkt in die Analyseobjekte integriert,
-        # damit der Zustand konsistent für Persistenz und Reporting bleibt.
-        _integriere_manuelle_anmerkungen(self.analyse_ergebnisse, self.server_zeilen)
+        self._starte_hintergrundlauf(gesamt=len(ziele), worker=worker, bei_erfolg=erfolg, bei_fehler=fehler)
 
-        status_index = {normalisiere_servernamen(e.server): "analysiert" for e in self.analyse_ergebnisse}
-        for zeile in self.server_zeilen:
-            zeile.status = status_index.get(normalisiere_servernamen(zeile.servername), "nicht analysiert")
-
-        self._oeffne_bearbeitungsansicht_nach_analyse()
-
-        self._markiere_schritt(
-            "analyse",
-            "erfolgreich",
-            f"{len(self.analyse_ergebnisse)} Server analysiert.",
-            "Mit Schritt 4 Ergebnisse speichern und bestätigen.",
-        )
-        self._setze_status(f"Analyse abgeschlossen: {len(self.analyse_ergebnisse)} Server analysiert.")
 
     def _oeffne_bearbeitungsansicht_nach_analyse(self) -> None:
         """Bietet nach der Analyse je Server eine gezielte Nachbearbeitung inkl. Freitext an."""
@@ -817,6 +1033,11 @@ class OnboardingController:
 
     def _abbrechen(self) -> None:
         """Bricht das Onboarding kontrolliert mit expliziter Benutzerbestätigung ab."""
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._abbruch_anfordern()
+            self._setze_status("Onboarding kann erst geschlossen werden, wenn der laufende Schritt beendet ist.")
+            return
+
         if not messagebox.askyesno(
             "Onboarding wirklich abbrechen?",
             (
