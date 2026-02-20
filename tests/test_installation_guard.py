@@ -10,6 +10,7 @@ import folder_manager
 import gui_manager
 import server_analysis_gui
 from systemmanager_sagehelper.installation_state import InstallationsPruefung, verarbeite_installations_guard
+from systemmanager_sagehelper.models import DiscoveryErgebnis
 
 
 def test_guard_akzeptiert_installierte_umgebung_ohne_nebenwirkungen() -> None:
@@ -386,3 +387,78 @@ def test_erststart_haelt_dashboard_gesperrt_bis_onboarding_abschluss() -> None:
     gui._baue_dashboard.assert_not_called()
     assert gui._dashboard_gebaut is False
     gui.master.after.assert_called_once()
+
+
+def test_onboarding_discovery_harmonisiert_rollenableitung_und_metadaten(monkeypatch) -> None:
+    """Onboarding soll dieselbe Discovery-Heuristik wie die Haupt-GUI nutzen."""
+
+    treffer = [
+        DiscoveryErgebnis(
+            hostname="srv-sql",
+            ip_adresse="10.0.0.10",
+            erreichbar=True,
+            erkannte_dienste=["1433"],
+            vertrauensgrad=0.91,
+            rollenhinweise=["sql_instanz:mssqlserver"],
+            namensquelle="dns",
+        ),
+        DiscoveryErgebnis(
+            hostname="srv-app",
+            ip_adresse="10.0.0.11",
+            erreichbar=True,
+            erkannte_dienste=["5985"],
+            vertrauensgrad=0.66,
+            rollenhinweise=["app_portsignatur"],
+            namensquelle="ad",
+        ),
+        DiscoveryErgebnis(
+            hostname="srv-ctx",
+            ip_adresse="10.0.0.12",
+            erreichbar=True,
+            erkannte_dienste=["3389"],
+            vertrauensgrad=0.82,
+            rollenhinweise=["ctx_remote_dienst:termservice"],
+            namensquelle="reverse_dns",
+        ),
+        DiscoveryErgebnis(
+            hostname="srv-dc",
+            ip_adresse="10.0.0.13",
+            erreichbar=True,
+            erkannte_dienste=["389"],
+            vertrauensgrad=0.88,
+            rollenhinweise=["dc_remote_dienst:netlogon"],
+            namensquelle="dns",
+        ),
+        DiscoveryErgebnis(
+            hostname="srv-mix",
+            ip_adresse="10.0.0.14",
+            erreichbar=False,
+            erkannte_dienste=["3389"],
+            vertrauensgrad=0.41,
+            rollenhinweise=["sql_remote_dienst:mssqlserver", "dc_remote_dienst:netlogon"],
+            namensquelle=None,
+        ),
+    ]
+
+    monkeypatch.setattr(gui_manager, "entdecke_server_ergebnisse", lambda **_kwargs: treffer)
+
+    controller = object.__new__(gui_manager.OnboardingController)
+    controller.server_zeilen = []
+    controller.gui = SimpleNamespace(modulzustand={})
+    controller._ist_schritt_freigeschaltet = lambda _schritt: True
+    controller._setze_aktuellen_schritt = lambda _schritt: None
+    controller._ermittle_discovery_bereiche_fuer_schritt_1 = lambda: ([("10.0.0", 1, 20)], "10.0.0.1-20")
+    controller._setze_status = lambda _text: None
+    controller._markiere_schritt = lambda *args, **kwargs: None
+
+    controller.schritt_discovery()
+
+    assert [zeile.servername for zeile in controller.server_zeilen] == ["srv-sql", "srv-app", "srv-ctx", "srv-dc", "srv-mix"]
+    assert [zeile.auto_rolle for zeile in controller.server_zeilen] == ["SQL", "APP", "CTX", "DC", "SQL, CTX, DC"]
+    assert controller.server_zeilen[0].namensquelle == "dns"
+    assert controller.server_zeilen[4].namensquelle == "nicht auflösbar"
+    assert controller.server_zeilen[0].erreichbarkeitsstatus == "erreichbar (hoch)"
+    assert controller.server_zeilen[1].erreichbarkeitsstatus == "erreichbar (mittel)"
+    assert controller.server_zeilen[4].erreichbarkeitsstatus == "nicht erreichbar (niedrig)"
+    assert controller.server_zeilen[4].rollenhinweise == ("sql_remote_dienst:mssqlserver", "dc_remote_dienst:netlogon")
+    assert controller.server_zeilen[4].erreichbar is False
