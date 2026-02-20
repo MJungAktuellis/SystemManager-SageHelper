@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from .models import AnalyseErgebnis, PortDienstEintrag, RollenCheckEintrag, ServerDetailkarte
+from .models import (
+    AnalyseErgebnis,
+    PortDienstEintrag,
+    RollenCheckEintrag,
+    ServerDetailkarte,
+)
 
 
 def baue_server_detailkarte(ergebnis: AnalyseErgebnis) -> ServerDetailkarte:
@@ -77,6 +82,12 @@ def baue_server_detailkarte(ergebnis: AnalyseErgebnis) -> ServerDetailkarte:
         software=software,
         empfehlungen=empfehlungen,
         freitext_hinweise=list(ergebnis.hinweise),
+        kundenstammdaten=ergebnis.kundenstammdaten,
+        netzwerkidentitaet=ergebnis.netzwerkidentitaet,
+        cpu_details=ergebnis.cpu_details,
+        dotnet_versionen=list(ergebnis.dotnet_versionen),
+        firewall_regeln=ergebnis.firewall_regeln,
+        sage_lizenz=ergebnis.sage_lizenz,
     )
 
 

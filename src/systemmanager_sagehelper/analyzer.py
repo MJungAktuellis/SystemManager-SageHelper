@@ -20,14 +20,20 @@ from .models import (
     APPRollenDetails,
     AnalyseErgebnis,
     BetriebssystemDetails,
+    CPUDetails,
     CTXRollenDetails,
     DienstInfo,
+    DotNetVersion,
+    FirewallRegel,
+    FirewallRegelsatz,
     HardwareDetails,
+    Netzwerkidentitaet,
     PortStatus,
     RollenDetails,
     SQLDatenpfadInfo,
     SQLInstanzInfo,
     SQLRollenDetails,
+    SageLizenzDetails,
     ServerZiel,
     SoftwareInfo,
 )
@@ -131,6 +137,11 @@ class RemoteSystemdaten:
 
     betriebssystem: BetriebssystemDetails = field(default_factory=BetriebssystemDetails)
     hardware: HardwareDetails = field(default_factory=HardwareDetails)
+    netzwerkidentitaet: Netzwerkidentitaet = field(default_factory=Netzwerkidentitaet)
+    cpu_details: CPUDetails = field(default_factory=CPUDetails)
+    dotnet_versionen: list[DotNetVersion] = field(default_factory=list)
+    firewall_regeln: FirewallRegelsatz = field(default_factory=FirewallRegelsatz)
+    sage_lizenz: SageLizenzDetails = field(default_factory=SageLizenzDetails)
     dienste: list[DienstInfo] = field(default_factory=list)
     software: list[SoftwareInfo] = field(default_factory=list)
     sql_instanzen: list[SQLInstanzInfo] = field(default_factory=list)
@@ -196,9 +207,35 @@ class WinRMAdapter:
 $ErrorActionPreference = 'Stop'
 $remoteScript = {
     $os = Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, OSArchitecture
-    $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfLogicalProcessors
+    $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfLogicalProcessors, NumberOfCores, MaxClockSpeed
 
-    $ramBytes = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
+    $cs = Get-CimInstance Win32_ComputerSystem
+    $ramBytes = $cs.TotalPhysicalMemory
+    $netzwerk = [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME)
+
+    $dotnetVersionen = @()
+    $dotnetRelease = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full' -ErrorAction SilentlyContinue).Release
+    if ($dotnetRelease) {
+        $dotnetVersionen += [pscustomobject]@{ Produkt='NET Framework 4.x'; Version=[string]$dotnetRelease; Quelle='Registry' }
+    }
+    $dotnetVersionen += Get-ChildItem 'HKLM:\SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.NETCore.App' -ErrorAction SilentlyContinue |
+        Select-Object @{N='Produkt';E={'NET Runtime'}}, @{N='Version';E={$_.PSChildName}}, @{N='Quelle';E={'Registry'}}
+
+    $firewallRegeln = Get-NetFirewallRule -ErrorAction SilentlyContinue |
+        Where-Object { $_.Enabled -eq 'True' -and $_.Direction -in @('Inbound','Outbound') } |
+        ForEach-Object {
+            $regel = $_
+            $portFilter = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $regel -ErrorAction SilentlyContinue | Select-Object -First 1
+            [pscustomobject]@{
+                Name = [string]$regel.DisplayName
+                Richtung = [string]$regel.Direction
+                Protokoll = [string]$portFilter.Protocol
+                Aktion = [string]$regel.Action
+                Port = [string]$portFilter.LocalPort
+                Aktiviert = $regel.Enabled -eq 'True'
+            }
+        }
+
     $software = @()
     foreach ($root in @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
@@ -209,6 +246,15 @@ $remoteScript = {
                 Where-Object { $_.DisplayName } |
                 Select-Object @{N='Name';E={$_.DisplayName}}, @{N='Version';E={$_.DisplayVersion}}, @{N='Hersteller';E={$_.Publisher}}, @{N='Installationspfad';E={$_.InstallLocation}}
         }
+    }
+
+    $sageLizenz = [pscustomobject]@{
+        Produkt = ($software | Where-Object { $_.Name -match 'Sage' } | Select-Object -First 1 -ExpandProperty Name)
+        Version = ($software | Where-Object { $_.Name -match 'Sage' } | Select-Object -First 1 -ExpandProperty Version)
+        Build = $null
+        Lizenznehmer = $null
+        Lizenzschluessel = $null
+        Lizenztyp = $null
     }
 
     $dienste = Get-Service |
@@ -268,13 +314,27 @@ $remoteScript = {
             CpuLogischeKerne = [int]$cpu.NumberOfLogicalProcessors
             ArbeitsspeicherGB = [math]::Round($ramBytes / 1GB, 2)
         }
+        Netzwerkidentitaet = [pscustomobject]@{
+            Hostname = [string]$env:COMPUTERNAME
+            FQDN = [string]$netzwerk.HostName
+            Domain = [string]$cs.Domain
+            IPAdressen = @($netzwerk.AddressList | ForEach-Object { $_.IPAddressToString })
+        }
+        CPUDetails = [pscustomobject]@{
+            PhysischeKerne = [int]$cpu.NumberOfCores
+            LogischeThreads = [int]$cpu.NumberOfLogicalProcessors
+            TaktMHz = [double]$cpu.MaxClockSpeed
+        }
+        DotNetVersionen = ($dotnetVersionen | Sort-Object Version -Unique)
+        FirewallRegeln = $firewallRegeln
+        SageLizenz = $sageLizenz
         Dienste = $dienste
         Software = ($software | Sort-Object Name -Unique)
         SqlInstanzen = $sqlInstanzen
     }
 }
 Invoke-Command -ComputerName '__SERVER__' -ScriptBlock $remoteScript -ErrorAction Stop |
-    ConvertTo-Json -Depth 6 -Compress
+    ConvertTo-Json -Depth 8 -Compress
 """.replace("__SERVER__", server)
 
         try:
@@ -368,6 +428,9 @@ def _baue_remote_systemdaten_aus_json(daten: dict) -> RemoteSystemdaten:
     """Mapped PowerShell-JSON robust in die internen Dataklassen."""
     os_daten = daten.get("Betriebssystem") if isinstance(daten.get("Betriebssystem"), dict) else {}
     hw_daten = daten.get("Hardware") if isinstance(daten.get("Hardware"), dict) else {}
+    netz_daten = daten.get("Netzwerkidentitaet") if isinstance(daten.get("Netzwerkidentitaet"), dict) else {}
+    cpu_daten = daten.get("CPUDetails") if isinstance(daten.get("CPUDetails"), dict) else {}
+    sage_daten = daten.get("SageLizenz") if isinstance(daten.get("SageLizenz"), dict) else {}
 
     software = [
         SoftwareInfo(
@@ -388,6 +451,29 @@ def _baue_remote_systemdaten_aus_json(daten: dict) -> RemoteSystemdaten:
         )
         for eintrag in _json_liste(daten.get("Dienste"))
         if str(eintrag.get("Name") or "").strip()
+    ]
+
+    firewall_regeln = [
+        FirewallRegel(
+            name=str(eintrag.get("Name") or "").strip(),
+            richtung=str(eintrag.get("Richtung") or "").strip() or "Unbekannt",
+            protokoll=str(eintrag.get("Protokoll") or "").strip() or "Any",
+            aktion=str(eintrag.get("Aktion") or "").strip() or None,
+            port=str(eintrag.get("Port") or "").strip() or None,
+            aktiviert=(str(eintrag.get("Aktiviert")).lower() == "true") if eintrag.get("Aktiviert") is not None else None,
+        )
+        for eintrag in _json_liste(daten.get("FirewallRegeln"))
+        if str(eintrag.get("Name") or "").strip()
+    ]
+
+    dotnet_versionen = [
+        DotNetVersion(
+            produkt=str(eintrag.get("Produkt") or "").strip(),
+            version=str(eintrag.get("Version") or "").strip(),
+            quelle=str(eintrag.get("Quelle") or "").strip() or None,
+        )
+        for eintrag in _json_liste(daten.get("DotNetVersionen"))
+        if str(eintrag.get("Produkt") or "").strip() and str(eintrag.get("Version") or "").strip()
     ]
 
     sql_instanzen: list[SQLInstanzInfo] = []
@@ -416,6 +502,11 @@ def _baue_remote_systemdaten_aus_json(daten: dict) -> RemoteSystemdaten:
             )
         )
 
+    eingehend_tcp = [r for r in firewall_regeln if r.richtung.lower() == "inbound" and r.protokoll.upper() == "TCP"]
+    eingehend_udp = [r for r in firewall_regeln if r.richtung.lower() == "inbound" and r.protokoll.upper() == "UDP"]
+    ausgehend_tcp = [r for r in firewall_regeln if r.richtung.lower() == "outbound" and r.protokoll.upper() == "TCP"]
+    ausgehend_udp = [r for r in firewall_regeln if r.richtung.lower() == "outbound" and r.protokoll.upper() == "UDP"]
+
     return RemoteSystemdaten(
         betriebssystem=BetriebssystemDetails(
             name=str(os_daten.get("Name") or "").strip() or None,
@@ -427,6 +518,32 @@ def _baue_remote_systemdaten_aus_json(daten: dict) -> RemoteSystemdaten:
             cpu_modell=str(hw_daten.get("CpuModell") or "").strip() or None,
             cpu_logische_kerne=int(hw_daten.get("CpuLogischeKerne")) if hw_daten.get("CpuLogischeKerne") is not None else None,
             arbeitsspeicher_gb=float(hw_daten.get("ArbeitsspeicherGB")) if hw_daten.get("ArbeitsspeicherGB") is not None else None,
+        ),
+        netzwerkidentitaet=Netzwerkidentitaet(
+            hostname=str(netz_daten.get("Hostname") or "").strip() or None,
+            fqdn=str(netz_daten.get("FQDN") or "").strip() or None,
+            domain=str(netz_daten.get("Domain") or "").strip() or None,
+            ip_adressen=_normalisiere_liste_ohne_duplikate(str(ip) for ip in netz_daten.get("IPAdressen", []) if str(ip).strip()),
+        ),
+        cpu_details=CPUDetails(
+            physische_kerne=int(cpu_daten.get("PhysischeKerne")) if cpu_daten.get("PhysischeKerne") is not None else None,
+            logische_threads=int(cpu_daten.get("LogischeThreads")) if cpu_daten.get("LogischeThreads") is not None else None,
+            takt_mhz=float(cpu_daten.get("TaktMHz")) if cpu_daten.get("TaktMHz") is not None else None,
+        ),
+        dotnet_versionen=dotnet_versionen,
+        firewall_regeln=FirewallRegelsatz(
+            eingehend_tcp=eingehend_tcp,
+            eingehend_udp=eingehend_udp,
+            ausgehend_tcp=ausgehend_tcp,
+            ausgehend_udp=ausgehend_udp,
+        ),
+        sage_lizenz=SageLizenzDetails(
+            produkt=str(sage_daten.get("Produkt") or "").strip() or None,
+            version=str(sage_daten.get("Version") or "").strip() or None,
+            build=str(sage_daten.get("Build") or "").strip() or None,
+            lizenznehmer=str(sage_daten.get("Lizenznehmer") or "").strip() or None,
+            lizenzschluessel=str(sage_daten.get("Lizenzschluessel") or "").strip() or None,
+            lizenztyp=str(sage_daten.get("Lizenztyp") or "").strip() or None,
         ),
         dienste=dienste,
         software=software,
@@ -498,6 +615,8 @@ def _ermittle_lokale_systeminventar() -> RemoteSystemdaten:
             cpu_logische_kerne=os.cpu_count(),
             cpu_modell=platform.processor() or None,
         ),
+        netzwerkidentitaet=Netzwerkidentitaet(hostname=socket.gethostname() or None),
+        cpu_details=CPUDetails(logische_threads=os.cpu_count()),
         software=software,
     )
 
@@ -553,6 +672,11 @@ def _uebernehme_inventardaten(ergebnis: AnalyseErgebnis, inventar: RemoteSystemd
     """Schreibt Inventardaten in das Ergebnis inkl. Rückwärtskompatibilität."""
     ergebnis.betriebssystem_details = inventar.betriebssystem
     ergebnis.hardware_details = inventar.hardware
+    ergebnis.netzwerkidentitaet = inventar.netzwerkidentitaet
+    ergebnis.cpu_details = inventar.cpu_details
+    ergebnis.dotnet_versionen = inventar.dotnet_versionen
+    ergebnis.firewall_regeln = inventar.firewall_regeln
+    ergebnis.sage_lizenz = inventar.sage_lizenz
     ergebnis.dienste = inventar.dienste
     ergebnis.software = inventar.software
 
@@ -561,6 +685,8 @@ def _uebernehme_inventardaten(ergebnis: AnalyseErgebnis, inventar: RemoteSystemd
     ergebnis.os_version = inventar.betriebssystem.version or ergebnis.os_version
     ergebnis.cpu_logische_kerne = inventar.hardware.cpu_logische_kerne
     ergebnis.cpu_modell = inventar.hardware.cpu_modell
+    if inventar.cpu_details.logische_threads is not None:
+        ergebnis.cpu_logische_kerne = inventar.cpu_details.logische_threads
 
     installierte = [
         f"{eintrag.name} {eintrag.version}".strip() if eintrag.version else eintrag.name
@@ -683,6 +809,12 @@ def analysiere_server(
     ergebnis.ports.sort(key=lambda item: item.port)
 
     if ip_adressen:
+        ergebnis.netzwerkidentitaet = Netzwerkidentitaet(
+            hostname=ergebnis.server,
+            fqdn=ergebnis.server if "." in ergebnis.server else None,
+            domain=ergebnis.server.split(".", 1)[1] if "." in ergebnis.server else None,
+            ip_adressen=ip_adressen,
+        )
         ergebnis.hinweise.append(f"Aufgelöste Adressen: {', '.join(ip_adressen)}")
 
     freigegebene_ports = _freigegebene_relevante_ports(ergebnis)

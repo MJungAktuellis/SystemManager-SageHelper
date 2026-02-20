@@ -44,6 +44,79 @@ class HardwareDetails:
 
 
 @dataclass
+class Kundenstammdaten:
+    """Stammdaten eines Kunden für Berichte, GUI und spätere Systemanbindungen."""
+
+    kundenname: str | None = None
+    kundennummer: str | None = None
+    ansprechpartner: str | None = None
+    kontakt_email: str | None = None
+    kontakt_telefon: str | None = None
+
+
+@dataclass
+class Netzwerkidentitaet:
+    """Eindeutige Netzwerkidentität eines Servers inkl. DNS- und IP-Bezug."""
+
+    hostname: str | None = None
+    fqdn: str | None = None
+    domain: str | None = None
+    ip_adressen: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CPUDetails:
+    """Feingranulare CPU-Kennzahlen für Kapazitäts-/Sizing-Auswertungen."""
+
+    physische_kerne: int | None = None
+    logische_threads: int | None = None
+    takt_mhz: float | None = None
+
+
+@dataclass
+class DotNetVersion:
+    """Beschreibt eine konkret installierte .NET-Version mit optionaler Quelle."""
+
+    produkt: str
+    version: str
+    quelle: str | None = None
+
+
+@dataclass
+class FirewallRegel:
+    """Vereinheitlicht eine Firewall-Regel für Reporting und GUI."""
+
+    name: str
+    richtung: str
+    protokoll: str
+    aktion: str | None = None
+    port: str | None = None
+    aktiviert: bool | None = None
+
+
+@dataclass
+class FirewallRegelsatz:
+    """Gruppiert Firewall-Regeln je Richtung/Protokoll für klare Auswertungen."""
+
+    eingehend_tcp: list[FirewallRegel] = field(default_factory=list)
+    eingehend_udp: list[FirewallRegel] = field(default_factory=list)
+    ausgehend_tcp: list[FirewallRegel] = field(default_factory=list)
+    ausgehend_udp: list[FirewallRegel] = field(default_factory=list)
+
+
+@dataclass
+class SageLizenzDetails:
+    """Lizenz- und Produktinformationen zu Sage-Installationen."""
+
+    produkt: str | None = None
+    version: str | None = None
+    build: str | None = None
+    lizenznehmer: str | None = None
+    lizenzschluessel: str | None = None
+    lizenztyp: str | None = None
+
+
+@dataclass
 class DienstInfo:
     """Abbild eines Dienstes (lokal oder remote) für Rollenindikatoren."""
 
@@ -153,6 +226,12 @@ class ServerDetailkarte:
     software: list[str] = field(default_factory=list)
     empfehlungen: list[str] = field(default_factory=list)
     freitext_hinweise: list[str] = field(default_factory=list)
+    kundenstammdaten: Kundenstammdaten = field(default_factory=Kundenstammdaten)
+    netzwerkidentitaet: Netzwerkidentitaet = field(default_factory=Netzwerkidentitaet)
+    cpu_details: CPUDetails = field(default_factory=CPUDetails)
+    dotnet_versionen: list[DotNetVersion] = field(default_factory=list)
+    firewall_regeln: FirewallRegelsatz = field(default_factory=FirewallRegelsatz)
+    sage_lizenz: SageLizenzDetails = field(default_factory=SageLizenzDetails)
 
 
 @dataclass
@@ -199,3 +278,9 @@ class AnalyseErgebnis:
     software: list[SoftwareInfo] = field(default_factory=list)
     rollen_details: RollenDetails = field(default_factory=RollenDetails)
     empfehlungen: list[str] = field(default_factory=list)
+    kundenstammdaten: Kundenstammdaten = field(default_factory=Kundenstammdaten)
+    netzwerkidentitaet: Netzwerkidentitaet = field(default_factory=Netzwerkidentitaet)
+    cpu_details: CPUDetails = field(default_factory=CPUDetails)
+    dotnet_versionen: list[DotNetVersion] = field(default_factory=list)
+    firewall_regeln: FirewallRegelsatz = field(default_factory=FirewallRegelsatz)
+    sage_lizenz: SageLizenzDetails = field(default_factory=SageLizenzDetails)

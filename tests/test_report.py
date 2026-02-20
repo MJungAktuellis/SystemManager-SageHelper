@@ -1,9 +1,16 @@
-"""Tests für Markdown-Rendering."""
+"""Tests für Markdown-Rendering inkl. stabiler Abschnittsreihenfolge."""
 
 import unittest
 from datetime import datetime
 
-from systemmanager_sagehelper.models import AnalyseErgebnis, PortStatus
+from systemmanager_sagehelper.models import (
+    AnalyseErgebnis,
+    CPUDetails,
+    DotNetVersion,
+    Kundenstammdaten,
+    Netzwerkidentitaet,
+    PortStatus,
+)
 from systemmanager_sagehelper.report import render_markdown
 
 
@@ -28,23 +35,26 @@ class TestReport(unittest.TestCase):
             partner_anwendungen=["Contoso CRM Connector"],
             installierte_anwendungen=["Sage 100 9.0", "Contoso CRM Connector"],
             ports=[PortStatus(port=3389, offen=True, bezeichnung="RDP")],
+            kundenstammdaten=Kundenstammdaten(kundennummer="K-123"),
+            netzwerkidentitaet=Netzwerkidentitaet(hostname="srv-app-01", fqdn="srv-app-01.contoso.local", domain="contoso.local", ip_adressen=["10.0.0.10"]),
+            cpu_details=CPUDetails(physische_kerne=4, logische_threads=8, takt_mhz=2800.0),
+            dotnet_versionen=[DotNetVersion(produkt="NET Runtime", version="8.0.2")],
         )
 
         md = render_markdown([ergebnis], kunde="Contoso", umgebung="Produktion")
 
         self.assertIn("## Kopfbereich", md)
-        self.assertIn("- Kunde: Contoso", md)
-        self.assertIn("- Umgebung: Produktion", md)
-        self.assertIn("- Template-Version: 1.0", md)
+        self.assertIn("## Kundenblatt", md)
+        self.assertIn("- Kundennummer: K-123", md)
         self.assertIn("## Serverübersicht", md)
         self.assertIn("## Detailblöcke je Server", md)
         self.assertIn("## Server: srv-app-01", md)
         self.assertIn("3389 (RDP): ✅ Erfolgreich: offen", md)
-        self.assertIn("CPU (logische Kerne): 8", md)
-        self.assertIn("Sage-Version: Sage 100 9.0", md)
-        self.assertIn("Lauf-ID: lauf-20260101-103000-abcd1234", md)
-        self.assertIn("Rollenquelle: manuell gesetzt", md)
-        self.assertIn("### Freigegebene/relevante Ports", md)
+        self.assertIn("### Serverkarte (Netzwerkidentität)", md)
+        self.assertIn("### Technische Tabellen", md)
+        self.assertIn("### .NET-Versionen", md)
+        self.assertIn("### Firewall-Regeln (gruppiert)", md)
+        self.assertIn("### Sage Lizenz-/Versionsdetails", md)
 
     def test_render_markdown_kurzbericht_laesst_detailblock_aus(self) -> None:
         ergebnis = AnalyseErgebnis(
@@ -62,6 +72,25 @@ class TestReport(unittest.TestCase):
         self.assertNotIn("## Detailblöcke je Server", md)
         self.assertIn("## Maßnahmen", md)
         self.assertIn("Port 1433 (MSSQL)", md)
+
+    def test_snapshot_abschnittsreihenfolge_bleibt_stabil(self) -> None:
+        """Sichert die Reihenfolge der Pflichtabschnitte gegen versehentliche Regressionen."""
+        md = render_markdown([
+            AnalyseErgebnis(server="srv-01", zeitpunkt=datetime(2026, 1, 2, 11, 0, 0))
+        ])
+
+        abschnitte = [
+            "## Kopfbereich",
+            "## Kundenblatt",
+            "## Zusammenfassung",
+            "## Serverübersicht",
+            "## Befunde",
+            "## Auswirkungen",
+            "## Maßnahmen",
+            "## Artefakte",
+        ]
+        positionen = [md.index(abschnitt) for abschnitt in abschnitte]
+        self.assertEqual(positionen, sorted(positionen))
 
 
 if __name__ == "__main__":
