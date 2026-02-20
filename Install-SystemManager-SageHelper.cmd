@@ -144,17 +144,21 @@ if "%EXIT_CODE%"=="0" (
     ) else (
         echo [OK] Installation beendet.
     )
-) else if "%EXIT_CODE%"=="42" (
-    echo [HINWEIS] Administrator-Start wurde erfolgreich angestossen.
-    echo [HINWEIS] Bitte im neu geoeffneten Fenster den Installer fortsetzen.
-    echo [HINWEIS] Das Schliessen dieses ersten Fensters ist in diesem Fall normal.
 ) else (
-    echo [FEHLER] Installation beendet mit Exit-Code %EXIT_CODE%.
-    echo Bitte pruefen Sie die Logdateien unter logs\install_launcher.log,
-    echo logs\install_assistant_ps.log und logs\install_engine.log.
+    REM Verschachtelte Auswertung fuer CMD: vermeidet else-if-Klammerprobleme.
+    if "%EXIT_CODE%"=="42" (
+        echo [HINWEIS] Administrator-Start wurde erfolgreich angestossen.
+        echo [HINWEIS] Bitte im neu geoeffneten Fenster den Installer fortsetzen.
+        echo [HINWEIS] Das Schliessen dieses ersten Fensters ist in diesem Fall normal.
+    ) else (
+        echo [FEHLER] Installation beendet mit Exit-Code %EXIT_CODE%.
+        echo Bitte pruefen Sie die Logdateien unter logs\install_launcher.log,
+        echo logs\install_assistant_ps.log und logs\install_engine.log.
+    )
 )
 
 set "SHOULD_PAUSE=0"
+REM Bei jedem Nicht-0-Code pausieren (inkl. Exit-Code 42 fuer Re-Launch-Hinweis).
 if not "%EXIT_CODE%"=="0" set "SHOULD_PAUSE=1"
 if "%FORCE_PAUSE%"=="1" set "SHOULD_PAUSE=1"
 if "%NO_PAUSE%"=="1" if "%FORCE_PAUSE%"=="0" set "SHOULD_PAUSE=0"
