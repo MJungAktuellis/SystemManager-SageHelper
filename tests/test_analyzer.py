@@ -21,7 +21,7 @@ from systemmanager_sagehelper.analyzer import (
     schlage_rollen_per_portsignatur_vor,
     _entdecke_einzelnen_host,
 )
-from systemmanager_sagehelper.models import ServerZiel
+from systemmanager_sagehelper.models import DiscoveryErgebnis, ServerZiel
 
 
 class TestAnalyzer(unittest.TestCase):
@@ -227,6 +227,38 @@ class TestAnalyzer(unittest.TestCase):
 
         self.assertEqual(1, len(ergebnisse))
         self.assertEqual("10.0.2.10", ergebnisse[0].ip_adresse)
+
+    @patch("systemmanager_sagehelper.analyzer._entdecke_einzelnen_host")
+    def test_discovery_ip_range_not_collapsed_by_hostname_normalization(self, entdecke_host_mock) -> None:
+        """Stellt sicher, dass unterschiedliche IPs trotz gleichem Host-Kern erhalten bleiben."""
+
+        def _simulierter_discovery_treffer(host: str, _conf: DiscoveryKonfiguration) -> DiscoveryErgebnis | None:
+            # Simuliert gezielt die Bug-Situation:
+            # - 10.10.0.10 und 10.10.0.11 beschreiben denselben Host (Kurzname/FQDN + gleiche IP)
+            #   und müssen dedupliziert werden.
+            # - 10.10.0.20/30 sind eigenständige Ziele und dürfen NICHT kollabieren.
+            simulierte_treffer: dict[str, DiscoveryErgebnis] = {
+                "10.10.0.10": DiscoveryErgebnis(hostname="srv-app-01.domain.local", ip_adresse="10.10.0.10", erreichbar=True),
+                "10.10.0.11": DiscoveryErgebnis(hostname="srv-app-01", ip_adresse="10.10.0.10", erreichbar=True),
+                "10.10.0.20": DiscoveryErgebnis(hostname="srv-app-01.domain.local", ip_adresse="10.10.0.20", erreichbar=True),
+                "10.10.0.30": DiscoveryErgebnis(hostname="srv-sql-01.domain.local", ip_adresse="10.10.0.30", erreichbar=True),
+            }
+            return simulierte_treffer.get(host)
+
+        entdecke_host_mock.side_effect = _simulierter_discovery_treffer
+
+        ergebnisse = entdecke_server_ergebnisse(
+            basis="10.10.0",
+            start=10,
+            ende=40,
+            konfiguration=DiscoveryKonfiguration(max_worker=4),
+        )
+
+        self.assertEqual(3, len(ergebnisse))
+        self.assertEqual(["10.10.0.10", "10.10.0.20", "10.10.0.30"], sorted(e.ip_adresse for e in ergebnisse))
+
+        # Kurzname/FQDN-Deduplizierung bleibt erhalten: Für 10.10.0.10 existiert nur ein Ergebnis.
+        self.assertEqual(1, sum(1 for e in ergebnisse if e.ip_adresse == "10.10.0.10"))
 
     @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value=None)
     @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.1.7"])
