@@ -83,7 +83,7 @@ class TestAnalyzer(unittest.TestCase):
         self.assertTrue(all(ergebnis.lauf_id == "lauf-test-001" for ergebnis in ergebnisse))
 
 
-    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", side_effect=[True, False])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", side_effect=[True, False, False, False, False, False, False, False])
     @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
     def test_schnellprofil_liefert_rollenvorschlag(self, _sock_mock, _port_mock) -> None:
         rollen = schlage_rollen_per_portsignatur_vor("srv-sql")
@@ -274,7 +274,7 @@ class TestAnalyzer(unittest.TestCase):
 
         self.assertIsNotNone(treffer)
         assert treffer is not None
-        self.assertIn("sql_browser_port_1434", treffer.rollenhinweise)
+        self.assertIn("sql_port_1434", treffer.rollenhinweise)
         self.assertTrue(any(h.startswith("sql_instanz:") for h in treffer.rollenhinweise))
 
     @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value=None)
@@ -367,6 +367,35 @@ class TestAnalyzer(unittest.TestCase):
         self.assertFalse(treffer.erreichbar)
         self.assertIn("aufnahme_ueber_weiche_signale", treffer.aufnahmegrund)
         self.assertIn("nicht_hart_erreichbar_aber_vertrauensschwelle_erreicht", treffer.fehlerursachen)
+
+
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value=None)
+    @patch("systemmanager_sagehelper.analyzer._resolve_forward_dns", return_value=None)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.7.21"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=True)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=True)
+    @patch("systemmanager_sagehelper.analyzer.KombinierterRemoteProvider")
+    def test_discovery_app_portsignatur_markiert_app_kandidaten(
+        self,
+        provider_cls,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _forward_mock,
+        _reverse_mock,
+    ) -> None:
+        provider = Mock()
+        provider.ist_verfuegbar.return_value = False
+        provider_cls.return_value = provider
+
+        treffer = _entdecke_einzelnen_host("srv-app-21", DiscoveryKonfiguration(max_worker=1))
+
+        self.assertIsNotNone(treffer)
+        assert treffer is not None
+        self.assertTrue(any(hinweis.startswith("app_port_") for hinweis in treffer.rollenhinweise))
+        self.assertIn("app_portsignatur", treffer.rollenhinweise)
 
     @patch("systemmanager_sagehelper.analyzer.KombinierterRemoteProvider")
     @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value=None)
