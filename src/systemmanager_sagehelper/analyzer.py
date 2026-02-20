@@ -173,11 +173,19 @@ class WinRMAdapter:
     """
 
     def _fuehre_powershell_aus(self, command: str, timeout: float = 20.0) -> subprocess.CompletedProcess[str]:
-        """Führt einen PowerShell-Befehl robust aus und liefert den Prozess zurück."""
+        """Führt einen PowerShell-Befehl robust aus und liefert den Prozess zurück.
+
+        PowerShell wird explizit auf UTF-8-Ausgabe gesetzt, damit Sonderzeichen
+        aus Zielsystemen keine ``UnicodeDecodeError`` in Python auslösen.
+        """
+        utf8_vorspann = "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;"
+        vollstaendiger_befehl = f"{utf8_vorspann}\n{command}"
         return subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", vollstaendiger_befehl],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -925,7 +933,15 @@ def _ping_host(host: str, timeout: float) -> bool:
     else:
         cmd = ["ping", "-c", "1", "-W", str(max(1, int(timeout))), host]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=max(1.0, timeout + 0.5), check=False)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=max(1.0, timeout + 0.5),
+            check=False,
+        )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
@@ -1027,7 +1043,15 @@ def _ermittle_seed_hosts_via_dns_srv() -> list[str]:
 
     cmd = ["nslookup", "-type=SRV", f"_ldap._tcp.dc._msdcs.{domain}"]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=4.0, check=False)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=4.0,
+            check=False,
+        )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
     if result.returncode != 0:
@@ -1042,10 +1066,17 @@ def _ermittle_seed_hosts_via_ad_computer() -> list[str]:
     """Liest optionale Seed-Hosts aus AD-Computerobjekten per PowerShell aus."""
     script = (
         "$ErrorActionPreference='Stop';"
-        "if (Get-Module -ListAvailable ActiveDirectory) {"
-        "Import-Module ActiveDirectory -ErrorAction Stop;"
-        "Get-ADComputer -Filter * -Properties DNSHostName,Name |"
-        " Select-Object -First 300 -ExpandProperty DNSHostName"
+        "Add-Type -AssemblyName System.DirectoryServices;"
+        "$domain=[System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain();"
+        "$root='LDAP://{0}' -f $domain.Name;"
+        "$ds=New-Object System.DirectoryServices.DirectorySearcher([ADSI]$root);"
+        "$ds.PageSize=2000;"
+        "$ds.Filter='(&(objectCategory=computer)(operatingSystem=*Server*))';"
+        "$null=$ds.PropertiesToLoad.Add('dnshostname');"
+        "$null=$ds.PropertiesToLoad.Add('name');"
+        "$ds.FindAll() | ForEach-Object {"
+        " if ($_.Properties['dnshostname'] -and $_.Properties['dnshostname'].Count -gt 0) { [string]$_.Properties['dnshostname'][0] }"
+        " elseif ($_.Properties['name'] -and $_.Properties['name'].Count -gt 0) { [string]$_.Properties['name'][0] }"
         "}"
     )
     try:
@@ -1053,6 +1084,8 @@ def _ermittle_seed_hosts_via_ad_computer() -> list[str]:
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=8.0,
             check=False,
         )

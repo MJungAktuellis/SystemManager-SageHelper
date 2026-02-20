@@ -471,6 +471,33 @@ class TestAnalyzer(unittest.TestCase):
 
         self.assertEqual(1, len(ergebnisse))
 
+
+
+    @patch("systemmanager_sagehelper.analyzer.subprocess.run")
+    def test_winrm_adapter_subprocess_nutzt_utf8_und_fehlertoleranz(self, run_mock) -> None:
+        from subprocess import CompletedProcess
+        from systemmanager_sagehelper.analyzer import WinRMAdapter
+
+        run_mock.return_value = CompletedProcess(args=["powershell"], returncode=0, stdout="", stderr="")
+        adapter = WinRMAdapter()
+        adapter._fuehre_powershell_aus("Write-Output 'ok'")
+
+        _, kwargs = run_mock.call_args
+        self.assertEqual("utf-8", kwargs["encoding"])
+        self.assertEqual("replace", kwargs["errors"])
+
+    @patch("systemmanager_sagehelper.analyzer.subprocess.run")
+    def test_ad_seed_ermittlung_verwendet_directoryservices_statt_get_adcomputer(self, run_mock) -> None:
+        from subprocess import CompletedProcess
+        from systemmanager_sagehelper.analyzer import _ermittle_seed_hosts_via_ad_computer
+
+        run_mock.return_value = CompletedProcess(args=["powershell"], returncode=0, stdout="srv-a\n", stderr="")
+        _ermittle_seed_hosts_via_ad_computer()
+
+        cmd = run_mock.call_args[0][0]
+        script = cmd[-1]
+        self.assertIn("System.DirectoryServices", script)
+        self.assertNotIn("Get-ADComputer", script)
     @patch("systemmanager_sagehelper.analyzer._ermittle_seed_hosts_via_ad_computer", return_value=["srv-ad-01"])
     @patch("systemmanager_sagehelper.analyzer._ermittle_seed_hosts_via_dns_srv", return_value=["srv-dns-01", "srv-ad-01"])
     def test_ermittle_discovery_seed_hosts_dedupliziert_dns_und_ad(self, _dns_mock, _ad_mock) -> None:
