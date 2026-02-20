@@ -364,7 +364,16 @@ if (-not (Test-Admin)) {
             $psExe = "powershell.exe"
         }
 
-        $elevatedProcess = Start-Process -FilePath $psExe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs -PassThru -ErrorAction Stop
+        # Wichtig: Argumente als Array übergeben, damit Pfade mit Leerzeichen,
+        # Klammern oder Sonderzeichen (z. B. Apostrophen) sicher gequotet werden.
+        # Zusätzlich setzen wir das Arbeitsverzeichnis explizit auf das Repo,
+        # damit der erhöhte Prozess zuverlässig dieselben relativen Pfade nutzt.
+        $elevationArguments = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", $PSCommandPath
+        )
+        $elevatedProcess = Start-Process -FilePath $psExe -ArgumentList $elevationArguments -WorkingDirectory $script:RepoRoot -Verb RunAs -PassThru -ErrorAction Stop
         if ($null -eq $elevatedProcess) {
             Write-Host "[FEHLER] Erhoehung konnte nicht gestartet werden. Bitte PowerShell als Administrator oeffnen und das Skript erneut starten."
             Write-PsLog -Category "ERROR" -Cause "ELEVATION_START_OHNE_PROZESS" -ExitCode $ExitCodeElevationFailed -Message "Start-Process lieferte kein Prozessobjekt." -Candidate "PowerShell als Administrator manuell starten"
