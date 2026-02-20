@@ -282,7 +282,7 @@ def test_dashboard_installationsstatus_zeigt_teilweise_konfiguration_ohne_marker
 
     gui._aktualisiere_dashboard_status()
 
-    assert gui._karten_status["installation"].value == "Status: Teilweise installiert (Prüfung erforderlich)"
+    assert gui._karten_status["installation"].value == "Status: Teilweise installiert"
 
 
 def test_onboarding_discovery_parse_gueltiger_bereich() -> None:

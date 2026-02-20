@@ -1593,6 +1593,7 @@ class SystemManagerGUI:
         self._nav_status_labels: dict[str, ttk.Label] = {}
         self._nav_aktion_rahmen: ttk.Frame | None = None
         self._nav_auswahl = tk.StringVar(value="installation")
+        self._diagnosemodus_aktiv = tk.BooleanVar(value=False)
 
         self._dashboard_gebaut = False
         self._onboarding_controller = OnboardingController(self)
@@ -1657,7 +1658,6 @@ class SystemManagerGUI:
 
         self._baue_top_navigation(navigation)
         self._baue_serversektion(primarbereich)
-        self._baue_uebersichtsseite(primarbereich)
         self._aktualisiere_dashboard_status()
         self._aktualisiere_navigationszustand()
 
@@ -1789,6 +1789,23 @@ class SystemManagerGUI:
             wraplength=280,
             justify="left",
         ).pack(anchor="w", padx=8, pady=(0, 8))
+
+        diagnose_toggle = ttk.Checkbutton(
+            self._nav_aktion_rahmen,
+            text="Experten-/Diagnoseinfos anzeigen",
+            variable=self._diagnosemodus_aktiv,
+            command=lambda: self._baue_modulaktionen(modul, fokus_auf_aktion=False),
+        )
+        diagnose_toggle.pack(anchor="w", padx=8, pady=(0, 6))
+
+        if self._diagnosemodus_aktiv.get():
+            diagnose_text = self._ermittle_modul_diagnosetext(modul)
+            ttk.Label(
+                self._nav_aktion_rahmen,
+                text=diagnose_text,
+                wraplength=280,
+                justify="left",
+            ).pack(anchor="w", padx=8, pady=(0, 8))
 
         primaer_button = ttk.Button(
             self._nav_aktion_rahmen,
@@ -2013,6 +2030,42 @@ class SystemManagerGUI:
             self.server_uebersicht.selection_set(erstes_item)
             self._setze_serverdetails(self._serveransicht_index.get(erstes_item))
 
+    def _ermittle_modul_diagnosetext(self, modul: str) -> str:
+        """Liefert optionale Diagnoseinfos je Modul als kompakten Fließtext.
+
+        Die Informationen ersetzen die entfernte Dashboard-Übersichtstabelle,
+        bleiben aber bewusst nur im Expertenmodus sichtbar.
+        """
+        modul_mapping = {
+            "installation": "installer",
+            "serveranalyse": "server_analysis",
+            "ordnerverwaltung": "folder_manager",
+            "dokumentation": "doc_generator",
+        }
+        modul_key = modul_mapping.get(modul)
+        if not modul_key:
+            return "Diagnose: Keine Modulzuordnung vorhanden."
+
+        module = self.state_store.lade_gesamtzustand().get("modules", {})
+        modulwerte = module.get(modul_key, {}) if isinstance(module.get(modul_key), dict) else {}
+        kerninfos = modulwerte.get("letzte_kerninfos", [])
+        berichte = modulwerte.get("bericht_verweise", [])
+        kerninfo_text = "; ".join(str(eintrag) for eintrag in kerninfos if eintrag) or "Keine Kerninfos"
+        berichte_text = "; ".join(str(eintrag) for eintrag in berichte if eintrag) or "Keine Berichte"
+
+        diagnose_text = [
+            self._karten_technische_details.get(modul).get() if modul in self._karten_technische_details else "Technische Details: Keine Daten",
+            f"Kerninfos: {kerninfo_text}",
+            f"Berichte: {berichte_text}",
+        ]
+
+        if modul == "serveranalyse":
+            serverliste = modulwerte.get("server_summary", [])
+            anzahl_server = len(serverliste) if isinstance(serverliste, list) else 0
+            diagnose_text.append(f"Server-Snapshot: {anzahl_server} Einträge")
+
+        return "\n".join(diagnose_text)
+
     def _bei_serverauswahl(self, _event: tk.Event) -> None:
         """Aktualisiert die Detailansicht bei Serverauswahl im Treeview."""
         if not hasattr(self, "server_uebersicht"):
@@ -2038,60 +2091,14 @@ class SystemManagerGUI:
             text = fallback if not serverdetails else str(serverdetails.get(schluessel) or fallback)
             self._serverdetail_vars[schluessel].set(text)
 
-    def _baue_uebersichtsseite(self, parent: ttk.Frame) -> None:
-        """Stellt je Modul Kerninfos und Berichtverweise aus der Persistenz dar."""
-        rahmen = ttk.LabelFrame(
-            parent,
-            text="Übersicht: letzte Analyseinformationen",
-            style="Section.TLabelframe",
-        )
-        rahmen.pack(fill="both", expand=True)
-
-        spalten = ("modul", "infos", "berichte")
-        self.uebersicht = ttk.Treeview(rahmen, columns=spalten, show="headings", height=14)
-        self.uebersicht.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
-
-        self.uebersicht.heading("modul", text="Modul")
-        self.uebersicht.heading("infos", text="Letzte Kerninfos")
-        self.uebersicht.heading("berichte", text="Berichtverweise")
-
-        self.uebersicht.column("modul", width=180)
-        self.uebersicht.column("infos", width=430)
-        self.uebersicht.column("berichte", width=330)
-
-        scrollbar = ttk.Scrollbar(rahmen, orient="vertical", command=self.uebersicht.yview)
-        scrollbar.pack(side="right", fill="y", pady=8, padx=8)
-        self.uebersicht.configure(yscrollcommand=scrollbar.set)
-
-        self._lade_uebersichtszeilen()
-
-    def _lade_uebersichtszeilen(self) -> None:
-        """Lädt Übersichtsdaten aus allen bekannten Modulen in die Tabelle."""
-        for item_id in self.uebersicht.get_children(""):
-            self.uebersicht.delete(item_id)
-
-        zustand = self.state_store.lade_gesamtzustand().get("modules", {})
-        for modulname, modulwerte in zustand.items():
-            kerninfos = modulwerte.get("letzte_kerninfos", [])
-            infos = "; ".join(kerninfos) if kerninfos else "Keine Daten"
-
-            # Für die Serveranalyse verweist die Modulübersicht auf die strukturierte Servertabelle.
-            if modulname == "server_analysis":
-                serverliste = modulwerte.get("server_summary", [])
-                anzahl_server = len(serverliste) if isinstance(serverliste, list) else 0
-                infos = f"{anzahl_server} Server in der Tabelle 'Übernommene Server'"
-
-            berichte = "; ".join(modulwerte.get("bericht_verweise", [])) or "Keine Verweise"
-            self.uebersicht.insert("", "end", values=(modulname, infos, berichte))
-
     def _aktualisiere_dashboard_status(self) -> None:
         """Berechnet den Status je Modul für Navigation und Aktionsbereich."""
         module = self.state_store.lade_gesamtzustand().get("modules", {})
         status_texte = {
-            "installation": "Noch nicht installiert",
-            "serveranalyse": "Noch keine Analyse durchgeführt",
-            "ordnerverwaltung": "Noch keine Ordnerprüfung durchgeführt",
-            "dokumentation": "Noch keine Dokumentation erstellt",
+            "installation": "Nicht installiert",
+            "serveranalyse": "Keine Analyse",
+            "ordnerverwaltung": "Keine Ordnerprüfung",
+            "dokumentation": "Keine Doku",
         }
 
         # Primäre Quelle für den Installationsstatus bleibt die technische Installationsprüfung
@@ -2105,25 +2112,23 @@ class SystemManagerGUI:
             modus_text = "Wartung" if letzte_aktion == "maintenance" else "Installation"
             if update_kontext.update_erforderlich:
                 status_texte["installation"] = (
-                    f"Update verfügbar ({update_kontext.installierte_version or version or 'unbekannt'} → {update_kontext.ziel_version})"
+                    f"Update: {update_kontext.installierte_version or version or 'unbekannt'} → {update_kontext.ziel_version}"
                 )
             else:
-                status_texte["installation"] = (
-                    f"Installiert ({version}) · Letzte Aktion: {modus_text}" if version else f"Installiert · Letzte Aktion: {modus_text}"
-                )
+                status_texte["installation"] = f"Installiert ({version})" if version else f"Installiert ({modus_text})"
         elif installer_modul.get("installiert"):
-            status_texte["installation"] = "Teilweise installiert (Prüfung erforderlich)"
+            status_texte["installation"] = "Teilweise installiert"
 
         serveranalyse_modul = module.get("server_analysis", {})
         if serveranalyse_modul.get("server_summary"):
             anzahl_server = len(serveranalyse_modul.get("server_summary", []))
-            status_texte["serveranalyse"] = f"Analyseergebnisse vorhanden ({anzahl_server} Server)"
+            status_texte["serveranalyse"] = f"{anzahl_server} Server analysiert"
         elif serveranalyse_modul.get("letzte_kerninfos"):
-            status_texte["serveranalyse"] = "Analyse vorbereitet (ohne Ergebnis-Snapshot)"
+            status_texte["serveranalyse"] = "Analyse vorbereitet"
         if module.get("folder_manager", {}).get("letzte_kerninfos"):
-            status_texte["ordnerverwaltung"] = "Ordnerprüfung abgeschlossen"
+            status_texte["ordnerverwaltung"] = "Ordnerprüfung ok"
         if module.get("doc_generator", {}).get("letzte_kerninfos"):
-            status_texte["dokumentation"] = "Dokumentation vorhanden"
+            status_texte["dokumentation"] = "Doku vorhanden"
 
         technische_details = {
             "installation": "Marker-/Integritätsprüfung und optionaler Update-Kontext aus Installerzustand.",
@@ -2227,7 +2232,6 @@ class SystemManagerGUI:
                 "Öffnen Sie die Log-Ausgabe und beheben Sie die gemeldete Ursache.",
             )
         finally:
-            self._lade_uebersichtszeilen()
             self._aktualisiere_dashboard_status()
             self._lade_serversektion()
 
@@ -2290,7 +2294,6 @@ class SystemManagerGUI:
             )
             self.shell.setze_status(f"{vorgang} mit Warnungen beendet")
 
-        self._lade_uebersichtszeilen()
         self._aktualisiere_dashboard_status()
         self._lade_serversektion()
 
@@ -2339,22 +2342,20 @@ class SystemManagerGUI:
         self._execute_command("Dokumentation", [sys.executable, "src/doc_generator.py"])
 
     def speichern(self) -> None:
-        """Persistiert Launcher-relevante Einstellungen und aktualisiert die Übersicht."""
+        """Persistiert Launcher-relevante Einstellungen und aktualisiert den Dashboard-Status."""
         self.modulzustand.setdefault("letzte_kerninfos", ["Launcher zuletzt geöffnet"])
         self.modulzustand.setdefault("bericht_verweise", [])
         self.state_store.speichere_modulzustand("gui_manager", self.modulzustand)
-        self._lade_uebersichtszeilen()
         self._aktualisiere_dashboard_status()
         self._lade_serversektion()
         self.shell.setze_status("Launcher-Zustand gespeichert")
         self.shell.logge_meldung(f"Zustand gespeichert unter: {self.state_store.dateipfad}")
 
     def zurueck(self) -> None:
-        """Navigationsaktion: im Launcher bedeutet Zurück eine Übersichts-Aktualisierung."""
-        self._lade_uebersichtszeilen()
+        """Navigationsaktion: im Launcher bedeutet Zurück eine Dashboard-Aktualisierung."""
         self._aktualisiere_dashboard_status()
         self._lade_serversektion()
-        self.shell.setze_status("Übersicht aktualisiert")
+        self.shell.setze_status("Dashboard aktualisiert")
 
 
 if __name__ == "__main__":
