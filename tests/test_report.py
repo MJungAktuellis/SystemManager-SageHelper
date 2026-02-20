@@ -50,11 +50,11 @@ class TestReport(unittest.TestCase):
         self.assertIn("## Detailblöcke je Server", md)
         self.assertIn("## Server: srv-app-01", md)
         self.assertIn("3389 (RDP): ✅ Erfolgreich: offen", md)
-        self.assertIn("### Serverkarte (Netzwerkidentität)", md)
-        self.assertIn("### Technische Tabellen", md)
-        self.assertIn("### .NET-Versionen", md)
-        self.assertIn("### Firewall-Regeln (gruppiert)", md)
-        self.assertIn("### Sage Lizenz-/Versionsdetails", md)
+        self.assertIn("### FQDN", md)
+        self.assertIn("### IP", md)
+        self.assertIn("### Versionen", md)
+        self.assertIn("### Pfade", md)
+        self.assertIn("### Freigaben", md)
 
     def test_render_markdown_kurzbericht_laesst_detailblock_aus(self) -> None:
         ergebnis = AnalyseErgebnis(

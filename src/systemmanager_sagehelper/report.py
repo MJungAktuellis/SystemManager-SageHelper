@@ -159,88 +159,75 @@ def _baue_kundenblatt(kunde: str, umgebung: str, ergebnisse: list[AnalyseErgebni
 
 
 def _render_detailblock(ergebnis: AnalyseErgebnis) -> list[str]:
-    """Erzeugt den technischen Detailblock je Server über das gemeinsame ViewModel."""
+    """Erstellt den technischen Voll-Detailblock für einen Server."""
     karte: ServerDetailkarte = baue_server_detailkarte(ergebnis)
     os_details = ergebnis.betriebssystem_details
     hw_details = ergebnis.hardware_details
-    zeilen = [
+
+    def _liste_oder_keine(werte: list[str]) -> str:
+        return ", ".join(werte) if werte else "keine"
+
+    zeilen: list[str] = [
         f"## Server: {karte.server}",
-        f"- Zeitpunkt: {karte.zeitpunkt.isoformat(timespec='seconds')}",
-        f"- Lauf-ID: {ergebnis.lauf_id or 'nicht gesetzt'}",
+        "",
+        "### Rechner",
+        f"- Rechner: {karte.server}",
         f"- Rollen: {', '.join(karte.rollen) if karte.rollen else 'nicht gesetzt'}",
         f"- Rollenquelle: {karte.rollenquelle or 'unbekannt'}",
-        f"- Betriebssystem: {karte.betriebssystem or 'unbekannt'}",
-        f"- OS-Version: {karte.os_version or 'unbekannt'}",
-        f"- CPU (logische Kerne): {ergebnis.cpu_logische_kerne if ergebnis.cpu_logische_kerne is not None else 'unbekannt'}",
-        f"- CPU-Modell: {ergebnis.cpu_modell or 'unbekannt'}",
-        f"- Sage-Version: {ergebnis.sage_version or 'nicht erkannt'}",
-        "- SQL Management Studio: " + (ergebnis.management_studio_version or "nicht erkannt"),
         "",
-        "### Betriebssystem-Details",
-        f"- Name: {os_details.name or 'unbekannt'}",
-        f"- Version: {os_details.version or 'unbekannt'}",
+        "### OS",
+        f"- Name: {os_details.name or karte.betriebssystem or 'unbekannt'}",
+        f"- Version: {os_details.version or karte.os_version or 'unbekannt'}",
         f"- Build: {os_details.build or 'unbekannt'}",
         f"- Architektur: {os_details.architektur or 'unbekannt'}",
         "",
-        "### Hardware-Details",
-        f"- CPU: {hw_details.cpu_modell or 'unbekannt'}",
-        "- Logische Kerne: " + (str(hw_details.cpu_logische_kerne) if hw_details.cpu_logische_kerne is not None else "unbekannt"),
-        "- Arbeitsspeicher (GB): " + (str(hw_details.arbeitsspeicher_gb) if hw_details.arbeitsspeicher_gb is not None else "unbekannt"),
-        "",
-        "### Serverkarte (Netzwerkidentität)",
+        "### FQDN",
         f"- Hostname: {karte.netzwerkidentitaet.hostname or 'unbekannt'}",
         f"- FQDN: {karte.netzwerkidentitaet.fqdn or 'unbekannt'}",
         f"- Domain: {karte.netzwerkidentitaet.domain or 'unbekannt'}",
-        "- IP-Liste: " + (", ".join(karte.netzwerkidentitaet.ip_adressen) if karte.netzwerkidentitaet.ip_adressen else "keine"),
         "",
-        "### Technische Tabellen",
+        "### IP",
+        f"- Adressen: {_liste_oder_keine(karte.netzwerkidentitaet.ip_adressen)}",
+        "",
+        "### Versionen",
+        f"- Sage: {_liste_oder_keine([f'{v.produkt} {v.version} ({v.quelle or "Quelle unbekannt"})' for v in karte.sage_versionen])}",
+        f"- .NET: {_liste_oder_keine([f'{v.produkt} {v.version} ({v.quelle or "Quelle unbekannt"})' for v in karte.dotnet_versionen])}",
+        f"- Management: {_liste_oder_keine([f'{v.produkt} {v.version} ({v.quelle or "Quelle unbekannt"})' for v in karte.management_versionen])}",
+        "",
+        "### Ports",
     ]
-    zeilen.extend(_render_tabelle(["CPU-Kerne", "CPU-Threads", "CPU-MHz"], [[
-        str(karte.cpu_details.physische_kerne or "unbekannt"),
-        str(karte.cpu_details.logische_threads or "unbekannt"),
-        str(karte.cpu_details.takt_mhz or "unbekannt"),
-    ]]))
-    zeilen.extend(["", "### Rollenprüfung"])
-    for check in karte.rollen_checks:
-        zeilen.append(f"- {check.rolle}: {'erkannt' if check.erkannt else 'nicht erkannt'} | {' | '.join(check.details)}")
 
-    zeilen.extend(["", "### Portprüfung"])
     for eintrag in karte.ports_und_dienste:
         if eintrag.typ != "Port":
             continue
         status = f"{STATUS_ERFOLG}: offen" if eintrag.status == "offen" else f"{STATUS_WARNUNG}: blockiert/unerreichbar"
         zeilen.append(f"- {eintrag.name} ({eintrag.details or 'Port'}): {status}")
 
-    zeilen.extend(["", "### Freigegebene/relevante Ports"])
-    offene_ports = [f"{STATUS_ERFOLG}: {eintrag.name} ({eintrag.details or 'Port'})" for eintrag in karte.ports_und_dienste if eintrag.typ == 'Port' and eintrag.status == 'offen']
-    zeilen.extend(_render_bullet_liste(offene_ports))
+    zeilen.extend([
+        "",
+        "### Pfade",
+        f"- APP Installpfade: {_liste_oder_keine(ergebnis.rollen_details.app.installpfade)}",
+        f"- APP Liveupdate: {_liste_oder_keine(ergebnis.rollen_details.app.liveupdate_pfade)}",
+        f"- APP Zusatzablagen: {_liste_oder_keine(ergebnis.rollen_details.app.zusatzablagen)}",
+        "",
+        "### Freigaben",
+        f"- APP Freigaben: {_liste_oder_keine(ergebnis.rollen_details.app.freigaben)}",
+        "",
+        "### Rollen-Drilldown",
+    ])
 
-    zeilen.extend(["", "### Dienste (Auszug)"])
-    zeilen.extend(_render_bullet_liste([f"{eintrag.name} ({eintrag.status})" for eintrag in karte.ports_und_dienste if eintrag.typ == 'Dienst']))
+    for rollenname in ("SQL", "APP", "CTX", "Testsystem"):
+        zeilen.append(f"- {rollenname}:")
+        for detail in karte.rollen_karten.get(rollenname, ["keine Daten"]):
+            zeilen.append(f"  - {detail}")
 
-    zeilen.extend(["", "### Software (Auszug)"])
-    zeilen.extend(_render_bullet_liste(karte.software))
-
-    zeilen.extend(["", "### Partneranwendungen"])
-    zeilen.extend(_render_bullet_liste(ergebnis.partner_anwendungen))
-
-    zeilen.extend(["", "### Installierte Anwendungen (Auszug)"])
-    zeilen.extend(_render_bullet_liste(ergebnis.installierte_anwendungen))
-
-    zeilen.extend(["", "### .NET-Versionen"])
-    zeilen.extend(_render_bullet_liste([f"{v.produkt} {v.version}" for v in karte.dotnet_versionen]))
-
-    zeilen.extend(["", "### Firewall-Regeln (gruppiert)"])
-    zeilen.append(f"- Eingehend TCP: {len(karte.firewall_regeln.eingehend_tcp)}")
-    zeilen.append(f"- Eingehend UDP: {len(karte.firewall_regeln.eingehend_udp)}")
-    zeilen.append(f"- Ausgehend TCP: {len(karte.firewall_regeln.ausgehend_tcp)}")
-    zeilen.append(f"- Ausgehend UDP: {len(karte.firewall_regeln.ausgehend_udp)}")
-
-    zeilen.extend(["", "### Sage Lizenz-/Versionsdetails"])
-    zeilen.append(f"- Produkt: {karte.sage_lizenz.produkt or 'nicht erkannt'}")
-    zeilen.append(f"- Version: {karte.sage_lizenz.version or 'nicht erkannt'}")
-    zeilen.append(f"- Build: {karte.sage_lizenz.build or 'nicht erkannt'}")
-    zeilen.append(f"- Lizenztyp: {karte.sage_lizenz.lizenztyp or 'nicht hinterlegt'}")
+    zeilen.extend([
+        "",
+        "### Hardware",
+        f"- CPU: {hw_details.cpu_modell or 'unbekannt'}",
+        "- Logische Kerne: " + (str(hw_details.cpu_logische_kerne) if hw_details.cpu_logische_kerne is not None else "unbekannt"),
+        "- Arbeitsspeicher (GB): " + (str(hw_details.arbeitsspeicher_gb) if hw_details.arbeitsspeicher_gb is not None else "unbekannt"),
+    ])
 
     if karte.freitext_hinweise:
         zeilen.extend(["", "### Hinweise"])

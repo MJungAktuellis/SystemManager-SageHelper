@@ -83,6 +83,15 @@ class DotNetVersion:
 
 
 @dataclass
+class KomponentenVersion:
+    """Allgemeines Versionsmodell mit Herkunft für Sage- und Management-Komponenten."""
+
+    produkt: str
+    version: str
+    quelle: str | None = None
+
+
+@dataclass
 class FirewallRegel:
     """Vereinheitlicht eine Firewall-Regel für Reporting und GUI."""
 
@@ -172,6 +181,10 @@ class APPRollenDetails:
     erkannt: bool = False
     sage_pfade: list[str] = field(default_factory=list)
     sage_versionen: list[str] = field(default_factory=list)
+    installpfade: list[str] = field(default_factory=list)
+    freigaben: list[str] = field(default_factory=list)
+    liveupdate_pfade: list[str] = field(default_factory=list)
+    zusatzablagen: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -232,6 +245,7 @@ class ServerDetailkarte:
     betriebssystem: str | None = None
     os_version: str | None = None
     rollen_checks: list[RollenCheckEintrag] = field(default_factory=list)
+    rollen_karten: dict[str, list[str]] = field(default_factory=dict)
     ports_und_dienste: list[PortDienstEintrag] = field(default_factory=list)
     software: list[str] = field(default_factory=list)
     empfehlungen: list[str] = field(default_factory=list)
@@ -240,6 +254,8 @@ class ServerDetailkarte:
     netzwerkidentitaet: Netzwerkidentitaet = field(default_factory=Netzwerkidentitaet)
     cpu_details: CPUDetails = field(default_factory=CPUDetails)
     dotnet_versionen: list[DotNetVersion] = field(default_factory=list)
+    sage_versionen: list[KomponentenVersion] = field(default_factory=list)
+    management_versionen: list[KomponentenVersion] = field(default_factory=list)
     firewall_regeln: FirewallRegelsatz = field(default_factory=FirewallRegelsatz)
     sage_lizenz: SageLizenzDetails = field(default_factory=SageLizenzDetails)
 
@@ -292,5 +308,7 @@ class AnalyseErgebnis:
     netzwerkidentitaet: Netzwerkidentitaet = field(default_factory=Netzwerkidentitaet)
     cpu_details: CPUDetails = field(default_factory=CPUDetails)
     dotnet_versionen: list[DotNetVersion] = field(default_factory=list)
+    sage_versionen: list[KomponentenVersion] = field(default_factory=list)
+    management_versionen: list[KomponentenVersion] = field(default_factory=list)
     firewall_regeln: FirewallRegelsatz = field(default_factory=FirewallRegelsatz)
     sage_lizenz: SageLizenzDetails = field(default_factory=SageLizenzDetails)
