@@ -192,6 +192,22 @@ def _baue_server_summary(ergebnisse: list[AnalyseErgebnis]) -> list[dict[str, ob
                 "rollenquelle": ergebnis.rollenquelle or "unbekannt",
                 "manuelle_anmerkung": "\n".join(ergebnis.hinweise).strip(),
                 "letzte_pruefung": ergebnis.zeitpunkt.isoformat(timespec="seconds"),
+                "fqdn": ergebnis.netzwerkidentitaet.fqdn or ergebnis.netzwerkidentitaet.hostname or ergebnis.server,
+                "ip": ergebnis.netzwerkidentitaet.ip_adressen[0] if ergebnis.netzwerkidentitaet.ip_adressen else "-",
+                "betriebssystem": ergebnis.betriebssystem_details.name or ergebnis.betriebssystem or "unbekannt",
+                "versionen": {
+                    "sage": [f"{v.produkt} {v.version}".strip() for v in ergebnis.sage_versionen],
+                    "dotnet": [f"{v.produkt} {v.version}".strip() for v in ergebnis.dotnet_versionen],
+                    "management": [f"{v.produkt} {v.version}".strip() for v in ergebnis.management_versionen],
+                },
+                "dienste": [dienst.name for dienst in ergebnis.dienste],
+                "ports": [f"{port.port} ({'offen' if port.offen else 'zu'})" for port in ergebnis.ports],
+                "pfade": {
+                    "installpfade": list(ergebnis.rollen_details.app.installpfade),
+                    "freigaben": list(ergebnis.rollen_details.app.freigaben),
+                    "liveupdate": list(ergebnis.rollen_details.app.liveupdate_pfade),
+                    "zusatzablagen": list(ergebnis.rollen_details.app.zusatzablagen),
+                },
             }
         )
     return server_summary
@@ -234,39 +250,30 @@ def _schreibe_analyse_report(ergebnisse: list[AnalyseErgebnis], ausgabe_pfad: st
 
 def _drilldown_knoten(ergebnis: AnalyseErgebnis) -> dict[str, list[str]]:
     """Bereitet die Drilldown-Hierarchie für die Ergebnisansicht auf."""
+    karte = baue_server_detailkarte(ergebnis)
     rollenpruefung = [
-        (
-            "SQL: "
-            + ("erkannt" if ergebnis.rollen_details.sql.erkannt else "nicht erkannt")
-            + f" | Instanzen: {', '.join(ergebnis.rollen_details.sql.instanzen) or 'keine'}"
-        ),
-        (
-            "APP: "
-            + ("erkannt" if ergebnis.rollen_details.app.erkannt else "nicht erkannt")
-            + f" | Sage-Versionen: {', '.join(ergebnis.rollen_details.app.sage_versionen) or 'keine'}"
-        ),
-        (
-            "CTX: "
-            + ("erkannt" if ergebnis.rollen_details.ctx.erkannt else "nicht erkannt")
-            + f" | Session-Indikatoren: {', '.join(ergebnis.rollen_details.ctx.session_indikatoren) or 'keine'}"
-        ),
-        (
-            "DC: "
-            + ("erkannt" if ergebnis.rollen_details.dc.erkannt else "nicht erkannt")
-            + f" | AD-Dienste: {', '.join(ergebnis.rollen_details.dc.ad_dienste) or 'keine'}"
-        ),
+        f"{rolle}: {' | '.join(details)}" for rolle, details in karte.rollen_karten.items()
     ]
     ports = [
         f"Port {port.port} ({port.bezeichnung}): {'offen' if port.offen else 'blockiert/unerreichbar'}" for port in ergebnis.ports
     ] or ["Keine Portdaten verfügbar"]
-    dienste = [f"Dienst: {dienst.name} ({dienst.status or 'unbekannt'})" for dienst in ergebnis.dienste] or ["Keine Dienste erkannt"]
-    software = [f"Software: {eintrag.name} {eintrag.version or ''}".strip() for eintrag in ergebnis.software] or ["Keine Softwaredaten erkannt"]
+    pfade_und_freigaben = [
+        f"Installpfade: {', '.join(ergebnis.rollen_details.app.installpfade) or 'keine'}",
+        f"Freigaben: {', '.join(ergebnis.rollen_details.app.freigaben) or 'keine'}",
+        f"Liveupdate: {', '.join(ergebnis.rollen_details.app.liveupdate_pfade) or 'keine'}",
+        f"Zusatzablagen: {', '.join(ergebnis.rollen_details.app.zusatzablagen) or 'keine'}",
+    ]
+    versionen = [
+        "Sage-Versionen: " + (", ".join(f"{v.produkt} {v.version} ({v.quelle or 'Quelle unbekannt'})" for v in karte.sage_versionen) or "keine"),
+        ".NET-Versionen: " + (", ".join(f"{v.produkt} {v.version} ({v.quelle or 'Quelle unbekannt'})" for v in karte.dotnet_versionen) or "keine"),
+        "Management-Versionen: " + (", ".join(f"{v.produkt} {v.version} ({v.quelle or 'Quelle unbekannt'})" for v in karte.management_versionen) or "keine"),
+    ]
     return {
         "Rollenprüfung": rollenpruefung,
         "Ports": ports,
-        "Dienste/Software": [*dienste, *software],
+        "Pfade/Freigaben": pfade_und_freigaben,
+        "Versionen": versionen,
     }
-
 
 
 @dataclass
@@ -980,27 +987,37 @@ class MehrserverAnalyseGUI:
         self._lauf_aktiv = aktiv
         self._lauf_gesamt = max(0, gesamt)
         self._lauf_verarbeitet = 0
+        self._laufzeiten_pro_host = list(getattr(self, "_laufzeiten_pro_host", []))
         self._laufzeiten_pro_host.clear()
 
-        if aktiv:
-            if gesamt > 0:
-                self.progressbar_lauf.stop()
-                self.progressbar_lauf.configure(mode="determinate", maximum=gesamt)
-                self._fortschritt_var.set(0)
-                self._fortschritt_status_var.set(f"Verarbeitet 0/{gesamt}")
-            else:
-                self.progressbar_lauf.configure(mode="indeterminate")
-                self.progressbar_lauf.start(10)
-                self._fortschritt_status_var.set("Verarbeitet 0/?")
-            self._eta_var.set("Restzeit ca. --:--")
-        else:
-            self.progressbar_lauf.stop()
-            self._fortschritt_var.set(0)
-            self._fortschritt_status_var.set("Verarbeitet 0/0")
-            self._eta_var.set("Restzeit ca. --:--")
+        progressbar_lauf = getattr(self, "progressbar_lauf", None)
+        fortschritt_var = getattr(self, "_fortschritt_var", None)
+        fortschritt_status_var = getattr(self, "_fortschritt_status_var", None)
+        eta_var = getattr(self, "_eta_var", None)
 
-        self.btn_abbrechen.configure(state="normal" if aktiv else "disabled")
-        self._aktualisiere_button_zustaende()
+        if progressbar_lauf and fortschritt_var and fortschritt_status_var and eta_var:
+            if aktiv:
+                if gesamt > 0:
+                    progressbar_lauf.stop()
+                    progressbar_lauf.configure(mode="determinate", maximum=gesamt)
+                    fortschritt_var.set(0)
+                    fortschritt_status_var.set(f"Verarbeitet 0/{gesamt}")
+                else:
+                    progressbar_lauf.configure(mode="indeterminate")
+                    progressbar_lauf.start(10)
+                    fortschritt_status_var.set("Verarbeitet 0/?")
+                eta_var.set("Restzeit ca. --:--")
+            else:
+                progressbar_lauf.stop()
+                fortschritt_var.set(0)
+                fortschritt_status_var.set("Verarbeitet 0/0")
+                eta_var.set("Restzeit ca. --:--")
+
+        btn_abbrechen = getattr(self, "btn_abbrechen", None)
+        if btn_abbrechen is not None:
+            btn_abbrechen.configure(state="normal" if aktiv else "disabled")
+        if hasattr(self, "_aktualisiere_button_zustaende") and hasattr(self, "entry_servername"):
+            self._aktualisiere_button_zustaende()
 
     def _abbruch_anfordern(self) -> None:
         """Signalisiert dem aktiven Hintergrundlauf einen sauberen Abbruch."""
@@ -1040,13 +1057,31 @@ class MehrserverAnalyseGUI:
         bei_fehler,
     ) -> None:
         """Startet Discovery/Analyse in separatem Thread und pollt Ergebnisse."""
-        if self._worker_thread and self._worker_thread.is_alive():
+        worker_thread = getattr(self, "_worker_thread", None)
+        if worker_thread and worker_thread.is_alive():
             self.shell.zeige_warnung("Lauf aktiv", "Es läuft bereits ein Vorgang.", "Bitte warten oder den Lauf abbrechen.")
             return
 
         ereignisse: queue.Queue[tuple[str, object]] = queue.Queue()
         self._abbruch_event = threading.Event()
         self._setze_laufstatus(True, gesamt=gesamt)
+
+        master = getattr(self, "master", None)
+        if master is None or not hasattr(master, "after"):
+            try:
+                worker(ereignisse, self._abbruch_event or threading.Event())
+                while not ereignisse.empty():
+                    typ, daten = ereignisse.get_nowait()
+                    if typ == "abgeschlossen":
+                        self._setze_laufstatus(False)
+                        bei_erfolg(daten)
+                    elif typ == "fehler":
+                        self._setze_laufstatus(False)
+                        bei_fehler(daten if isinstance(daten, Exception) else RuntimeError(str(daten)))
+            except Exception as exc:  # noqa: BLE001
+                self._setze_laufstatus(False)
+                bei_fehler(exc)
+            return
 
         def _thread_worker() -> None:
             try:
@@ -1076,9 +1111,9 @@ class MehrserverAnalyseGUI:
                     bei_fehler(daten if isinstance(daten, Exception) else RuntimeError(str(daten)))
                     beendet = True
             if not beendet:
-                self.master.after(120, _poll)
+                master.after(120, _poll)
 
-        self.master.after(120, _poll)
+        master.after(120, _poll)
 
     def _aktualisiere_button_zustaende(self, _event: tk.Event[tk.Misc] | None = None) -> None:
         """Aktiviert oder deaktiviert Aktionen abhängig vom aktuellen GUI-Zustand."""

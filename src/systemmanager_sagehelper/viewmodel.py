@@ -10,6 +10,42 @@ from .models import (
 )
 
 
+def _baue_rollenkarten(ergebnis: AnalyseErgebnis) -> dict[str, list[str]]:
+    """Erzeugt strukturierte Karten je Rolle für GUI und Bericht.
+
+    Die Karten sind bewusst textbasiert gehalten, damit sie direkt im Drilldown
+    (GUI) und in Markdown-Listen verwendet werden können.
+    """
+    app = ergebnis.rollen_details.app
+    test_erkannt = "TESTSYSTEM" in {rolle.upper() for rolle in ergebnis.rollen}
+
+    return {
+        "SQL": [
+            f"Erkennung: {'ja' if ergebnis.rollen_details.sql.erkannt else 'nein'}",
+            f"Instanzen: {', '.join(ergebnis.rollen_details.sql.instanzen) or 'keine'}",
+            f"Dienste: {', '.join(ergebnis.rollen_details.sql.dienste) or 'keine'}",
+        ],
+        "APP": [
+            f"Erkennung: {'ja' if app.erkannt else 'nein'}",
+            f"Installpfade: {', '.join(app.installpfade) or 'keine'}",
+            f"Freigaben: {', '.join(app.freigaben) or 'keine'}",
+            f"Liveupdate-Pfade: {', '.join(app.liveupdate_pfade) or 'keine'}",
+            f"Zusatzablagen: {', '.join(app.zusatzablagen) or 'keine'}",
+            f"Sage-Versionen: {', '.join(app.sage_versionen) or 'keine'}",
+        ],
+        "CTX": [
+            f"Erkennung: {'ja' if ergebnis.rollen_details.ctx.erkannt else 'nein'}",
+            f"Terminaldienste: {', '.join(ergebnis.rollen_details.ctx.terminaldienste) or 'keine'}",
+            f"Session-Indikatoren: {', '.join(ergebnis.rollen_details.ctx.session_indikatoren) or 'keine'}",
+        ],
+        "Testsystem": [
+            f"Erkennung: {'ja' if test_erkannt else 'nein'}",
+            f"Deklarierte Rollen: {', '.join(ergebnis.rollen) or 'keine'}",
+            f"Rollenquelle: {ergebnis.rollenquelle or 'unbekannt'}",
+        ],
+    }
+
+
 def baue_server_detailkarte(ergebnis: AnalyseErgebnis) -> ServerDetailkarte:
     """Transformiert ein AnalyseErgebnis in eine konsistente Detailkarte.
 
@@ -29,7 +65,10 @@ def baue_server_detailkarte(ergebnis: AnalyseErgebnis) -> ServerDetailkarte:
             rolle="APP",
             erkannt=ergebnis.rollen_details.app.erkannt,
             details=[
-                f"Sage-Pfade: {', '.join(ergebnis.rollen_details.app.sage_pfade) or 'keine'}",
+                f"Installpfade: {', '.join(ergebnis.rollen_details.app.installpfade) or 'keine'}",
+                f"Freigaben: {', '.join(ergebnis.rollen_details.app.freigaben) or 'keine'}",
+                f"Liveupdate-Pfade: {', '.join(ergebnis.rollen_details.app.liveupdate_pfade) or 'keine'}",
+                f"Zusatzablagen: {', '.join(ergebnis.rollen_details.app.zusatzablagen) or 'keine'}",
                 f"Sage-Versionen: {', '.join(ergebnis.rollen_details.app.sage_versionen) or 'keine'}",
             ],
         ),
@@ -86,6 +125,7 @@ def baue_server_detailkarte(ergebnis: AnalyseErgebnis) -> ServerDetailkarte:
         betriebssystem=ergebnis.betriebssystem,
         os_version=ergebnis.os_version,
         rollen_checks=rollen_checks,
+        rollen_karten=_baue_rollenkarten(ergebnis),
         ports_und_dienste=ports_und_dienste,
         software=software,
         empfehlungen=empfehlungen,
@@ -94,6 +134,8 @@ def baue_server_detailkarte(ergebnis: AnalyseErgebnis) -> ServerDetailkarte:
         netzwerkidentitaet=ergebnis.netzwerkidentitaet,
         cpu_details=ergebnis.cpu_details,
         dotnet_versionen=list(ergebnis.dotnet_versionen),
+        sage_versionen=list(ergebnis.sage_versionen),
+        management_versionen=list(ergebnis.management_versionen),
         firewall_regeln=ergebnis.firewall_regeln,
         sage_lizenz=ergebnis.sage_lizenz,
     )

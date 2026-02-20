@@ -281,33 +281,40 @@ class OnboardingController:
         """Steuert Buttons und Fortschrittsanzeige konsistent während Langläufern."""
         self._fortschritt_gesamt = max(0, gesamt)
         self._fortschritt_verarbeitet = 0
+        self._laufzeiten_pro_host = list(getattr(self, "_laufzeiten_pro_host", []))
         self._laufzeiten_pro_host.clear()
 
-        if self._progress_bar and self._fortschritt_var and self._fortschritt_status_var and self._eta_var:
+        progress_bar = getattr(self, "_progress_bar", None)
+        fortschritt_var = getattr(self, "_fortschritt_var", None)
+        fortschritt_status_var = getattr(self, "_fortschritt_status_var", None)
+        eta_var = getattr(self, "_eta_var", None)
+        if progress_bar and fortschritt_var and fortschritt_status_var and eta_var:
             if laeuft:
                 if bestimmbar and gesamt > 0:
-                    self._progress_bar.configure(mode="determinate", maximum=gesamt)
-                    self._fortschritt_var.set(0)
-                    self._fortschritt_status_var.set(f"Verarbeitet 0/{gesamt}")
-                    self._eta_var.set("Restzeit ca. --:--")
+                    progress_bar.configure(mode="determinate", maximum=gesamt)
+                    fortschritt_var.set(0)
+                    fortschritt_status_var.set(f"Verarbeitet 0/{gesamt}")
+                    eta_var.set("Restzeit ca. --:--")
                 else:
-                    self._progress_bar.configure(mode="indeterminate")
-                    self._progress_bar.start(10)
-                    self._fortschritt_status_var.set("Verarbeitet 0/?")
-                    self._eta_var.set("Restzeit ca. --:--")
+                    progress_bar.configure(mode="indeterminate")
+                    progress_bar.start(10)
+                    fortschritt_status_var.set("Verarbeitet 0/?")
+                    eta_var.set("Restzeit ca. --:--")
             else:
-                self._progress_bar.stop()
-                self._fortschritt_var.set(0)
-                self._fortschritt_status_var.set("Verarbeitet 0/0")
-                self._eta_var.set("Restzeit ca. --:--")
+                progress_bar.stop()
+                fortschritt_var.set(0)
+                fortschritt_status_var.set("Verarbeitet 0/0")
+                eta_var.set("Restzeit ca. --:--")
 
-        for button in self._schritt_buttons.values():
+        schritt_buttons = getattr(self, "_schritt_buttons", {})
+        for button in schritt_buttons.values():
             button.configure(state="disabled" if laeuft else "normal")
-        if not laeuft:
+        if not laeuft and hasattr(self, "_aktualisiere_schritt_buttons") and hasattr(self, "_schritt_buttons"):
             self._aktualisiere_schritt_buttons()
 
-        if self._abbruch_button is not None:
-            self._abbruch_button.configure(state="normal" if laeuft else "disabled")
+        abbruch_button = getattr(self, "_abbruch_button", None)
+        if abbruch_button is not None:
+            abbruch_button.configure(state="normal" if laeuft else "disabled")
 
     def _abbruch_anfordern(self) -> None:
         """Signalisiert dem Hintergrund-Thread einen sauberen Abbruch."""
@@ -356,13 +363,36 @@ class OnboardingController:
         bei_fehler: Callable[[Exception], None],
     ) -> None:
         """Führt Langläufer in einem Hintergrund-Thread aus und pollt Fortschrittsmeldungen."""
-        if self._worker_thread and self._worker_thread.is_alive():
+        worker_thread = getattr(self, "_worker_thread", None)
+        if worker_thread and worker_thread.is_alive():
             self._setze_status("Es läuft bereits ein Arbeitsschritt. Bitte warten oder abbrechen.")
             return
 
         ereignisse: queue.Queue[tuple[str, object]] = queue.Queue()
         self._abbruch_event = threading.Event()
         self._setze_laufende_ausfuehrung(True, bestimmbar=gesamt > 0, gesamt=gesamt)
+
+        window = getattr(self, "_window", None)
+        if window is None or not hasattr(window, "after"):
+            try:
+                worker(ereignisse, self._abbruch_event or threading.Event())
+                erfolgsdaten: object | None = None
+                fehlerdaten: Exception | None = None
+                while not ereignisse.empty():
+                    typ, daten = ereignisse.get_nowait()
+                    if typ == "abgeschlossen":
+                        erfolgsdaten = daten
+                    elif typ == "fehler":
+                        fehlerdaten = daten if isinstance(daten, Exception) else RuntimeError(str(daten))
+                self._setze_laufende_ausfuehrung(False, bestimmbar=False)
+                if fehlerdaten is not None:
+                    bei_fehler(fehlerdaten)
+                elif erfolgsdaten is not None:
+                    bei_erfolg(erfolgsdaten)
+            except Exception as exc:  # noqa: BLE001
+                self._setze_laufende_ausfuehrung(False, bestimmbar=False)
+                bei_fehler(exc)
+            return
 
         def _thread_worker() -> None:
             try:
@@ -374,7 +404,7 @@ class OnboardingController:
         self._worker_thread.start()
 
         def _poll() -> None:
-            if not self._window or not self._window.winfo_exists():
+            if not window or not window.winfo_exists():
                 return
 
             abschliessen = False
@@ -398,10 +428,10 @@ class OnboardingController:
                     bei_fehler(fehler)
                     abschliessen = True
 
-            if not abschliessen and self._window and self._window.winfo_exists():
-                self._window.after(120, _poll)
+            if not abschliessen and window and window.winfo_exists():
+                window.after(120, _poll)
 
-        self._window.after(120, _poll)
+        window.after(120, _poll)
 
     @staticmethod
     def _uebertrage_discovery_ergebnis_zu_zeile(treffer: object) -> ServerTabellenZeile:
@@ -482,7 +512,16 @@ class OnboardingController:
             fehler = int(payload.get("fehler", 0) or 0)
             abgebrochen = bool(payload.get("abgebrochen", False))
 
-            self.server_zeilen = [self._uebertrage_discovery_ergebnis_zu_zeile(treffer) for treffer in ergebnisse]
+            # Discovery kann bei Segment-/Host-Schleifen Mehrfachtreffer liefern; wir deduplizieren stabil nach Hostname.
+            einzigartige_treffer: dict[str, object] = {}
+            for treffer in ergebnisse:
+                hostname = str(getattr(treffer, "hostname", "")).strip().lower()
+                if hostname and hostname not in einzigartige_treffer:
+                    einzigartige_treffer[hostname] = treffer
+            self.server_zeilen = [
+                self._uebertrage_discovery_ergebnis_zu_zeile(treffer)
+                for treffer in einzigartige_treffer.values()
+            ]
             self._discovery_bereiche = discovery_bereiche
             self._gespeicherter_scanbereich = gespeicherte_eingabe
             self.gui.modulzustand["letzte_discovery_range"] = gespeicherte_eingabe
@@ -1269,7 +1308,8 @@ class OnboardingController:
 
     def _abbrechen(self) -> None:
         """Bricht das Onboarding kontrolliert mit expliziter Benutzerbestätigung ab."""
-        if self._worker_thread and self._worker_thread.is_alive():
+        worker_thread = getattr(self, "_worker_thread", None)
+        if worker_thread and worker_thread.is_alive():
             self._abbruch_anfordern()
             self._setze_status("Onboarding kann erst geschlossen werden, wenn der laufende Schritt beendet ist.")
             return
@@ -1717,6 +1757,9 @@ class SystemManagerGUI:
         for index, (schluessel, label) in enumerate(
             [
                 ("betriebssystem", "Betriebssystem"),
+                ("versionen", "Versionen"),
+                ("pfade", "Pfade"),
+                ("freigaben", "Freigaben"),
                 ("dienste", "Dienste"),
                 ("ports", "Ports"),
                 ("hinweise", "Hinweise"),
@@ -1801,6 +1844,9 @@ class SystemManagerGUI:
                     "rollenquelle": str(summary.get("rollenquelle") or "unbekannt"),
                     "analyse": str(summary.get("letzte_pruefung") or "unbekannt"),
                     "betriebssystem": self._formatiere_detailwert(summary.get("betriebssystem") or summary.get("os")),
+                    "versionen": self._formatiere_detailwert(summary.get("versionen")) or "Keine Daten verfügbar",
+                    "pfade": self._formatiere_detailwert((summary.get("pfade") or {}).get("installpfade") if isinstance(summary.get("pfade"), dict) else None) or "Keine Daten verfügbar",
+                    "freigaben": self._formatiere_detailwert((summary.get("pfade") or {}).get("freigaben") if isinstance(summary.get("pfade"), dict) else None) or "Keine Daten verfügbar",
                     "dienste": self._formatiere_detailwert(summary.get("dienste")),
                     "ports": self._formatiere_detailwert(summary.get("ports")),
                     "hinweise": self._formatiere_detailwert(hinweise_liste) or "Keine Hinweise vorhanden",
@@ -1870,6 +1916,9 @@ class SystemManagerGUI:
         """Setzt die Drilldown-Informationen für den aktuell gewählten Server."""
         defaults = {
             "betriebssystem": "Keine Daten verfügbar",
+            "versionen": "Keine Daten verfügbar",
+            "pfade": "Keine Daten verfügbar",
+            "freigaben": "Keine Daten verfügbar",
             "dienste": "Keine Daten verfügbar",
             "ports": "Keine Daten verfügbar",
             "hinweise": "Keine Daten verfügbar",

@@ -26,6 +26,7 @@ from .models import (
     DCRollenDetails,
     DienstInfo,
     DotNetVersion,
+    KomponentenVersion,
     FirewallRegel,
     FirewallRegelsatz,
     HardwareDetails,
@@ -167,6 +168,12 @@ class RemoteSystemdaten:
     netzwerkidentitaet: Netzwerkidentitaet = field(default_factory=Netzwerkidentitaet)
     cpu_details: CPUDetails = field(default_factory=CPUDetails)
     dotnet_versionen: list[DotNetVersion] = field(default_factory=list)
+    sage_versionen: list[KomponentenVersion] = field(default_factory=list)
+    management_versionen: list[KomponentenVersion] = field(default_factory=list)
+    app_installpfade: list[str] = field(default_factory=list)
+    app_freigaben: list[str] = field(default_factory=list)
+    app_liveupdate_pfade: list[str] = field(default_factory=list)
+    app_zusatzablagen: list[str] = field(default_factory=list)
     firewall_regeln: FirewallRegelsatz = field(default_factory=FirewallRegelsatz)
     sage_lizenz: SageLizenzDetails = field(default_factory=SageLizenzDetails)
     dienste: list[DienstInfo] = field(default_factory=list)
@@ -283,6 +290,46 @@ $remoteScript = {
         }
     }
 
+    $sageVersionen = @($software | Where-Object { $_.Name -match 'Sage' } | ForEach-Object {
+        [pscustomobject]@{ Produkt=[string]$_.Name; Version=[string]$_.Version; Quelle='Registry:Uninstall' }
+    })
+
+    $managementVersionen = @($software | Where-Object { $_.Name -match 'SQL Server Management Studio|Sage.*Management|Administrator' } | ForEach-Object {
+        [pscustomobject]@{ Produkt=[string]$_.Name; Version=[string]$_.Version; Quelle='Registry:Uninstall' }
+    })
+
+    $installpfade = @($software | Where-Object { $_.Name -match 'Sage' -and $_.Installationspfad } | ForEach-Object { [string]$_.Installationspfad })
+    $liveupdatePfade = @()
+    foreach ($basis in $installpfade) {
+        foreach ($kandidat in @('LiveUpdate','Liveupdate','LU')) {
+            $voll = Join-Path $basis $kandidat
+            if (Test-Path $voll) {
+                $liveupdatePfade += $voll
+            }
+        }
+    }
+
+    $zusatzablagen = @()
+    foreach ($kandidat in @(
+        'C:\ProgramData\Sage',
+        'C:\Sage',
+        'D:\Sage',
+        'C:\Sage\Ablage',
+        'D:\Sage\Ablage'
+    )) {
+        if (Test-Path $kandidat) {
+            $zusatzablagen += $kandidat
+        }
+    }
+
+    $freigaben = @()
+    try {
+        $freigaben = @(Get-SmbShare -ErrorAction Stop | Where-Object { $_.Name -match 'sage|wa|app|live' } | ForEach-Object { "{0} ({1})" -f $_.Name, $_.Path })
+    } catch {
+        # Kein Abbruch bei fehlenden Berechtigungen oder älteren OS-Versionen.
+        $freigaben = @()
+    }
+
     $sageLizenz = [pscustomobject]@{
         Produkt = ($software | Where-Object { $_.Name -match 'Sage' } | Select-Object -First 1 -ExpandProperty Name)
         Version = ($software | Where-Object { $_.Name -match 'Sage' } | Select-Object -First 1 -ExpandProperty Version)
@@ -361,6 +408,16 @@ $remoteScript = {
             TaktMHz = [double]$cpu.MaxClockSpeed
         }
         DotNetVersionen = ($dotnetVersionen | Sort-Object Version -Unique)
+        Versionen = [pscustomobject]@{
+            Sage = $sageVersionen
+            Management = $managementVersionen
+        }
+        AppPfade = [pscustomobject]@{
+            Installpfade = $installpfade
+            Freigaben = $freigaben
+            LiveupdatePfade = $liveupdatePfade
+            Zusatzablagen = $zusatzablagen
+        }
         FirewallRegeln = $firewallRegeln
         SageLizenz = $sageLizenz
         Dienste = $dienste
@@ -459,6 +516,15 @@ def _json_liste(rohwert: object) -> list[dict]:
     return []
 
 
+def _json_string_liste(rohwert: object) -> list[str]:
+    """Normalisiert JSON-Felder auf eine bereinigte Liste aus Strings."""
+    if isinstance(rohwert, list):
+        return _normalisiere_liste_ohne_duplikate(str(eintrag) for eintrag in rohwert if str(eintrag).strip())
+    if isinstance(rohwert, str):
+        return _normalisiere_liste_ohne_duplikate(teil.strip() for teil in rohwert.split(";") if teil.strip())
+    return []
+
+
 def _baue_remote_systemdaten_aus_json(daten: dict) -> RemoteSystemdaten:
     """Mapped PowerShell-JSON robust in die internen Dataklassen."""
     os_daten = daten.get("Betriebssystem") if isinstance(daten.get("Betriebssystem"), dict) else {}
@@ -466,6 +532,8 @@ def _baue_remote_systemdaten_aus_json(daten: dict) -> RemoteSystemdaten:
     netz_daten = daten.get("Netzwerkidentitaet") if isinstance(daten.get("Netzwerkidentitaet"), dict) else {}
     cpu_daten = daten.get("CPUDetails") if isinstance(daten.get("CPUDetails"), dict) else {}
     sage_daten = daten.get("SageLizenz") if isinstance(daten.get("SageLizenz"), dict) else {}
+    versionen_daten = daten.get("Versionen") if isinstance(daten.get("Versionen"), dict) else {}
+    app_pfade = daten.get("AppPfade") if isinstance(daten.get("AppPfade"), dict) else {}
 
     software = [
         SoftwareInfo(
@@ -508,6 +576,26 @@ def _baue_remote_systemdaten_aus_json(daten: dict) -> RemoteSystemdaten:
             quelle=str(eintrag.get("Quelle") or "").strip() or None,
         )
         for eintrag in _json_liste(daten.get("DotNetVersionen"))
+        if str(eintrag.get("Produkt") or "").strip() and str(eintrag.get("Version") or "").strip()
+    ]
+
+    sage_versionen = [
+        KomponentenVersion(
+            produkt=str(eintrag.get("Produkt") or "").strip(),
+            version=str(eintrag.get("Version") or "").strip(),
+            quelle=str(eintrag.get("Quelle") or "").strip() or None,
+        )
+        for eintrag in _json_liste(versionen_daten.get("Sage"))
+        if str(eintrag.get("Produkt") or "").strip() and str(eintrag.get("Version") or "").strip()
+    ]
+
+    management_versionen = [
+        KomponentenVersion(
+            produkt=str(eintrag.get("Produkt") or "").strip(),
+            version=str(eintrag.get("Version") or "").strip(),
+            quelle=str(eintrag.get("Quelle") or "").strip() or None,
+        )
+        for eintrag in _json_liste(versionen_daten.get("Management"))
         if str(eintrag.get("Produkt") or "").strip() and str(eintrag.get("Version") or "").strip()
     ]
 
@@ -566,6 +654,12 @@ def _baue_remote_systemdaten_aus_json(daten: dict) -> RemoteSystemdaten:
             takt_mhz=float(cpu_daten.get("TaktMHz")) if cpu_daten.get("TaktMHz") is not None else None,
         ),
         dotnet_versionen=dotnet_versionen,
+        sage_versionen=sage_versionen,
+        management_versionen=management_versionen,
+        app_installpfade=_json_string_liste(app_pfade.get("Installpfade")),
+        app_freigaben=_json_string_liste(app_pfade.get("Freigaben")),
+        app_liveupdate_pfade=_json_string_liste(app_pfade.get("LiveupdatePfade")),
+        app_zusatzablagen=_json_string_liste(app_pfade.get("Zusatzablagen")),
         firewall_regeln=FirewallRegelsatz(
             eingehend_tcp=eingehend_tcp,
             eingehend_udp=eingehend_udp,
@@ -710,6 +804,8 @@ def _uebernehme_inventardaten(ergebnis: AnalyseErgebnis, inventar: RemoteSystemd
     ergebnis.netzwerkidentitaet = inventar.netzwerkidentitaet
     ergebnis.cpu_details = inventar.cpu_details
     ergebnis.dotnet_versionen = inventar.dotnet_versionen
+    ergebnis.sage_versionen = inventar.sage_versionen
+    ergebnis.management_versionen = inventar.management_versionen
     ergebnis.firewall_regeln = inventar.firewall_regeln
     ergebnis.sage_lizenz = inventar.sage_lizenz
     ergebnis.dienste = inventar.dienste
@@ -730,6 +826,10 @@ def _uebernehme_inventardaten(ergebnis: AnalyseErgebnis, inventar: RemoteSystemd
     ]
     ergebnis.installierte_anwendungen = _normalisiere_liste_ohne_duplikate(installierte)
     ergebnis.rollen_details.sql.instanz_details = inventar.sql_instanzen
+    ergebnis.rollen_details.app.installpfade = inventar.app_installpfade
+    ergebnis.rollen_details.app.freigaben = inventar.app_freigaben
+    ergebnis.rollen_details.app.liveupdate_pfade = inventar.app_liveupdate_pfade
+    ergebnis.rollen_details.app.zusatzablagen = inventar.app_zusatzablagen
 
 
 def _freigegebene_relevante_ports(ergebnis: AnalyseErgebnis) -> list[str]:
@@ -771,10 +871,21 @@ def _pruefe_rollen(ergebnis: AnalyseErgebnis) -> None:
     sage_pfade = _normalisiere_liste_ohne_duplikate(
         eintrag.installationspfad or "" for eintrag in sage_eintraege
     )
+    sage_pfade = _normalisiere_liste_ohne_duplikate([*sage_pfade, *ergebnis.rollen_details.app.installpfade, *ergebnis.rollen_details.app.liveupdate_pfade])
     sage_versionen = _normalisiere_liste_ohne_duplikate(
         f"{eintrag.name} {eintrag.version}".strip() if eintrag.version else eintrag.name for eintrag in sage_eintraege
     )
-    app_erkannt = bool(sage_pfade or sage_versionen)
+    if ergebnis.sage_versionen:
+        sage_versionen = _normalisiere_liste_ohne_duplikate([*sage_versionen, *(f"{v.produkt} {v.version}".strip() for v in ergebnis.sage_versionen)])
+
+    app_erkannt = bool(
+        sage_pfade
+        or sage_versionen
+        or ergebnis.rollen_details.app.installpfade
+        or ergebnis.rollen_details.app.freigaben
+        or ergebnis.rollen_details.app.liveupdate_pfade
+        or ergebnis.rollen_details.app.zusatzablagen
+    )
 
     ctx_dienste = [dienst.name for dienst in ergebnis.dienste if any(k in dienst.name.lower() for k in _CTX_SERVICE_KEYWORDS)]
     ctx_indikatoren: list[str] = []
@@ -805,7 +916,15 @@ def _pruefe_rollen(ergebnis: AnalyseErgebnis) -> None:
             dienste=sql_dienste,
             instanz_details=ergebnis.rollen_details.sql.instanz_details,
         ),
-        app=APPRollenDetails(erkannt=app_erkannt, sage_pfade=sage_pfade, sage_versionen=sage_versionen),
+        app=APPRollenDetails(
+            erkannt=app_erkannt,
+            sage_pfade=sage_pfade,
+            sage_versionen=sage_versionen,
+            installpfade=ergebnis.rollen_details.app.installpfade,
+            freigaben=ergebnis.rollen_details.app.freigaben,
+            liveupdate_pfade=ergebnis.rollen_details.app.liveupdate_pfade,
+            zusatzablagen=ergebnis.rollen_details.app.zusatzablagen,
+        ),
         ctx=CTXRollenDetails(erkannt=ctx_erkannt, terminaldienste=ctx_dienste, session_indikatoren=ctx_indikatoren),
         dc=DCRollenDetails(erkannt=dc_erkannt, ad_dienste=dc_dienste, netzwerk_indikatoren=dc_indikatoren),
     )
