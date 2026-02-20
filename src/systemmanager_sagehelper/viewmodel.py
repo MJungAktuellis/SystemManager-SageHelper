@@ -41,6 +41,14 @@ def baue_server_detailkarte(ergebnis: AnalyseErgebnis) -> ServerDetailkarte:
                 f"Session-Indikatoren: {', '.join(ergebnis.rollen_details.ctx.session_indikatoren) or 'keine'}",
             ],
         ),
+        RollenCheckEintrag(
+            rolle="DC",
+            erkannt=ergebnis.rollen_details.dc.erkannt,
+            details=[
+                f"AD-Dienste: {', '.join(ergebnis.rollen_details.dc.ad_dienste) or 'keine'}",
+                f"Netzwerk-Indikatoren: {', '.join(ergebnis.rollen_details.dc.netzwerk_indikatoren) or 'keine'}",
+            ],
+        ),
     ]
 
     ports_und_dienste = [

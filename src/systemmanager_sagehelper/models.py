@@ -184,12 +184,22 @@ class CTXRollenDetails:
 
 
 @dataclass
+class DCRollenDetails:
+    """Auswertung der DC-Rolle mit AD- und DNS-typischen Indikatoren."""
+
+    erkannt: bool = False
+    ad_dienste: list[str] = field(default_factory=list)
+    netzwerk_indikatoren: list[str] = field(default_factory=list)
+
+
+@dataclass
 class RollenDetails:
     """Gruppiert alle strukturierten Rollenauswertungen."""
 
     sql: SQLRollenDetails = field(default_factory=SQLRollenDetails)
     app: APPRollenDetails = field(default_factory=APPRollenDetails)
     ctx: CTXRollenDetails = field(default_factory=CTXRollenDetails)
+    dc: DCRollenDetails = field(default_factory=DCRollenDetails)
 
 
 @dataclass

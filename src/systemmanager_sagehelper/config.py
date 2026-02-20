@@ -21,13 +21,20 @@ STANDARD_PORTS = [
 # damit Rollenkandidaten (SQL/APP/CTX) frühzeitig aus Netzwerksignaturen
 # abgeleitet werden können.
 DISCOVERY_TCP_PORTS: tuple[int, ...] = (
+    53,
     80,
+    88,
     135,
     139,
+    389,
     443,
     445,
+    464,
+    636,
     1433,
     1434,
+    3268,
+    3269,
     3389,
     4022,
     8080,

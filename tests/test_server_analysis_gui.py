@@ -22,7 +22,7 @@ def test_baue_serverziele_mit_rollenabbildung() -> None:
     """Die Rollen sollen direkt aus dem Zeilenmodell übernommen werden."""
     zeilen = [
         ServerTabellenZeile(servername="srv-app-01", app=True, sql=False, ctx=False),
-        ServerTabellenZeile(servername="srv-sql-01", app=False, sql=True, ctx=True),
+        ServerTabellenZeile(servername="srv-sql-01", app=False, sql=True, ctx=True, dc=True),
     ]
 
     ziele = _baue_serverziele(zeilen)
@@ -30,7 +30,7 @@ def test_baue_serverziele_mit_rollenabbildung() -> None:
     assert len(ziele) == 2
     assert ziele[0].name == "srv-app-01"
     assert ziele[0].rollen == ["APP"]
-    assert ziele[1].rollen == ["SQL", "CTX"]
+    assert ziele[1].rollen == ["SQL", "CTX", "DC"]
 
 
 def test_deklarationszusammenfassung_enthaelt_quelle_und_rollen() -> None:
@@ -92,6 +92,14 @@ def test_rollenableitung_aus_discovery_diensten() -> None:
         vertrauensgrad=0.9,
         rollenhinweise=("sql_instanz:mssqlserver",),
     )
+    dc_treffer = DiscoveryTabellenTreffer(
+        hostname="srv-dc-01",
+        ip_adresse="10.0.0.50",
+        erreichbar=True,
+        dienste="53, 389",
+        vertrauensgrad=0.8,
+        rollenhinweise=("dc_remote_dienst:netlogon",),
+    )
     nur_app = DiscoveryTabellenTreffer(
         hostname="srv-02",
         ip_adresse="10.0.0.11",
@@ -101,6 +109,7 @@ def test_rollenableitung_aus_discovery_diensten() -> None:
     )
 
     assert _rollen_aus_discovery_treffer(sql_ctx) == ["SQL", "CTX"]
+    assert _rollen_aus_discovery_treffer(dc_treffer) == ["DC"]
     assert _rollen_aus_discovery_treffer(nur_app) == ["APP"]
 
 
@@ -125,9 +134,9 @@ def test_rollenableitung_gemischte_rollen() -> None:
         erreichbar=True,
         dienste="3389",
         vertrauensgrad=0.7,
-        rollenhinweise=("sql_remote_dienst:mssqlserver",),
+        rollenhinweise=("sql_remote_dienst:mssqlserver", "dc_remote_dienst:netlogon"),
     )
-    assert _rollen_aus_discovery_treffer(gemischt) == ["SQL", "CTX"]
+    assert _rollen_aus_discovery_treffer(gemischt) == ["SQL", "CTX", "DC"]
 
 
 def test_executive_summary_aggregiert_rollen_ports_und_warnungen() -> None:
@@ -148,7 +157,7 @@ def test_executive_summary_aggregiert_rollen_ports_und_warnungen() -> None:
         AnalyseErgebnis(
             server="srv-02",
             zeitpunkt=datetime.now(),
-            rollen=["CTX"],
+            rollen=["CTX", "DC"],
             ports=[PortStatus(port=135, offen=True, bezeichnung="RPC")],
             hinweise=[],
         ),
@@ -157,7 +166,7 @@ def test_executive_summary_aggregiert_rollen_ports_und_warnungen() -> None:
     summary = _baue_executive_summary(ergebnisse)
 
     assert any("Analysierte Server: 2" in zeile for zeile in summary)
-    assert any("SQL=1" in zeile and "APP=1" in zeile and "CTX=1" in zeile for zeile in summary)
+    assert any("SQL=1" in zeile and "APP=1" in zeile and "CTX=1" in zeile and "DC=1" in zeile for zeile in summary)
     assert any("Offene kritische Ports: 2" in zeile for zeile in summary)
     assert any("Warnungen/Hinweise gesamt: 2" in zeile for zeile in summary)
 

@@ -87,7 +87,7 @@ class TestAnalyzer(unittest.TestCase):
         self.assertTrue(all(ergebnis.lauf_id == "lauf-test-001" for ergebnis in ergebnisse))
 
 
-    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", side_effect=[True, False, False, False, False, False, False, False])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", side_effect=lambda _k, timeout=0.5: True)
     @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
     def test_schnellprofil_liefert_rollenvorschlag(self, _sock_mock, _port_mock) -> None:
         rollen = schlage_rollen_per_portsignatur_vor("srv-sql")
@@ -527,6 +527,63 @@ class TestAnalyzer(unittest.TestCase):
     def test_ermittle_discovery_seed_hosts_dedupliziert_dns_und_ad(self, _dns_mock, _ad_mock) -> None:
         seeds = ermittle_discovery_seed_hosts(True)
         self.assertEqual(["srv-ad-01", "srv-dns-01"], seeds)
+
+
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.0.10"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=False)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[])
+    def test_dc_rollenpruefung_ueber_dienste_und_ports(self, _sock_mock, _port_mock, _dns_mock) -> None:
+        from systemmanager_sagehelper.analyzer import DienstInfo, _pruefe_rollen
+        from systemmanager_sagehelper.models import PortStatus
+
+        ergebnis = analysiere_server(ServerZiel(name="srv-dc-01", rollen=[]))
+        ergebnis.dienste = [
+            DienstInfo(name="Netlogon", status="Running"),
+            DienstInfo(name="DNS", status="Running"),
+        ]
+        ergebnis.ports = [
+            PortStatus(port=53, offen=True, bezeichnung="DNS"),
+            PortStatus(port=389, offen=True, bezeichnung="LDAP"),
+        ]
+
+        _pruefe_rollen(ergebnis)
+        self.assertTrue(ergebnis.rollen_details.dc.erkannt)
+        self.assertIn("Netlogon", ergebnis.rollen_details.dc.ad_dienste)
+
+    @patch("systemmanager_sagehelper.analyzer.KombinierterRemoteProvider")
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value=None)
+    @patch("systemmanager_sagehelper.analyzer._resolve_forward_dns", return_value=None)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.4.30"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", side_effect=lambda _k, timeout=0.5: True)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=True)
+    def test_discovery_dc_hinweise_aus_remote_diensten_und_domain(
+        self,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _forward_mock,
+        _reverse_mock,
+        provider_cls,
+    ) -> None:
+        from systemmanager_sagehelper.analyzer import DienstInfo, Netzwerkidentitaet, RemoteSystemdaten
+
+        provider = Mock()
+        provider.ist_verfuegbar.return_value = True
+        provider.lese_systemdaten.return_value = RemoteSystemdaten(
+            netzwerkidentitaet=Netzwerkidentitaet(domain="contoso.local"),
+            dienste=[DienstInfo(name="Netlogon", status="Running")],
+        )
+        provider_cls.return_value = provider
+
+        treffer = _entdecke_einzelnen_host("srv-dc-30", DiscoveryKonfiguration(max_worker=1))
+
+        self.assertIsNotNone(treffer)
+        assert treffer is not None
+        self.assertTrue(any(h.startswith("dc_port_") for h in treffer.rollenhinweise))
+        self.assertIn("dc_remote_dienst:netlogon", treffer.rollenhinweise)
+        self.assertIn("dc_remote_domain:contoso.local", treffer.rollenhinweise)
 
 
 if __name__ == "__main__":
