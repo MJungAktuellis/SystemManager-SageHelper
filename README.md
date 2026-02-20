@@ -146,7 +146,8 @@ Der Launcher `Install-SystemManager-SageHelper.cmd` unterstützt folgende Schalt
 
 - `--persist-console`: Öffnet den Installer in einer persistenten `cmd /k`-Konsole (Support-/Debug-Modus).
 - `--pause`: Erzwingt ein `pause` am Ende, auch bei erfolgreichem Lauf.
-- `--nopause`: Unterdrückt das `pause` (außer wenn `--pause` explizit gesetzt ist).
+- `--debug`: Aktiviert den Debug-Modus und erzwingt intern automatisch `--pause`.
+- `--nopause`: Unterdrückt das `pause` (außer wenn `--pause` oder `--debug` explizit gesetzt ist).
 
 Standardlogik ohne Schalter:
 

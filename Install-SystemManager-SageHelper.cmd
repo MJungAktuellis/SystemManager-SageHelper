@@ -2,7 +2,7 @@
 setlocal
 REM Starter fuer Windows: startet den PowerShell-Installer aus dem Projektordner.
 REM Standardverhalten: Fenster schliesst nach erfolgreichem Lauf automatisch.
-REM Debug-Hilfen: --persist-console (Konsole offen halten), --pause (am Ende pausieren).
+REM Debug-Hilfen: --persist-console (Konsole offen halten), --pause (am Ende pausieren), --debug (erzwingt Pause).
 
 set "SCRIPT_PATH=%~f0"
 set "SCRIPT_DIR=%~dp0"
@@ -12,11 +12,13 @@ set "PY_INSTALL_SCRIPT=%SCRIPT_DIR%scripts\install.py"
 set "USED_FALLBACK=0"
 set "LOG_DIR=%SCRIPT_DIR%logs"
 set "LAUNCHER_LOG=%LOG_DIR%\install_launcher.log"
+set "LAUNCHER_LOG_REL=logs\install_launcher.log"
 
 set "INTERNAL_PERSIST=0"
 set "PERSIST_CONSOLE=0"
 set "FORCE_PAUSE=0"
 set "NO_PAUSE=0"
+set "DEBUG_MODE=0"
 
 REM Parameter robust einlesen, damit Reihenfolge der Schalter flexibel bleibt.
 :parse_args
@@ -36,6 +38,12 @@ if /I "%~1"=="--pause" (
     shift
     goto parse_args
 )
+if /I "%~1"=="--debug" (
+    set "DEBUG_MODE=1"
+    set "FORCE_PAUSE=1"
+    shift
+    goto parse_args
+)
 if /I "%~1"=="--nopause" (
     set "NO_PAUSE=1"
     shift
@@ -46,6 +54,18 @@ shift
 goto parse_args
 
 :after_parse
+
+REM Frueher, gut sichtbarer Hinweis fuer Supportfaelle.
+echo.
+echo ================================================================
+echo [HINWEIS] Launcher-Logdatei: %LAUNCHER_LOG_REL%
+echo [HINWEIS] Vollstaendiger Pfad: %LAUNCHER_LOG%
+echo ================================================================
+echo.
+
+if "%DEBUG_MODE%"=="1" (
+    echo [INFO] Debug-Modus aktiv: --pause wurde automatisch aktiviert.
+)
 
 REM Optionales persistentes CMD-Fenster nur auf ausdruecklichen Wunsch aktivieren.
 REM Die /c-Erkennung verhindert Rekursion, wenn bereits in einer dauerhaften Konsole gestartet.
@@ -154,6 +174,7 @@ if "%EXIT_CODE%"=="0" (
         echo [FEHLER] Installation beendet mit Exit-Code %EXIT_CODE%.
         echo Bitte pruefen Sie die Logdateien unter logs\install_launcher.log,
         echo logs\install_assistant_ps.log und logs\install_engine.log.
+        echo Bitte diese Datei senden: %LAUNCHER_LOG_REL%
     )
 )
 
