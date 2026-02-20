@@ -1082,6 +1082,10 @@ class SystemManagerGUI:
         self._karten_beschreibung: dict[str, tk.StringVar] = {}
         self._karten_experten_buttons: dict[str, ttk.Button] = {}
         self._karten_technische_details: dict[str, tk.StringVar] = {}
+        self._serversektion_eingeklappt = tk.BooleanVar(value=False)
+        self._serversektion_toggle_text = tk.StringVar(value="▾ Übernommene Server")
+        self._serverdetail_vars: dict[str, tk.StringVar] = {}
+        self._serveransicht_index: dict[str, dict[str, object]] = {}
         self._dashboard_gebaut = False
         self._onboarding_controller = OnboardingController(self)
 
@@ -1145,8 +1149,10 @@ class SystemManagerGUI:
             style="Subheadline.TLabel",
         ).grid(row=1, column=0, columnspan=2, sticky="w", padx=LAYOUT.padding_inline, pady=(0, 10))
 
+        self._baue_serversektion(dashboard, start_zeile=2)
+
         cards = ttk.Frame(dashboard)
-        cards.grid(row=2, column=0, sticky="ew", padx=LAYOUT.padding_inline, pady=(0, 12))
+        cards.grid(row=3, column=0, sticky="ew", padx=LAYOUT.padding_inline, pady=(0, 12))
         cards.columnconfigure((0, 1), weight=1)
 
         self._baue_modul_card(
@@ -1192,6 +1198,228 @@ class SystemManagerGUI:
 
         self._baue_uebersichtsseite()
         self._aktualisiere_dashboard_status()
+
+    def _baue_serversektion(self, parent: ttk.LabelFrame, *, start_zeile: int) -> None:
+        """Erstellt eine einklappbare Übersicht über übernommene Server.
+
+        Die Tabelle kombiniert Analyse-Snapshots (`server_summary`) mit
+        Discovery-Metadaten aus der Modulpersistenz (`serverlisten`).
+        """
+        toggle_button = ttk.Button(parent, textvariable=self._serversektion_toggle_text, command=self._toggle_serversektion)
+        toggle_button.grid(
+            row=start_zeile,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            padx=LAYOUT.padding_inline,
+            pady=(0, 6),
+        )
+
+        self._serversektion_frame = ttk.Frame(parent)
+        self._serversektion_frame.grid(
+            row=start_zeile + 1,
+            column=0,
+            columnspan=2,
+            sticky="nsew",
+            padx=LAYOUT.padding_inline,
+            pady=(0, 10),
+        )
+
+        tabellenrahmen = ttk.Frame(self._serversektion_frame)
+        tabellenrahmen.pack(fill="x", expand=False)
+
+        spalten = ("server", "fqdn", "ip", "reach", "rollen", "quelle", "analyse")
+        self.server_uebersicht = ttk.Treeview(tabellenrahmen, columns=spalten, show="headings", height=6)
+        self.server_uebersicht.pack(side="left", fill="x", expand=True)
+
+        self.server_uebersicht.heading("server", text="Servername")
+        self.server_uebersicht.heading("fqdn", text="FQDN/Hostname")
+        self.server_uebersicht.heading("ip", text="IP")
+        self.server_uebersicht.heading("reach", text="Erreichbarkeit/Vertrauen")
+        self.server_uebersicht.heading("rollen", text="Rolle(n)")
+        self.server_uebersicht.heading("quelle", text="Rollenquelle")
+        self.server_uebersicht.heading("analyse", text="Letzte Analyse")
+
+        self.server_uebersicht.column("server", width=140)
+        self.server_uebersicht.column("fqdn", width=210)
+        self.server_uebersicht.column("ip", width=120, anchor="center")
+        self.server_uebersicht.column("reach", width=220)
+        self.server_uebersicht.column("rollen", width=150)
+        self.server_uebersicht.column("quelle", width=150)
+        self.server_uebersicht.column("analyse", width=160)
+
+        scrollbar = ttk.Scrollbar(tabellenrahmen, orient="vertical", command=self.server_uebersicht.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.server_uebersicht.configure(yscrollcommand=scrollbar.set)
+        self.server_uebersicht.bind("<<TreeviewSelect>>", self._bei_serverauswahl)
+
+        details = ttk.LabelFrame(self._serversektion_frame, text="Server-Details", style="Section.TLabelframe")
+        details.pack(fill="x", pady=(8, 0))
+        details.columnconfigure(1, weight=1)
+
+        for index, (schluessel, label) in enumerate(
+            [
+                ("betriebssystem", "Betriebssystem"),
+                ("dienste", "Dienste"),
+                ("ports", "Ports"),
+                ("hinweise", "Hinweise"),
+            ]
+        ):
+            self._serverdetail_vars[schluessel] = tk.StringVar(value="-")
+            ttk.Label(details, text=f"{label}:", width=18).grid(row=index, column=0, sticky="nw", padx=8, pady=4)
+            ttk.Label(
+                details,
+                textvariable=self._serverdetail_vars[schluessel],
+                justify="left",
+                wraplength=860,
+            ).grid(row=index, column=1, sticky="ew", padx=(0, 8), pady=4)
+
+        self._lade_serversektion()
+
+    def _toggle_serversektion(self) -> None:
+        """Klappsteuerung für die kompakte Serversektion."""
+        ist_eingeklappt = not self._serversektion_eingeklappt.get()
+        self._serversektion_eingeklappt.set(ist_eingeklappt)
+        if ist_eingeklappt:
+            self._serversektion_frame.grid_remove()
+            self._serversektion_toggle_text.set("▸ Übernommene Server")
+        else:
+            self._serversektion_frame.grid()
+            self._serversektion_toggle_text.set("▾ Übernommene Server")
+
+    def _baue_serveransicht_zeilen(self, module: dict[str, object]) -> list[dict[str, object]]:
+        """Konsolidiert Server-Snapshot und Discovery-Metadaten in ein UI-Modell."""
+        serveranalyse_modul = module.get("server_analysis", {})
+        if not isinstance(serveranalyse_modul, dict):
+            return []
+
+        server_summary = serveranalyse_modul.get("server_summary", [])
+        discovery_liste = serveranalyse_modul.get("serverlisten", [])
+
+        summary_liste = server_summary if isinstance(server_summary, list) else []
+        discovery_index: dict[str, dict[str, object]] = {}
+        if isinstance(discovery_liste, list):
+            for discovery in discovery_liste:
+                if not isinstance(discovery, dict):
+                    continue
+                name = str(discovery.get("servername") or "").strip()
+                if name:
+                    discovery_index[normalisiere_servernamen(name)] = discovery
+
+        zeilen: list[dict[str, object]] = []
+        for summary in summary_liste:
+            if not isinstance(summary, dict):
+                continue
+            servername = str(summary.get("name") or "").strip()
+            if not servername:
+                continue
+            discovery = discovery_index.get(normalisiere_servernamen(servername), {})
+            rollen_liste = summary.get("rollen", [])
+            rollen = ", ".join(rollen_liste) if isinstance(rollen_liste, list) and rollen_liste else "keine Rolle"
+
+            erreichbarkeit = str(discovery.get("erreichbarkeitsstatus") or "").strip()
+            if not erreichbarkeit:
+                erreichbarkeit = "erreichbar" if bool(summary.get("erreichbar")) else "nicht erreichbar"
+            vertrauensgrad = discovery.get("vertrauensgrad")
+            if isinstance(vertrauensgrad, (int, float)):
+                erreichbarkeit = f"{erreichbarkeit} ({float(vertrauensgrad):.2f})"
+
+            hinweise_liste = summary.get("hinweise") if isinstance(summary.get("hinweise"), list) else []
+            manuelle_anmerkung = str(summary.get("manuelle_anmerkung") or "").strip()
+            if manuelle_anmerkung and manuelle_anmerkung not in hinweise_liste:
+                hinweise_liste = [*hinweise_liste, manuelle_anmerkung]
+
+            zeilen.append(
+                {
+                    "servername": servername,
+                    "fqdn": str(
+                        discovery.get("aufgeloester_hostname")
+                        or summary.get("fqdn")
+                        or summary.get("hostname")
+                        or servername
+                    ),
+                    "ip": str(discovery.get("ip_adresse") or summary.get("ip") or "-"),
+                    "reach": erreichbarkeit,
+                    "rollen": rollen,
+                    "rollenquelle": str(summary.get("rollenquelle") or "unbekannt"),
+                    "analyse": str(summary.get("letzte_pruefung") or "unbekannt"),
+                    "betriebssystem": self._formatiere_detailwert(summary.get("betriebssystem") or summary.get("os")),
+                    "dienste": self._formatiere_detailwert(summary.get("dienste")),
+                    "ports": self._formatiere_detailwert(summary.get("ports")),
+                    "hinweise": self._formatiere_detailwert(hinweise_liste) or "Keine Hinweise vorhanden",
+                }
+            )
+
+        return zeilen
+
+    @staticmethod
+    def _formatiere_detailwert(wert: object) -> str:
+        """Formatiert Detailwerte robust für die kompakte Drilldown-Ansicht."""
+        if isinstance(wert, list):
+            teile = [str(eintrag).strip() for eintrag in wert if str(eintrag).strip()]
+            return ", ".join(teile)
+        if isinstance(wert, dict):
+            teile = [f"{schluessel}: {inhalt}" for schluessel, inhalt in wert.items()]
+            return ", ".join(teile)
+        return str(wert).strip()
+
+    def _lade_serversektion(self) -> None:
+        """Lädt die Tabellenzeilen für die Serversektion und setzt Default-Details."""
+        if not hasattr(self, "server_uebersicht"):
+            return
+
+        for item_id in self.server_uebersicht.get_children(""):
+            self.server_uebersicht.delete(item_id)
+
+        self._serveransicht_index = {}
+        module = self.state_store.lade_gesamtzustand().get("modules", {})
+        zeilen = self._baue_serveransicht_zeilen(module if isinstance(module, dict) else {})
+        for index, zeile in enumerate(zeilen):
+            item_id = f"server_{index}"
+            self._serveransicht_index[item_id] = zeile
+            self.server_uebersicht.insert(
+                "",
+                "end",
+                iid=item_id,
+                values=(
+                    zeile["servername"],
+                    zeile["fqdn"],
+                    zeile["ip"],
+                    zeile["reach"],
+                    zeile["rollen"],
+                    zeile["rollenquelle"],
+                    zeile["analyse"],
+                ),
+            )
+
+        self._serversektion_toggle_text.set(f"▾ Übernommene Server ({len(zeilen)})")
+        self._setze_serverdetails(None)
+        if zeilen:
+            erstes_item = next(iter(self._serveransicht_index))
+            self.server_uebersicht.selection_set(erstes_item)
+            self._setze_serverdetails(self._serveransicht_index.get(erstes_item))
+
+    def _bei_serverauswahl(self, _event: tk.Event) -> None:
+        """Aktualisiert die Detailansicht bei Serverauswahl im Treeview."""
+        if not hasattr(self, "server_uebersicht"):
+            return
+        auswahl = self.server_uebersicht.selection()
+        if not auswahl:
+            self._setze_serverdetails(None)
+            return
+        self._setze_serverdetails(self._serveransicht_index.get(auswahl[0]))
+
+    def _setze_serverdetails(self, serverdetails: dict[str, object] | None) -> None:
+        """Setzt die Drilldown-Informationen für den aktuell gewählten Server."""
+        defaults = {
+            "betriebssystem": "Keine Daten verfügbar",
+            "dienste": "Keine Daten verfügbar",
+            "ports": "Keine Daten verfügbar",
+            "hinweise": "Keine Daten verfügbar",
+        }
+        for schluessel, fallback in defaults.items():
+            text = fallback if not serverdetails else str(serverdetails.get(schluessel) or fallback)
+            self._serverdetail_vars[schluessel].set(text)
 
     def _baue_modul_card(
         self,
@@ -1277,9 +1505,11 @@ class SystemManagerGUI:
             kerninfos = modulwerte.get("letzte_kerninfos", [])
             infos = "; ".join(kerninfos) if kerninfos else "Keine Daten"
 
-            # Für die Serveranalyse werden die wichtigsten Server gezielt hervorgehoben.
+            # Für die Serveranalyse verweist die Modulübersicht auf die strukturierte Servertabelle.
             if modulname == "server_analysis":
-                infos = _formatiere_server_summary_fuer_dashboard(modulwerte.get("server_summary", []), limit=5)
+                serverliste = modulwerte.get("server_summary", [])
+                anzahl_server = len(serverliste) if isinstance(serverliste, list) else 0
+                infos = f"{anzahl_server} Server in der Tabelle 'Übernommene Server'"
 
             berichte = "; ".join(modulwerte.get("bericht_verweise", [])) or "Keine Verweise"
             self.uebersicht.insert("", "end", values=(modulname, infos, berichte))
@@ -1429,6 +1659,7 @@ class SystemManagerGUI:
         finally:
             self._lade_uebersichtszeilen()
             self._aktualisiere_dashboard_status()
+            self._lade_serversektion()
 
     def installieren(self, *, bestaetigung_erforderlich: bool = True, expertenmodus: bool = False) -> None:
         """Öffnet den Installationsassistenten mit Guard gegen unbeabsichtigte Vollinstallationen."""
@@ -1491,6 +1722,7 @@ class SystemManagerGUI:
 
         self._lade_uebersichtszeilen()
         self._aktualisiere_dashboard_status()
+        self._lade_serversektion()
 
     def _installation_erforderlich_dialog(self, modulname: str) -> bool:
         """Blockiert Modulstarts ohne valide Installation und nutzt genau einen Bestätigungsdialog."""
@@ -1543,6 +1775,7 @@ class SystemManagerGUI:
         self.state_store.speichere_modulzustand("gui_manager", self.modulzustand)
         self._lade_uebersichtszeilen()
         self._aktualisiere_dashboard_status()
+        self._lade_serversektion()
         self.shell.setze_status("Launcher-Zustand gespeichert")
         self.shell.logge_meldung(f"Zustand gespeichert unter: {self.state_store.dateipfad}")
 
@@ -1550,6 +1783,7 @@ class SystemManagerGUI:
         """Navigationsaktion: im Launcher bedeutet Zurück eine Übersichts-Aktualisierung."""
         self._lade_uebersichtszeilen()
         self._aktualisiere_dashboard_status()
+        self._lade_serversektion()
         self.shell.setze_status("Übersicht aktualisiert")
 
 
