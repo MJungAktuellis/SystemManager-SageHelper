@@ -5,7 +5,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .analyzer import analysiere_mehrere_server, entdecke_server_kandidaten
+from .analyzer import (
+    DiscoveryKonfiguration,
+    DiscoveryRangeSegment,
+    analysiere_mehrere_server,
+    entdecke_server_kandidaten,
+    entdecke_server_mehrere_ranges,
+    entdecke_server_via_seeds,
+)
 from .confirmation import bestaetige_aenderungen_cli
 from .folder_structure import ermittle_fehlende_ordner, lege_ordner_an
 from .logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
@@ -41,6 +48,23 @@ def baue_parser() -> argparse.ArgumentParser:
     scan.add_argument("--discover-base", default="", help="IPv4-Basis für Discovery, z. B. 192.168.10")
     scan.add_argument("--discover-start", type=int, default=1, help="Start-Hostnummer für Discovery")
     scan.add_argument("--discover-end", type=int, default=20, help="End-Hostnummer für Discovery")
+    scan.add_argument(
+        "--discover-range",
+        action="append",
+        default=[],
+        help="Mehrere Discovery-Ranges im Format 192.168.10.1-30 (mehrfach erlaubt)",
+    )
+    scan.add_argument(
+        "--discover-seed",
+        action="append",
+        default=[],
+        help="Optionale Seed-Hosts für Discovery (mehrfach erlaubt)",
+    )
+    scan.add_argument(
+        "--discover-seeds-from-ad-dns",
+        action="store_true",
+        help="Erweitert Seeds optional um DNS-SRV/AD-Computerobjekte (wenn verfügbar)",
+    )
     scan.add_argument("--out", default="dokumentation.md", help="Zieldatei für Markdown-Export")
 
     workflow = sub.add_parser("workflow", help="Standardprozess Installation->Analyse->Freigaben->Doku")
@@ -66,9 +90,31 @@ def baue_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _parse_discovery_range_text(range_text: str) -> DiscoveryRangeSegment:
+    """Parst ein Segment aus dem Format `A.B.C.X-Y` in ein DiscoveryRangeSegment."""
+    rohwert = range_text.strip()
+    if not rohwert:
+        raise ValueError("Leerer Discovery-Range ist nicht erlaubt.")
+
+    if "-" not in rohwert:
+        raise ValueError("Discovery-Range muss einen Start-/Endbereich enthalten (X-Y).")
+
+    host_teil, end_text = rohwert.rsplit("-", maxsplit=1)
+    oktette = host_teil.split(".")
+    if len(oktette) != 4 or not all(teil.isdigit() for teil in oktette):
+        raise ValueError(f"Ungültiger Discovery-Range: {rohwert}")
+
+    basis = ".".join(oktette[:3])
+    start = int(oktette[3])
+    ende = int(end_text)
+    return DiscoveryRangeSegment(basis=basis, start=start, ende=ende)
+
+
 def _ermittle_serverliste(args: argparse.Namespace) -> list[str]:
-    """Baut die effektive Serverliste aus manuellen Angaben und optionaler Discovery."""
+    """Baut die effektive Serverliste aus manuellen Angaben und erweiterter Discovery."""
     server_liste = parse_liste(args.server)
+
+    # Kompatibilitätsmodus: bestehende Einzel-Range-Flags bleiben erhalten.
     if args.discover_base:
         gefundene_server = entdecke_server_kandidaten(
             basis=args.discover_base,
@@ -78,6 +124,21 @@ def _ermittle_serverliste(args: argparse.Namespace) -> list[str]:
         for server in gefundene_server:
             if server not in server_liste:
                 server_liste.append(server)
+
+    if args.discover_range:
+        ranges = [_parse_discovery_range_text(eintrag) for eintrag in args.discover_range]
+        ergebnisse = entdecke_server_mehrere_ranges(ranges=ranges, konfiguration=DiscoveryKonfiguration())
+        for treffer in ergebnisse:
+            if treffer.hostname not in server_liste:
+                server_liste.append(treffer.hostname)
+
+    if args.discover_seed or args.discover_seeds_from_ad_dns:
+        konfiguration = DiscoveryKonfiguration(nutze_ad_ldap=args.discover_seeds_from_ad_dns)
+        ergebnisse = entdecke_server_via_seeds(seeds=args.discover_seed, konfiguration=konfiguration)
+        for treffer in ergebnisse:
+            if treffer.hostname not in server_liste:
+                server_liste.append(treffer.hostname)
+
     return server_liste
 
 
@@ -90,7 +151,10 @@ def main() -> int:
     logger.info("CLI gestartet mit Kommando: %s", args.kommando)
 
     if args.kommando == "scan":
-        server_liste = _ermittle_serverliste(args)
+        try:
+            server_liste = _ermittle_serverliste(args)
+        except ValueError as exc:
+            parser.error(f"Ungültige Discovery-Eingabe: {exc}")
         if not server_liste:
             parser.error("Mindestens ein gültiger Servername oder Discovery-Parameter muss angegeben werden.")
 

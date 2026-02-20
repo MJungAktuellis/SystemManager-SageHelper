@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
+import re
 import socket
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -98,6 +100,19 @@ class DiscoveryLaufProtokoll:
     strategien: tuple[str, ...]
     trefferzahl: int
     fehlerursachen: dict[str, int]
+
+
+@dataclass(frozen=True)
+class DiscoveryRangeSegment:
+    """Beschreibt einen einzelnen Discovery-Range als wiederverwendbares Modell."""
+
+    basis: str
+    start: int
+    ende: int
+
+    def als_text(self) -> str:
+        """Liefert ein gut lesbares Segmentformat für Logging und GUI."""
+        return f"{self.basis}.{self.start}-{self.ende}"
 
 
 @dataclass(frozen=True)
@@ -866,12 +881,65 @@ def _dedupliziere_discovery_ergebnisse(ergebnisse: Iterable[DiscoveryErgebnis]) 
 
 def _ad_ldap_hinweis() -> str | None:
     """Liefert optionalen AD/LDAP-Hinweis, sofern Domänenumfeld erkannt wird."""
-    import os
-
     domain = (os.environ.get("USERDNSDOMAIN") or os.environ.get("USERDOMAIN") or "").strip()
     if domain and domain.lower() not in {"workgroup", "localhost"}:
         return f"Domäne erkannt: {domain}"
     return None
+
+
+def _ermittle_seed_hosts_via_dns_srv() -> list[str]:
+    """Liest optionale Seed-Hosts aus DNS-SRV-Einträgen via nslookup aus."""
+    domain = (os.environ.get("USERDNSDOMAIN") or "").strip()
+    if not domain or domain.lower() in {"workgroup", "localhost"}:
+        return []
+
+    cmd = ["nslookup", "-type=SRV", f"_ldap._tcp.dc._msdcs.{domain}"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=4.0, check=False)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+
+    # `svr hostname` wird je nach OS/Locale leicht unterschiedlich ausgegeben.
+    treffer = re.findall(r"svr hostname\s*=\s*([^\s]+)", result.stdout, flags=re.IGNORECASE)
+    return _normalisiere_discovery_hostliste(treffer)
+
+
+def _ermittle_seed_hosts_via_ad_computer() -> list[str]:
+    """Liest optionale Seed-Hosts aus AD-Computerobjekten per PowerShell aus."""
+    script = (
+        "$ErrorActionPreference='Stop';"
+        "if (Get-Module -ListAvailable ActiveDirectory) {"
+        "Import-Module ActiveDirectory -ErrorAction Stop;"
+        "Get-ADComputer -Filter * -Properties DNSHostName,Name |"
+        " Select-Object -First 300 -ExpandProperty DNSHostName"
+        "}"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=8.0,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+
+    return _normalisiere_discovery_hostliste(result.stdout.splitlines())
+
+
+def ermittle_discovery_seed_hosts(nutze_ad_ldap: bool) -> list[str]:
+    """Ermittelt bei Bedarf Seed-Hosts über DNS/AD als optionale Discovery-Quelle."""
+    if not nutze_ad_ldap:
+        return []
+
+    # DNS-SRV ist leichtgewichtig; AD-Computerobjekte ergänzen die Datenbasis.
+    seeds = _ermittle_seed_hosts_via_dns_srv() + _ermittle_seed_hosts_via_ad_computer()
+    return _normalisiere_discovery_hostliste(seeds)
 
 
 def _rollenhinweise_aus_discovery(
@@ -1041,28 +1109,81 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
     )
 
 
+def _entdecke_server_von_hostliste(hosts: list[str], conf: DiscoveryKonfiguration) -> list[DiscoveryErgebnis]:
+    """Führt Discovery für eine normalisierte Hostliste parallel aus."""
+    normalisierte_hosts = _normalisiere_discovery_hostliste(hosts)
+    if not normalisierte_hosts:
+        return []
+
+    ergebnisse: list[DiscoveryErgebnis] = []
+    with ThreadPoolExecutor(max_workers=min(conf.max_worker, len(normalisierte_hosts))) as executor:
+        futures = [executor.submit(_entdecke_einzelnen_host, host, conf) for host in normalisierte_hosts]
+        for future in as_completed(futures):
+            treffer = future.result()
+            if treffer is not None:
+                ergebnisse.append(treffer)
+
+    return _dedupliziere_discovery_ergebnisse(ergebnisse)
+
+
+def entdecke_server_mehrere_ranges(
+    ranges: list[DiscoveryRangeSegment],
+    konfiguration: DiscoveryKonfiguration | None = None,
+) -> list[DiscoveryErgebnis]:
+    """Ermittelt Discovery-Treffer über mehrere IPv4-Segmente in einem Lauf."""
+    conf = konfiguration or DiscoveryKonfiguration()
+    hosts: list[str] = []
+    range_texte: list[str] = []
+
+    for segment in ranges:
+        basis, start, ende = _validiere_discovery_range(segment.basis, segment.start, segment.ende)
+        range_texte.append(f"{basis}.{start}-{ende}")
+        hosts.extend(f"{basis}.{host_teil}" for host_teil in range(start, ende + 1))
+
+    deduplizierte_ergebnisse = _entdecke_server_von_hostliste(hosts, conf)
+    logger.info(
+        "Discovery über mehrere Ranges abgeschlossen | Segmente=%s | Kandidaten=%s | Treffer=%s",
+        ";".join(range_texte),
+        len(_normalisiere_discovery_hostliste(hosts)),
+        len(deduplizierte_ergebnisse),
+    )
+    return deduplizierte_ergebnisse
+
+
+def entdecke_server_via_seeds(
+    seeds: list[str] | None = None,
+    konfiguration: DiscoveryKonfiguration | None = None,
+) -> list[DiscoveryErgebnis]:
+    """Ermittelt Discovery-Treffer über explizite und optionale AD/DNS-Seed-Hosts."""
+    conf = konfiguration or DiscoveryKonfiguration()
+    manuelle_seeds = _normalisiere_discovery_hostliste(seeds or [])
+    auto_seeds = ermittle_discovery_seed_hosts(conf.nutze_ad_ldap)
+    kombinierte_seeds = _normalisiere_discovery_hostliste([*manuelle_seeds, *auto_seeds])
+
+    deduplizierte_ergebnisse = _entdecke_server_von_hostliste(kombinierte_seeds, conf)
+    logger.info(
+        "Discovery via Seeds abgeschlossen | Manuell=%s | Auto(AD/DNS)=%s | Gesamt=%s | Treffer=%s",
+        len(manuelle_seeds),
+        len(auto_seeds),
+        len(kombinierte_seeds),
+        len(deduplizierte_ergebnisse),
+    )
+    return deduplizierte_ergebnisse
+
+
 def entdecke_server_ergebnisse(
     basis: str,
     start: int,
     ende: int,
     konfiguration: DiscoveryKonfiguration | None = None,
 ) -> list[DiscoveryErgebnis]:
-    """Ermittelt Discovery-Treffer über mehrere Strategien mit Parallelisierung."""
+    """Ermittelt Discovery-Treffer über ein einzelnes Segment (Kompatibilitäts-API)."""
+    deduplizierte_ergebnisse = entdecke_server_mehrere_ranges(
+        ranges=[DiscoveryRangeSegment(basis=basis, start=start, ende=ende)],
+        konfiguration=konfiguration,
+    )
+
     conf = konfiguration or DiscoveryKonfiguration()
-    normalisierte_basis, normalisierter_start, normalisiertes_ende = _validiere_discovery_range(basis, start, ende)
-
-    hosts = [f"{normalisierte_basis}.{host_teil}" for host_teil in range(normalisierter_start, normalisiertes_ende + 1)]
-    normalisierte_hosts = _normalisiere_discovery_hostliste(hosts)
-    ergebnisse: list[DiscoveryErgebnis] = []
-
-    with ThreadPoolExecutor(max_workers=min(conf.max_worker, len(normalisierte_hosts) or 1)) as executor:
-        futures = [executor.submit(_entdecke_einzelnen_host, host, conf) for host in normalisierte_hosts]
-        for future in as_completed(futures):
-            treffer = future.result()
-            if treffer is not None:
-                ergebnisse.append(treffer)
-    deduplizierte_ergebnisse = _dedupliziere_discovery_ergebnisse(ergebnisse)
-
     strategie_liste = ["icmp", "tcp_syn"]
     if conf.nutze_reverse_dns:
         strategie_liste.append("reverse_dns")
@@ -1074,6 +1195,7 @@ def entdecke_server_ergebnisse(
         for fehler in item.fehlerursachen:
             fehler_counter[fehler] = fehler_counter.get(fehler, 0) + 1
 
+    normalisierte_basis, normalisierter_start, normalisiertes_ende = _validiere_discovery_range(basis, start, ende)
     laufprotokoll = DiscoveryLaufProtokoll(
         basis=normalisierte_basis,
         start=normalisierter_start,
@@ -1100,24 +1222,10 @@ def entdecke_server_namen(
     konfiguration: DiscoveryKonfiguration | None = None,
 ) -> list[DiscoveryErgebnis]:
     """Ermittelt Discovery-Treffer aus einer expliziten Liste von Servernamen."""
-    conf = konfiguration or DiscoveryKonfiguration()
-    normalisierte_hosts = _normalisiere_discovery_hostliste(hosts)
-    if not normalisierte_hosts:
-        return []
-
-    ergebnisse: list[DiscoveryErgebnis] = []
-    with ThreadPoolExecutor(max_workers=min(conf.max_worker, len(normalisierte_hosts))) as executor:
-        futures = [executor.submit(_entdecke_einzelnen_host, host, conf) for host in normalisierte_hosts]
-        for future in as_completed(futures):
-            treffer = future.result()
-            if treffer is not None:
-                ergebnisse.append(treffer)
-
-    deduplizierte_ergebnisse = _dedupliziere_discovery_ergebnisse(ergebnisse)
+    deduplizierte_ergebnisse = entdecke_server_via_seeds(seeds=hosts, konfiguration=konfiguration)
     logger.info(
-        "Discovery über Servernamenliste abgeschlossen | Eingaben=%s | Normalisiert=%s | Treffer=%s",
+        "Discovery über Servernamenliste abgeschlossen | Eingaben=%s | Treffer=%s",
         len(hosts),
-        len(normalisierte_hosts),
         len(deduplizierte_ergebnisse),
     )
     return deduplizierte_ergebnisse

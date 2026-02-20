@@ -7,13 +7,17 @@ from unittest.mock import Mock, patch
 
 from systemmanager_sagehelper.analyzer import (
     DiscoveryKonfiguration,
+    DiscoveryRangeSegment,
     RemoteAbrufFehler,
     _klassifiziere_anwendungen,
     _normalisiere_rollen,
-    entdecke_server_ergebnisse,
-    entdecke_server_namen,
-    analysiere_server,
     analysiere_mehrere_server,
+    analysiere_server,
+    entdecke_server_ergebnisse,
+    entdecke_server_mehrere_ranges,
+    entdecke_server_namen,
+    entdecke_server_via_seeds,
+    ermittle_discovery_seed_hosts,
     schlage_rollen_per_portsignatur_vor,
     _entdecke_einzelnen_host,
 )
@@ -421,6 +425,57 @@ class TestAnalyzer(unittest.TestCase):
         treffer = _entdecke_einzelnen_host("srv-nicht-da", DiscoveryKonfiguration(max_worker=1))
 
         self.assertIsNone(treffer)
+
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value="srv-multi.domain.local")
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.20.1.10"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=True)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=True)
+    def test_discovery_mehrere_ranges_fasst_segmente_zusammen(
+        self,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _reverse_mock,
+    ) -> None:
+        ergebnisse = entdecke_server_mehrere_ranges(
+            ranges=[
+                DiscoveryRangeSegment(basis="10.20.1", start=10, ende=10),
+                DiscoveryRangeSegment(basis="10.20.1", start=11, ende=11),
+            ],
+            konfiguration=DiscoveryKonfiguration(max_worker=2),
+        )
+
+        self.assertEqual(1, len(ergebnisse))
+
+    @patch("systemmanager_sagehelper.analyzer.ermittle_discovery_seed_hosts", return_value=["srv-seed-a"])
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value="srv-seed-a.domain.local")
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.30.1.20"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=True)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=True)
+    def test_discovery_via_seeds_nutzt_manuelle_und_auto_seeds(
+        self,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _reverse_mock,
+        _seed_mock,
+    ) -> None:
+        ergebnisse = entdecke_server_via_seeds(
+            seeds=["srv-seed-b"],
+            konfiguration=DiscoveryKonfiguration(max_worker=2, nutze_ad_ldap=True),
+        )
+
+        self.assertEqual(1, len(ergebnisse))
+
+    @patch("systemmanager_sagehelper.analyzer._ermittle_seed_hosts_via_ad_computer", return_value=["srv-ad-01"])
+    @patch("systemmanager_sagehelper.analyzer._ermittle_seed_hosts_via_dns_srv", return_value=["srv-dns-01", "srv-ad-01"])
+    def test_ermittle_discovery_seed_hosts_dedupliziert_dns_und_ad(self, _dns_mock, _ad_mock) -> None:
+        seeds = ermittle_discovery_seed_hosts(True)
+        self.assertEqual(["srv-ad-01", "srv-dns-01"], seeds)
 
 
 if __name__ == "__main__":
