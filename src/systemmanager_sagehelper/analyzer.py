@@ -64,6 +64,7 @@ class DiscoveryKonfiguration:
     tcp_ports: tuple[int, ...] = (135, 139, 445, 1433, 1434, 3389, 4022)
     nutze_reverse_dns: bool = True
     nutze_ad_ldap: bool = False
+    min_vertrauensgrad: float = 0.4
 
 
 @dataclass(frozen=True)
@@ -887,6 +888,7 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
     strategien: list[str] = []
     fehlerursachen: list[str] = []
     erkannte_dienste: list[str] = []
+    aufnahmegruende: list[str] = []
     ip_adresse = host
     erreichbar = False
     vertrauensgrad = 0.0
@@ -896,6 +898,7 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
     if forward_name:
         strategien.append("forward_dns")
         namensquelle = "forward_dns"
+        vertrauensgrad += 0.15
 
     ip_adressen = _ermittle_ip_adressen(host)
     if ip_adressen:
@@ -903,13 +906,14 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
     else:
         fehlerursachen.append("dns_auflosung")
 
-    # Aufnahme-Kriterium 1: Der Host ist per ICMP erreichbar.
+    # Harte Erreichbarkeit: Der Host antwortet auf ICMP.
     if _ping_host(host, konfiguration.ping_timeout):
         strategien.append("icmp")
         erreichbar = True
         vertrauensgrad += 0.45
+        aufnahmegruende.append("harter_check_icmp")
 
-    # Aufnahme-Kriterium 2: Mindestens ein relevanter TCP-Port antwortet.
+    # Harte Erreichbarkeit: Mindestens ein relevanter TCP-Port antwortet.
     for port in konfiguration.tcp_ports:
         kandidaten = _ermittle_socket_kandidaten(host, port)
         if kandidaten and pruefe_tcp_port(kandidaten, timeout=konfiguration.tcp_timeout):
@@ -919,24 +923,28 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
 
     if erkannte_dienste:
         vertrauensgrad += min(0.4, 0.1 * len(erkannte_dienste))
+        aufnahmegruende.append("harter_check_tcp")
     elif "icmp" not in strategien:
         fehlerursachen.append("tcp_timeout")
 
     hostname = forward_name or host
-    # Reverse-DNS dient ausschließlich der Namensanreicherung bereits erreichbarer Hosts.
-    if erreichbar and konfiguration.nutze_reverse_dns and ip_adressen:
+    # Reverse-DNS liefert ein starkes weiches Signal zur Namensvalidierung.
+    reverse_erfolgreich = False
+    if konfiguration.nutze_reverse_dns and ip_adressen:
         reverse = _resolve_reverse_dns(ip_adresse)
         if reverse:
             strategien.append("reverse_dns")
             hostname = reverse
             namensquelle = "reverse_dns"
             vertrauensgrad += 0.1
+            reverse_erfolgreich = True
         else:
             fehlerursachen.append("reverse_dns_nicht_aufloesbar")
 
     if not forward_name and namensquelle == "eingabe":
         fehlerursachen.append("forward_dns_nicht_aufloesbar")
 
+    ad_hinweis: str | None = None
     if konfiguration.nutze_ad_ldap:
         ad_hinweis = _ad_ldap_hinweis()
         if ad_hinweis:
@@ -946,11 +954,6 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
         else:
             fehlerursachen.append("ad_ldap_nicht_verfuegbar")
 
-    # Filterlogik: Ohne echten Erreichbarkeitsnachweis (ICMP/TCP) wird der Host verworfen.
-    # Reverse-DNS allein ist nicht belastbar, da veraltete PTR-Einträge False Positives erzeugen können.
-    if not erreichbar:
-        return None
-
     remote_daten: RemoteSystemdaten | None = None
     provider = KombinierterRemoteProvider()
     if provider.ist_verfuegbar():
@@ -958,8 +961,32 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
             remote_daten = provider.lese_systemdaten(host)
             if remote_daten is not None:
                 strategien.append("remote_inventory")
+                vertrauensgrad += 0.35
+                aufnahmegruende.append("weiches_signal_remote_inventory")
         except RemoteAbrufFehler:
             fehlerursachen.append("remote_inventory_nicht_verfuegbar")
+
+    # Starkes weiches Signal: Forward-DNS + Reverse-DNS + AD-Hinweis.
+    if forward_name and reverse_erfolgreich and ad_hinweis:
+        vertrauensgrad += 0.2
+        aufnahmegruende.append("weiche_signalkombination_dns_reverse_ad")
+
+    vertrauensgrad = min(1.0, vertrauensgrad)
+
+    # Aufnahmeentscheidung: harte Erreichbarkeit ODER genügend starke weiche Signale.
+    if erreichbar:
+        if "harter_check_icmp" in aufnahmegruende and "harter_check_tcp" in aufnahmegruende:
+            aufnahmegruende.insert(0, "aufnahme_harte_checks_icmp_tcp")
+        elif "harter_check_icmp" in aufnahmegruende:
+            aufnahmegruende.insert(0, "aufnahme_harter_check_icmp")
+        elif "harter_check_tcp" in aufnahmegruende:
+            aufnahmegruende.insert(0, "aufnahme_harter_check_tcp")
+    elif vertrauensgrad >= konfiguration.min_vertrauensgrad:
+        aufnahmegruende.insert(0, "aufnahme_ueber_weiche_signale")
+        fehlerursachen.append("nicht_hart_erreichbar_aber_vertrauensschwelle_erreicht")
+    else:
+        fehlerursachen.append("verworfen_vertrauensgrad_unterschritten")
+        return None
 
     rollenhinweise = _sql_rollenhinweise_aus_discovery(erkannte_dienste, remote_daten)
 
@@ -968,9 +995,10 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
         ip_adresse=ip_adresse,
         erreichbar=erreichbar,
         erkannte_dienste=_normalisiere_liste_ohne_duplikate(erkannte_dienste),
-        vertrauensgrad=min(1.0, vertrauensgrad),
+        vertrauensgrad=vertrauensgrad,
         strategien=_normalisiere_liste_ohne_duplikate(strategien),
         fehlerursachen=_normalisiere_liste_ohne_duplikate(fehlerursachen),
+        aufnahmegrund=";".join(_normalisiere_liste_ohne_duplikate(aufnahmegruende)) if aufnahmegruende else "",
         rollenhinweise=rollenhinweise,
         namensquelle=namensquelle,
     )
