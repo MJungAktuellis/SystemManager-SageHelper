@@ -913,36 +913,97 @@ class OnboardingController:
         if not self.analyse_ergebnisse:
             return
 
+        # Dialoggröße anhand der Bildschirmauflösung bestimmen und defensiv begrenzen,
+        # damit der Dialog sowohl auf kleinen als auch großen Auflösungen gut nutzbar bleibt.
+        bildschirm_breite = self._window.winfo_screenwidth() if self._window else 1280
+        bildschirm_hoehe = self._window.winfo_screenheight() if self._window else 720
+        ziel_breite = max(980, min(int(bildschirm_breite * 0.85), 1600))
+        ziel_hoehe = max(560, min(int(bildschirm_hoehe * 0.80), 980))
+
+        # Optional persistierte Fenstergröße pro Nutzer/Installation wiederherstellen.
+        gespeicherte_groesse = self.gui.modulzustand.get("bearbeitungsdialog_groesse")
+        if (
+            isinstance(gespeicherte_groesse, dict)
+            and isinstance(gespeicherte_groesse.get("breite"), int)
+            and isinstance(gespeicherte_groesse.get("hoehe"), int)
+        ):
+            ziel_breite = max(980, min(int(gespeicherte_groesse["breite"]), 1600))
+            ziel_hoehe = max(560, min(int(gespeicherte_groesse["hoehe"]), 980))
+
         dialog = tk.Toplevel(self._window)
         dialog.title("Bearbeitungsansicht nach Analyse")
-        dialog.geometry("1180x620")
+        dialog.geometry(f"{ziel_breite}x{ziel_hoehe}")
+        dialog.minsize(980, 560)
         dialog.transient(self._window)
         dialog.grab_set()
 
+        # Bei kleinen Auflösungen wird ein scrollbarer Container genutzt, damit alle
+        # Eingabefelder und Tabellen zuverlässig erreichbar bleiben.
+        nutzt_scrollcontainer = bildschirm_hoehe < 820
+        inhalt: ttk.Frame
+        if nutzt_scrollcontainer:
+            scroll_host = ttk.Frame(dialog)
+            scroll_host.pack(fill="both", expand=True)
+
+            inhalt_canvas = tk.Canvas(scroll_host, highlightthickness=0)
+            vertikale_scrollbar = ttk.Scrollbar(scroll_host, orient="vertical", command=inhalt_canvas.yview)
+            inhalt_canvas.configure(yscrollcommand=vertikale_scrollbar.set)
+
+            inhalt_canvas.pack(side="left", fill="both", expand=True)
+            vertikale_scrollbar.pack(side="right", fill="y")
+
+            inhalt = ttk.Frame(inhalt_canvas, padding=10)
+            canvas_window = inhalt_canvas.create_window((0, 0), window=inhalt, anchor="nw")
+
+            def _aktualisiere_scrollregion(_event: tk.Event[tk.Misc]) -> None:
+                inhalt_canvas.configure(scrollregion=inhalt_canvas.bbox("all"))
+
+            def _aktualisiere_breite(event: tk.Event[tk.Misc]) -> None:
+                inhalt_canvas.itemconfigure(canvas_window, width=event.width)
+
+            inhalt.bind("<Configure>", _aktualisiere_scrollregion)
+            inhalt_canvas.bind("<Configure>", _aktualisiere_breite)
+        else:
+            inhalt = ttk.Frame(dialog, padding=10)
+            inhalt.pack(fill="both", expand=True)
+
         ttk.Label(
-            dialog,
+            inhalt,
             text="Manuelle Ergänzungen (optional), damit projektspezifische Infos nicht verloren gehen.",
-            wraplength=1120,
+            wraplength=max(640, ziel_breite - 80),
             justify="left",
-        ).pack(anchor="w", padx=10, pady=(10, 6))
+        ).pack(anchor="w", pady=(0, 6))
+
+        tabellen_rahmen = ttk.Frame(inhalt)
+        tabellen_rahmen.pack(fill="both", expand=True, pady=(0, 8))
 
         tree = ttk.Treeview(
-            dialog,
+            tabellen_rahmen,
             columns=("server", "rollen", "ports", "status", "anmerkung"),
             show="headings",
-            height=18,
+            height=16,
         )
-        tree.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        tree.pack(side="left", fill="both", expand=True)
+        tree_scrollbar = ttk.Scrollbar(tabellen_rahmen, orient="vertical", command=tree.yview)
+        tree_scrollbar.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=tree_scrollbar.set)
+
         tree.heading("server", text="Server")
         tree.heading("rollen", text="Erkannte Rollen")
         tree.heading("ports", text="Offene Ports")
         tree.heading("status", text="Status")
         tree.heading("anmerkung", text="Anmerkungen/Besonderheiten")
-        tree.column("server", width=170)
-        tree.column("rollen", width=180)
-        tree.column("ports", width=180)
-        tree.column("status", width=120, anchor="center")
-        tree.column("anmerkung", width=480)
+
+        def _setze_spaltenbreiten(_event: tk.Event[tk.Misc] | None = None) -> None:
+            verfuegbare_breite = max(tree.winfo_width(), 900)
+            tree.column("server", width=max(150, int(verfuegbare_breite * 0.16)), minwidth=140, stretch=True)
+            tree.column("rollen", width=max(170, int(verfuegbare_breite * 0.18)), minwidth=150, stretch=True)
+            tree.column("ports", width=max(150, int(verfuegbare_breite * 0.16)), minwidth=130, stretch=True)
+            tree.column("status", width=max(110, int(verfuegbare_breite * 0.12)), minwidth=100, anchor="center", stretch=True)
+            tree.column("anmerkung", width=max(260, int(verfuegbare_breite * 0.38)), minwidth=220, stretch=True)
+
+        tree.bind("<Configure>", _setze_spaltenbreiten)
+        _setze_spaltenbreiten()
 
         zeilenindex = {normalisiere_servernamen(zeile.servername): zeile for zeile in self.server_zeilen}
 
@@ -956,9 +1017,9 @@ class OnboardingController:
             tree.insert("", "end", iid=norm_name, values=(ergebnis.server, rollen, offene_ports, status, anmerkung))
 
         anmerkung_var = tk.StringVar(value="")
-        ttk.Label(dialog, text="Anmerkungen/Besonderheiten:").pack(anchor="w", padx=10)
-        eintrag = ttk.Entry(dialog, textvariable=anmerkung_var, width=120)
-        eintrag.pack(fill="x", padx=10, pady=(0, 8))
+        ttk.Label(inhalt, text="Anmerkungen/Besonderheiten:").pack(anchor="w")
+        eintrag = ttk.Entry(inhalt, textvariable=anmerkung_var, width=120)
+        eintrag.pack(fill="x", pady=(0, 8))
 
         def auswahl_uebernehmen(_event: tk.Event[tk.Misc] | None = None) -> None:
             auswahl = tree.selection()
@@ -1000,10 +1061,22 @@ class OnboardingController:
 
         tree.bind("<<TreeviewSelect>>", auswahl_uebernehmen)
 
-        button_rahmen = ttk.Frame(dialog)
-        button_rahmen.pack(fill="x", padx=10, pady=(0, 10))
+        button_rahmen = ttk.Frame(inhalt)
+        button_rahmen.pack(fill="x", pady=(0, 4))
         ttk.Button(button_rahmen, text="Anmerkung übernehmen", command=anmerkung_speichern).pack(side="left")
-        ttk.Button(button_rahmen, text="Fertig", command=dialog.destroy).pack(side="right")
+
+        def _dialog_schliessen() -> None:
+            # Letzte Dialoggröße persistieren, damit der Benutzer bei erneutem Öffnen
+            # direkt mit seiner bevorzugten Arbeitsfläche weiterarbeiten kann.
+            self.gui.modulzustand["bearbeitungsdialog_groesse"] = {
+                "breite": max(980, dialog.winfo_width()),
+                "hoehe": max(560, dialog.winfo_height()),
+            }
+            self.state_store.speichere_modulzustand("gui_manager", self.gui.modulzustand)
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", _dialog_schliessen)
+        ttk.Button(button_rahmen, text="Fertig", command=_dialog_schliessen).pack(side="right")
 
     def schritt_speichern_und_abschliessen(self) -> None:
         """Schritt 4: Persistiert Moduldaten + Onboarding-Status atomar im Gesamtzustand."""
