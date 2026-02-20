@@ -7,6 +7,9 @@ REM Debug-Hilfen: --persist-console (Konsole offen halten), --pause (am Ende pau
 set "SCRIPT_PATH=%~f0"
 set "SCRIPT_DIR=%~dp0"
 set "PS_SCRIPT=%SCRIPT_DIR%scripts\install_assistant.ps1"
+
+set "PY_INSTALL_SCRIPT=%SCRIPT_DIR%scripts\install.py"
+set "USED_FALLBACK=0"
 set "LOG_DIR=%SCRIPT_DIR%logs"
 set "LAUNCHER_LOG=%LOG_DIR%\install_launcher.log"
 
@@ -73,15 +76,74 @@ echo [INFO] Optional: CLI direkt via "python scripts\install.py --mode cli"
 echo [INFO] Optional: Non-Interactive via "python scripts\install.py --non-interactive"
 echo [INFO] Nutze PowerShell-Skript: %PS_SCRIPT%
 
+where powershell.exe >nul 2>&1
+if errorlevel 1 (
+    echo [WARN] powershell.exe wurde nicht gefunden. Wechsle auf Python-Direktstart.
+    echo [WARN] powershell.exe wurde nicht gefunden. Wechsle auf Python-Direktstart.>>"%LAUNCHER_LOG%"
+    goto run_python_fallback
+)
+
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" >>"%LAUNCHER_LOG%" 2>&1
 set "EXIT_CODE=%errorlevel%"
+if "%EXIT_CODE%"=="9009" (
+    echo [WARN] PowerShell-Start schlug fehl (Exit 9009). Wechsle auf Python-Direktstart.
+    echo [WARN] PowerShell-Start schlug fehl (Exit 9009). Wechsle auf Python-Direktstart.>>"%LAUNCHER_LOG%"
+    goto run_python_fallback
+)
+goto after_launcher
+
+:run_python_fallback
+set "USED_FALLBACK=1"
+if not exist "%PY_INSTALL_SCRIPT%" (
+    echo [FEHLER] Python-Installer nicht gefunden: %PY_INSTALL_SCRIPT%
+    echo [FEHLER] Python-Installer nicht gefunden: %PY_INSTALL_SCRIPT%>>"%LAUNCHER_LOG%"
+    set "EXIT_CODE=1"
+    goto after_launcher
+)
+
+set "EXIT_CODE=9009"
+call :try_python py -3
+if "%EXIT_CODE%"=="0" goto after_launcher
+call :try_python python
+if "%EXIT_CODE%"=="0" goto after_launcher
+call :try_python python3
+if "%EXIT_CODE%"=="0" goto after_launcher
+
+goto after_launcher
+
+:try_python
+set "PY_CMD=%~1"
+set "PY_ARG=%~2"
+where %PY_CMD% >nul 2>&1
+if errorlevel 1 (
+    echo [WARN] Python-Kandidat nicht gefunden: %PY_CMD% %PY_ARG%>>"%LAUNCHER_LOG%"
+    goto :eof
+)
+
+echo [INFO] Starte Python-Fallback mit: %PY_CMD% %PY_ARG%>>"%LAUNCHER_LOG%"
+if "%PY_ARG%"=="" (
+    "%PY_CMD%" "%PY_INSTALL_SCRIPT%" --mode auto >>"%LAUNCHER_LOG%" 2>&1
+) else (
+    "%PY_CMD%" "%PY_ARG%" "%PY_INSTALL_SCRIPT%" --mode auto >>"%LAUNCHER_LOG%" 2>&1
+)
+set "EXIT_CODE=%errorlevel%"
+if not "%EXIT_CODE%"=="0" (
+    echo [WARN] Python-Fallback fehlgeschlagen mit Exit-Code %EXIT_CODE% fuer %PY_CMD% %PY_ARG%>>"%LAUNCHER_LOG%"
+)
+goto :eof
+
+:after_launcher
 
 echo [INFO] Exit-Code: %EXIT_CODE%>>"%LAUNCHER_LOG%"
 echo ===== [%date% %time%] Ende Install-SystemManager-SageHelper.cmd =====>>"%LAUNCHER_LOG%"
 
 echo.
 if "%EXIT_CODE%"=="0" (
-    echo [OK] Installation beendet.
+    if "%USED_FALLBACK%"=="1" (
+        echo [OK] Installation beendet (Python-Direktstart).
+    ) else (
+        echo [OK] Installation beendet.
+    )
 ) else if "%EXIT_CODE%"=="42" (
     echo [HINWEIS] Administrator-Start wurde erfolgreich angestossen.
     echo [HINWEIS] Bitte im neu geoeffneten Fenster den Installer fortsetzen.
