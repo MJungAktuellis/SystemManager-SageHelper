@@ -93,6 +93,9 @@ class OnboardingController:
         self._schritt_buttons: dict[str, ttk.Button] = {}
         self._schritt_status_var: dict[str, tk.StringVar] = {}
         self._schritt_aktion_var: dict[str, tk.StringVar] = {}
+        self._rollen_summary_tree: ttk.Treeview | None = None
+        self._rollen_summary_status_var: tk.StringVar | None = None
+        self._rollen_summary_daten: list[dict[str, object]] = []
         self._schritt_reihenfolge = ["discovery", "rollen", "analyse", "speichern"]
         self._schritt_position = {schritt: index for index, schritt in enumerate(self._schritt_reihenfolge)}
         self._aktueller_schritt = "discovery"
@@ -241,8 +244,10 @@ class OnboardingController:
         )
 
         self._baue_schrittstatus_anzeige(rahmen)
+        self._baue_rollen_zusammenfassung_anzeige(rahmen)
         self._baue_fortschritt_anzeige(rahmen)
         self._aktualisiere_schritt_buttons()
+        self._lade_rollen_zusammenfassung_aus_onboarding_status()
         try:
             self._ermittle_automatischen_scanbereich()
         except ValueError as exc:
@@ -694,6 +699,9 @@ class OnboardingController:
 
         def uebernehmen() -> None:
             dialog.destroy()
+            self._rollen_summary_daten = self._erstelle_rollen_zusammenfassung()
+            self._aktualisiere_rollen_zusammenfassung_anzeige()
+            self._speichere_rollen_zusammenfassung_in_onboarding_status()
             self._markiere_schritt(
                 "rollen",
                 "erfolgreich",
@@ -721,6 +729,99 @@ class OnboardingController:
         ttk.Button(button_rahmen, text="Übernehmen (OK)", command=uebernehmen).pack(side="right", padx=4)
 
         self._setze_status("Rollenprüfung geöffnet: Mehrfachauswahl und Rollenanpassung verfügbar.")
+
+    def _baue_rollen_zusammenfassung_anzeige(self, parent: ttk.Frame) -> None:
+        """Erstellt eine persistente Übersicht der bestätigten Rollendeklarationen."""
+        zusammenfassung_rahmen = ttk.LabelFrame(parent, text="Zusammenfassung Rollenprüfung", style="Section.TLabelframe")
+        zusammenfassung_rahmen.pack(fill="x", pady=(0, 10))
+
+        tree = ttk.Treeview(
+            zusammenfassung_rahmen,
+            columns=("server", "rolle", "quelle", "manuell"),
+            show="headings",
+            height=6,
+        )
+        tree.heading("server", text="Server")
+        tree.heading("rolle", text="Rolle")
+        tree.heading("quelle", text="Quelle")
+        tree.heading("manuell", text="manuell geändert")
+        tree.column("server", width=280)
+        tree.column("rolle", width=100, anchor="center")
+        tree.column("quelle", width=220)
+        tree.column("manuell", width=150, anchor="center")
+        tree.pack(fill="x", padx=8, pady=(6, 4))
+        self._rollen_summary_tree = tree
+
+        self._rollen_summary_status_var = tk.StringVar(value="0 Server bestätigt, davon 0 manuell angepasst")
+        ttk.Label(zusammenfassung_rahmen, textvariable=self._rollen_summary_status_var).pack(anchor="w", padx=8, pady=(0, 8))
+
+    def _erstelle_rollen_zusammenfassung(self) -> list[dict[str, object]]:
+        """Transformiert das interne Zeilenmodell in ein schlankes Persistenzformat für die Rollenübersicht."""
+        zusammenfassung: list[dict[str, object]] = []
+        for zeile in self.server_zeilen:
+            rolle = "SQL" if zeile.sql else "CTX" if zeile.ctx else "APP"
+            zusammenfassung.append(
+                {
+                    "server": zeile.servername,
+                    "rolle": rolle,
+                    "quelle": zeile.quelle,
+                    "manuell_geaendert": bool(zeile.manuell_ueberschrieben),
+                }
+            )
+        return zusammenfassung
+
+    def _aktualisiere_rollen_zusammenfassung_anzeige(self) -> None:
+        """Aktualisiert Tabelle und Kennzahlen der Rollen-Zusammenfassung in einem Schritt."""
+        if self._rollen_summary_tree is None:
+            return
+
+        self._rollen_summary_tree.delete(*self._rollen_summary_tree.get_children(""))
+        manuell_anzahl = 0
+
+        for index, eintrag in enumerate(self._rollen_summary_daten):
+            manuell_geaendert = bool(eintrag.get("manuell_geaendert", False))
+            if manuell_geaendert:
+                manuell_anzahl += 1
+            self._rollen_summary_tree.insert(
+                "",
+                "end",
+                iid=f"summary_{index}",
+                values=(
+                    str(eintrag.get("server") or "unbekannt"),
+                    str(eintrag.get("rolle") or "unbekannt"),
+                    str(eintrag.get("quelle") or "unbekannt"),
+                    "Ja" if manuell_geaendert else "Nein",
+                ),
+            )
+
+        if self._rollen_summary_status_var is not None:
+            self._rollen_summary_status_var.set(
+                f"{len(self._rollen_summary_daten)} Server bestätigt, davon {manuell_anzahl} manuell angepasst"
+            )
+
+    def _speichere_rollen_zusammenfassung_in_onboarding_status(self) -> None:
+        """Schreibt die Rollen-Zusammenfassung in den Onboarding-Status für ein robustes Wiederöffnen."""
+        bestaetigt = len(self._rollen_summary_daten)
+        manuell = sum(1 for eintrag in self._rollen_summary_daten if bool(eintrag.get("manuell_geaendert", False)))
+        self.state_store.speichere_onboarding_status(
+            {
+                "rollenpruefung_zusammenfassung": self._rollen_summary_daten,
+                "rollenpruefung_statistik": {
+                    "server_bestaetigt": bestaetigt,
+                    "manuell_angepasst": manuell,
+                },
+            }
+        )
+
+    def _lade_rollen_zusammenfassung_aus_onboarding_status(self) -> None:
+        """Lädt die zuletzt bestätigte Rollen-Zusammenfassung und rendert sie direkt im Wizard."""
+        onboarding_status = self.state_store.lade_onboarding_status()
+        zusammenfassung = onboarding_status.get("rollenpruefung_zusammenfassung", [])
+        if isinstance(zusammenfassung, list):
+            self._rollen_summary_daten = [eintrag for eintrag in zusammenfassung if isinstance(eintrag, dict)]
+        else:
+            self._rollen_summary_daten = []
+        self._aktualisiere_rollen_zusammenfassung_anzeige()
 
     def schritt_analyse(self) -> None:
         """Schritt 3: Startet die Analyse in einem Hintergrund-Thread."""
