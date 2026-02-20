@@ -17,6 +17,23 @@ STANDARD_PORTS = [
     PortPruefung(port=135, bezeichnung="RPC Endpoint Mapper"),
 ]
 
+# Discovery prüft bewusst mehr Ports als die kompakte Standardanalyse,
+# damit Rollenkandidaten (SQL/APP/CTX) frühzeitig aus Netzwerksignaturen
+# abgeleitet werden können.
+DISCOVERY_TCP_PORTS: tuple[int, ...] = (
+    80,
+    135,
+    139,
+    443,
+    445,
+    1433,
+    1434,
+    3389,
+    4022,
+    8080,
+    8443,
+)
+
 STANDARD_ORDNER = [
     "AddinsOL/abf",
     "AddinsOL/rewe",

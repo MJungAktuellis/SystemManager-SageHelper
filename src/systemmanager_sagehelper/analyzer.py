@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterable, Protocol
 
-from .config import STANDARD_PORTS
+from .config import DISCOVERY_TCP_PORTS, STANDARD_PORTS
 from .logging_setup import erstelle_lauf_id, konfiguriere_logger, setze_lauf_id
 from .models import (
     DiscoveryErgebnis,
@@ -31,9 +31,32 @@ from .models import (
 )
 
 # Fachliche Zuordnung geöffneter Ports zu typischen Serverrollen.
+# APP- und CTX-Indikatoren werden gleichberechtigt neben SQL ausgewertet.
 _PORT_ROLLEN_MAPPING: dict[int, str] = {
     1433: "SQL",
+    1434: "SQL",
+    4022: "SQL",
+    80: "APP",
+    443: "APP",
+    8080: "APP",
+    8443: "APP",
     3389: "CTX",
+}
+
+# Zentrales Rollen-Portprofil für Discovery-Signaturen je Serverrolle.
+ROLLEN_PORTPROFILE: dict[str, dict[str, tuple[int, ...] | tuple[str, ...]]] = {
+    "SQL": {
+        "ports": (1433, 1434, 4022),
+        "diensthinweise": ("mssql", "sql", "sqlbrowser", "sqlserveragent"),
+    },
+    "APP": {
+        "ports": (80, 443, 8080, 8443),
+        "diensthinweise": ("w3svc", "world wide web", "http", "tomcat", "iis"),
+    },
+    "CTX": {
+        "ports": (3389,),
+        "diensthinweise": ("termservice", "sessionenv", "umrdpservice", "rdp"),
+    },
 }
 
 # Schlüsselwörter für die Erkennung von Sage- und Partneranwendungen.
@@ -42,8 +65,6 @@ _PARTNER_KEYWORDS = ["dms", "crm", "edi", "shop", "bi", "isv"]
 _MANAGEMENT_STUDIO_KEYWORDS = ["sql server management studio", "ssms"]
 _SQL_SERVICE_KEYWORDS = ("mssql", "sql server", "sqlserveragent")
 _CTX_SERVICE_KEYWORDS = ("termservice", "sessionenv", "umrdpservice", "rdp")
-_SQL_DISCOVERY_PORTS = {1433, 1434, 4022}
-_SQL_DISCOVERY_SERVICE_HINTS = ("mssql", "sql", "sqlbrowser", "sqlserveragent")
 
 # Präfixe zur strukturierten Fehlerklassifikation für Remote-Ziele.
 _HINWEIS_DNS = "[DNS]"
@@ -61,7 +82,7 @@ class DiscoveryKonfiguration:
     ping_timeout: float = 0.8
     tcp_timeout: float = 0.5
     max_worker: int = 48
-    tcp_ports: tuple[int, ...] = (135, 139, 445, 1433, 1434, 3389, 4022)
+    tcp_ports: tuple[int, ...] = DISCOVERY_TCP_PORTS
     nutze_reverse_dns: bool = True
     nutze_ad_ldap: bool = False
     min_vertrauensgrad: float = 0.4
@@ -853,32 +874,48 @@ def _ad_ldap_hinweis() -> str | None:
     return None
 
 
-def _sql_rollenhinweise_aus_discovery(
+def _rollenhinweise_aus_discovery(
     erkannte_dienste: list[str],
     remote_daten: RemoteSystemdaten | None,
 ) -> list[str]:
-    """Leitet SQL-Indikatoren für Discovery aus Ports, Diensten und Remote-Inventar ab."""
+    """Leitet Rollenhinweise für Discovery aus Ports, Diensten und Remote-Inventar ab."""
     hinweise: list[str] = []
     erkannte_ports = {int(eintrag) for eintrag in erkannte_dienste if eintrag.isdigit()}
-    if 1433 in erkannte_ports:
-        hinweise.append("sql_port_1433")
-    if 1434 in erkannte_ports:
-        hinweise.append("sql_browser_port_1434")
-    if 4022 in erkannte_ports:
-        hinweise.append("sql_service_broker_4022")
-    if erkannte_ports & _SQL_DISCOVERY_PORTS:
-        hinweise.append("sql_portsignatur")
+
+    # Portsignaturen je Rolle zentral auswerten, damit neue Rollenindikatoren
+    # künftig an einer Stelle erweitert werden können.
+    for rolle, profil in ROLLEN_PORTPROFILE.items():
+        rollen_key = rolle.lower()
+        rollen_ports = set(profil["ports"])
+        if not rollen_ports:
+            continue
+
+        for port in sorted(erkannte_ports & rollen_ports):
+            hinweise.append(f"{rollen_key}_port_{port}")
+        if erkannte_ports & rollen_ports:
+            hinweise.append(f"{rollen_key}_portsignatur")
 
     for dienst in erkannte_dienste:
-        if not dienst.isdigit() and any(token in dienst.lower() for token in _SQL_DISCOVERY_SERVICE_HINTS):
-            hinweise.append(f"sql_dienst:{dienst.lower()}")
+        if dienst.isdigit():
+            continue
+        dienstname = dienst.lower()
+        for rolle, profil in ROLLEN_PORTPROFILE.items():
+            rollen_key = rolle.lower()
+            diensthinweise = profil["diensthinweise"]
+            if any(token in dienstname for token in diensthinweise):
+                hinweise.append(f"{rollen_key}_dienst:{dienstname}")
 
     if remote_daten is not None:
         if remote_daten.sql_instanzen:
             hinweise.extend(f"sql_instanz:{instanz.instanzname.lower()}" for instanz in remote_daten.sql_instanzen)
+
         for dienst in remote_daten.dienste:
-            if any(token in dienst.name.lower() for token in _SQL_DISCOVERY_SERVICE_HINTS):
-                hinweise.append(f"sql_remote_dienst:{dienst.name.lower()}")
+            dienstname = dienst.name.lower()
+            for rolle, profil in ROLLEN_PORTPROFILE.items():
+                rollen_key = rolle.lower()
+                diensthinweise = profil["diensthinweise"]
+                if any(token in dienstname for token in diensthinweise):
+                    hinweise.append(f"{rollen_key}_remote_dienst:{dienstname}")
 
     return _normalisiere_liste_ohne_duplikate(hinweise)
 
@@ -988,7 +1025,7 @@ def _entdecke_einzelnen_host(host: str, konfiguration: DiscoveryKonfiguration) -
         fehlerursachen.append("verworfen_vertrauensgrad_unterschritten")
         return None
 
-    rollenhinweise = _sql_rollenhinweise_aus_discovery(erkannte_dienste, remote_daten)
+    rollenhinweise = _rollenhinweise_aus_discovery(erkannte_dienste, remote_daten)
 
     return DiscoveryErgebnis(
         hostname=hostname,
