@@ -121,7 +121,7 @@ class TestInstallScript(unittest.TestCase):
 
         validiere_mock.assert_called_once_with(komponenten, {"kern": True})
         report_mock.assert_called_once()
-        self.assertEqual("Desktop-Verknüpfung: Deaktiviert", report_mock.call_args.kwargs["desktop_verknuepfung_status"])
+        self.assertEqual("Admin-Start-Desktop-Verknüpfung: Deaktiviert", report_mock.call_args.kwargs["desktop_verknuepfung_status"])
         self.assertEqual("cli", report_mock.call_args.kwargs["einstiegspfad"])
         safe_print_mock.assert_any_call("\n[INFO] Non-Interactive-Modus aktiv: Standardauswahl wird verwendet.")
 
