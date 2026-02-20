@@ -5,6 +5,21 @@ Param()
 # Hinweis zur Kompatibilität: Alte Windows-Codepages stellen Emojis oft fehlerhaft dar.
 # Deshalb verwenden wir bewusst ASCII-Textpräfixe ([OK], [WARN], [FEHLER], Hinweis:).
 
+# Fruehe Initialisierung: Diese Pfade muessen bereits vor der Admin-Pruefung verfuegbar sein,
+# damit auch der Nicht-Admin-/UAC-Pfad sauber protokolliert wird.
+$script:RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
+$script:LogDir = Join-Path $script:RepoRoot "logs"
+if (-not (Test-Path -LiteralPath $script:LogDir)) {
+    New-Item -ItemType Directory -Path $script:LogDir -Force | Out-Null
+}
+$script:PsLog = Join-Path $script:LogDir "install_assistant_ps.log"
+Add-Content -Path $script:PsLog -Value ("==== [" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] Start scripts/install_assistant.ps1 ====")
+
+# Exit-Code-Konstanten fuer nachvollziehbare Automatisierung und eindeutige Launcher-Meldungen.
+$ExitCodeElevationTriggered = 42
+$ExitCodeUacCancelled = 1223
+$ExitCodeElevationFailed = 16001
+
 function Test-Admin {
     $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
@@ -340,21 +355,49 @@ function Ensure-PythonAvailable {
 
 if (-not (Test-Admin)) {
     Write-Host "[INFO] Skript läuft nicht mit Administratorrechten. Starte neu als Admin..."
-    Start-Process -FilePath "PowerShell" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
-    exit
+    Write-PsLog -Category "WARN" -Cause "ADMINRECHTE_FEHLEN" -Message "Neustart mit Erhoehung wird angefordert." -Candidate "Start-Process -Verb RunAs"
+    try {
+        $elevatedProcess = Start-Process -FilePath "PowerShell" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs -PassThru -ErrorAction Stop
+        if ($null -eq $elevatedProcess) {
+            Write-Host "[FEHLER] Erhoehung konnte nicht gestartet werden. Bitte PowerShell als Administrator oeffnen und das Skript erneut starten."
+            Write-PsLog -Category "ERROR" -Cause "ELEVATION_START_OHNE_PROZESS" -ExitCode $ExitCodeElevationFailed -Message "Start-Process lieferte kein Prozessobjekt." -Candidate "PowerShell als Administrator manuell starten"
+            Write-PsLog -Category "ERROR" -Cause "SCRIPT_EXIT" -ExitCode $ExitCodeElevationFailed -Message "Abbruch ohne gestarteten Elevated-Prozess. Nächster Schritt: manuell mit Adminrechten starten."
+            exit $ExitCodeElevationFailed
+        }
+
+        Write-Host "[HINWEIS] UAC-Dialog wurde gestartet. Bitte bestaetigen Sie den Admin-Start im neuen Fenster."
+        Write-PsLog -Category "INFO" -Cause "ELEVATION_GESTARTET" -ExitCode $ExitCodeElevationTriggered -Message "Elevated-Prozess wurde erfolgreich gestartet (PID $($elevatedProcess.Id))." -Candidate "UAC bestaetigen und im neuen Fenster fortfahren"
+        Write-PsLog -Category "INFO" -Cause "SCRIPT_EXIT" -ExitCode $ExitCodeElevationTriggered -Message "Aktuelle Instanz beendet sich planmaessig nach erfolgreichem Elevation-Start."
+        exit $ExitCodeElevationTriggered
+    }
+    catch [System.ComponentModel.Win32Exception] {
+        if ($_.Exception.NativeErrorCode -eq 1223) {
+            Write-Host "[FEHLER] UAC-Abbruch erkannt (Code 1223). Bitte Installer erneut starten und die Rueckfrage mit 'Ja' bestaetigen."
+            Write-PsLog -Category "ERROR" -Cause "UAC_ABGEBROCHEN" -ExitCode $ExitCodeUacCancelled -Message "Benutzer hat den UAC-Dialog abgebrochen." -Candidate "Installer erneut starten und UAC bestaetigen"
+            Write-PsLog -Category "ERROR" -Cause "SCRIPT_EXIT" -ExitCode $ExitCodeUacCancelled -Message "Abbruch durch Benutzeraktion. Nächster Schritt: erneut ausfuehren und UAC bestaetigen."
+            exit $ExitCodeUacCancelled
+        }
+
+        Write-Host "[FEHLER] Erhoehung fehlgeschlagen: $($_.Exception.Message)"
+        Write-PsLog -Category "ERROR" -Cause "ELEVATION_START_FEHLGESCHLAGEN" -ExitCode $ExitCodeElevationFailed -Message "Win32Exception beim Elevation-Start: $($_.Exception.Message)" -Candidate "PowerShell als Administrator manuell starten"
+        Write-PsLog -Category "ERROR" -Cause "SCRIPT_EXIT" -ExitCode $ExitCodeElevationFailed -Message "Abbruch nach fehlgeschlagenem Elevation-Start."
+        exit $ExitCodeElevationFailed
+    }
+    catch {
+        Write-Host "[FEHLER] Unerwarteter Fehler beim Elevation-Start: $($_.Exception.Message)"
+        Write-PsLog -Category "ERROR" -Cause "ELEVATION_START_UNERWARTET" -ExitCode $ExitCodeElevationFailed -Message "Unerwartete Ausnahme: $($_.Exception.Message)" -Candidate "PowerShell als Administrator manuell starten"
+        Write-PsLog -Category "ERROR" -Cause "SCRIPT_EXIT" -ExitCode $ExitCodeElevationFailed -Message "Abbruch nach unerwartetem Fehler im Elevation-Pfad."
+        exit $ExitCodeElevationFailed
+    }
 }
 
 Write-Host "=== SystemManager-SageHelper: Installations-Launcher ==="
 Write-Host "[INFO] Kanonischer Einstieg: scripts/install_assistant.ps1 -> scripts/install.py -> systemmanager_sagehelper.installer"
 
-$RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
+$RepoRoot = $script:RepoRoot
 $InstallScript = Join-Path $RepoRoot "scripts\install.py"
-$LogDir = Join-Path $RepoRoot "logs"
-if (-not (Test-Path $LogDir)) {
-    New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-}
-$PsLog = Join-Path $LogDir "install_assistant_ps.log"
-Add-Content -Path $PsLog -Value ("==== [" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] Start scripts/install_assistant.ps1 ====")
+$LogDir = $script:LogDir
+$PsLog = $script:PsLog
 
 # Bevorzugte Interpreter-Reihenfolge für den Start der Python-Orchestrierung.
 $PythonCandidates = Get-PythonCandidates
@@ -368,6 +411,7 @@ if (-not $resolvedLauncher) {
     Write-Host "  4) Optional Online-Download erlauben: SYSTEMMANAGER_ALLOW_PYTHON_DOWNLOAD=1 und SYSTEMMANAGER_PYTHON_BOOTSTRAP_SHA256 setzen."
     Write-Host "  5) Danach erneut 'Install-SystemManager-SageHelper.cmd' starten."
     Write-PsLog -Category "ERROR" -Cause "PYTHON_FEHLT" -Message "Python nicht verfügbar und automatische Installation nicht erfolgreich."
+    Write-PsLog -Category "ERROR" -Cause "SCRIPT_EXIT" -ExitCode 1 -Message "Abbruch wegen fehlender Python-Laufzeit. Nächster Schritt: Python manuell installieren oder Bootstrap-Vorgaben setzen."
     exit 1
 }
 
@@ -400,6 +444,7 @@ if (-not $launched) {
     Write-Host "[FEHLER] Fehler: Konnte den Python-basierten Installer nicht erfolgreich starten."
     Write-Host "Hinweis: Bitte prüfen Sie die Python-Installation oder führen Sie scripts/install.py manuell aus."
     Write-PsLog -Category "ERROR" -Cause "PYTHON_ORCHESTRIERUNG_FEHLGESCHLAGEN" -Message "Python-Orchestrierung konnte mit keinem Launcher erfolgreich beendet werden."
+    Write-PsLog -Category "ERROR" -Cause "SCRIPT_EXIT" -ExitCode 1 -Message "Abbruch wegen fehlgeschlagener Python-Orchestrierung. Nächster Schritt: logs prüfen und scripts/install.py manuell testen."
     exit 1
 }
 

@@ -159,6 +159,31 @@ Beispiel für Supportfälle:
 Install-SystemManager-SageHelper.cmd --persist-console --pause
 ```
 
+#### Troubleshooting: CMD schließt sofort
+
+Wenn sich das erste CMD-Fenster direkt schließt, ist das häufig **kein Fehler**, sondern normales Verhalten bei erfolgreicher UAC-Weiterleitung.
+
+Prüfen Sie in dieser Reihenfolge:
+
+1. **Wurde nur Elevation angestoßen?**
+   - Bei fehlenden Adminrechten startet der Launcher ein neues, erhöhtes Fenster.
+   - Das ursprüngliche Fenster darf sich danach planmäßig schließen.
+2. **Starten Sie für Diagnose mit persistenter Konsole:**
+
+```cmd
+Install-SystemManager-SageHelper.cmd --persist-console --pause
+```
+
+3. **Prüfen Sie die Protokolle im Projektordner:**
+   - `logs/install_launcher.log` (CMD-Launcher)
+   - `logs/install_assistant_ps.log` (PowerShell-Launcher inkl. Elevation/UAC)
+   - `logs/install_engine.log` (Python-Installationsengine)
+
+4. **Typische Ursachen und nächste Schritte:**
+   - **UAC abgebrochen**: Installer erneut starten und UAC mit **Ja** bestätigen.
+   - **PowerShell/Policy-Blockade**: CMD als Administrator öffnen und Launcher erneut starten.
+   - **Python fehlt**: Hinweise im `install_assistant_ps.log` befolgen (Bootstrap/Manuellinstallation).
+
 ### Update ohne Datenverlust
 
 Bei bereits installierten Systemen startet die Primäraktion im Launcher jetzt **immer als „Update / Wartung prüfen“**.

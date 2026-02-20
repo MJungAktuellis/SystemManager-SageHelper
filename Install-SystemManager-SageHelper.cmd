@@ -82,6 +82,10 @@ echo ===== [%date% %time%] Ende Install-SystemManager-SageHelper.cmd =====>>"%LA
 echo.
 if "%EXIT_CODE%"=="0" (
     echo [OK] Installation beendet.
+) else if "%EXIT_CODE%"=="42" (
+    echo [HINWEIS] Administrator-Start wurde erfolgreich angestossen.
+    echo [HINWEIS] Bitte im neu geoeffneten Fenster den Installer fortsetzen.
+    echo [HINWEIS] Das Schliessen dieses ersten Fensters ist in diesem Fall normal.
 ) else (
     echo [FEHLER] Installation beendet mit Exit-Code %EXIT_CODE%.
     echo Bitte pruefen Sie die Logdateien unter logs\install_launcher.log,
