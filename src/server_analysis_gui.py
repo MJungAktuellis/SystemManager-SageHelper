@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+import queue
 import re
+import threading
+import time
 import tkinter as tk
 from tkinter import simpledialog, ttk
 
@@ -607,6 +610,7 @@ class MehrserverAnalyseGUI:
     def __init__(self, master: tk.Tk) -> None:
         self.master = master
         self.master.geometry("1100x820")
+        self.master.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.state_store = GUIStateStore()
         self.modulzustand = self.state_store.lade_modulzustand("server_analysis")
@@ -649,6 +653,13 @@ class MehrserverAnalyseGUI:
                 self._letzte_export_lauf_id,
             )
         )
+        # Gemeinsamer Laufstatus für Discovery/Analyse mit Thread + sauberem Abbruchflag.
+        self._worker_thread: threading.Thread | None = None
+        self._abbruch_event: threading.Event | None = None
+        self._lauf_aktiv = False
+        self._lauf_verarbeitet = 0
+        self._lauf_gesamt = 0
+        self._laufzeiten_pro_host: list[float] = []
 
         self._baue_formular(self.shell.content_frame)
         self._baue_tabelle(self.shell.content_frame)
@@ -656,6 +667,14 @@ class MehrserverAnalyseGUI:
         self._baue_ergebnisbereich(self.shell.content_frame)
         self._lade_serverliste_aus_status()
         self._aktualisiere_button_zustaende()
+
+    def _on_close(self) -> None:
+        """Verhindert hartes Schließen während laufender Hintergrundjobs."""
+        if self._lauf_aktiv:
+            self._abbruch_anfordern()
+            self.shell.zeige_info("Lauf aktiv", "Die Oberfläche wird geschlossen, sobald der aktuelle Hostlauf beendet ist.", "Warten Sie einen Moment und schließen Sie danach erneut.")
+            return
+        self.master.destroy()
 
     def _baue_formular(self, parent: ttk.Frame) -> None:
         form_frame = ttk.LabelFrame(parent, text="Serverdeklaration", style="Section.TLabelframe")
@@ -785,6 +804,18 @@ class MehrserverAnalyseGUI:
             action_frame, text=BUTTON_ANALYSE_STARTEN, style="Primary.TButton", command=self.analyse_starten, state="disabled"
         )
         self.btn_analyse.pack(side="right", padx=4)
+
+        fortschritt_frame = ttk.Frame(parent)
+        fortschritt_frame.pack(fill="x", pady=(0, 8))
+        self._fortschritt_var = tk.DoubleVar(value=0.0)
+        self._fortschritt_status_var = tk.StringVar(value="Verarbeitet 0/0")
+        self._eta_var = tk.StringVar(value="Restzeit ca. --:--")
+        self.progressbar_lauf = ttk.Progressbar(fortschritt_frame, variable=self._fortschritt_var, mode="indeterminate", maximum=100)
+        self.progressbar_lauf.pack(side="left", fill="x", expand=True, padx=(4, 8))
+        ttk.Label(fortschritt_frame, textvariable=self._fortschritt_status_var).pack(side="left", padx=(0, 8))
+        ttk.Label(fortschritt_frame, textvariable=self._eta_var).pack(side="left", padx=(0, 8))
+        self.btn_abbrechen = ttk.Button(fortschritt_frame, text="Abbrechen", command=self._abbruch_anfordern, state="disabled")
+        self.btn_abbrechen.pack(side="right", padx=4)
 
     def _baue_ergebnisbereich(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="Analyseergebnis je Server", style="Section.TLabelframe")
@@ -935,16 +966,140 @@ class MehrserverAnalyseGUI:
         if self._letzte_ergebnisse:
             self._server_summary = _baue_server_summary(self._letzte_ergebnisse)
 
+    @staticmethod
+    def _klassifiziere_ablaufstatus(*, gesamt: int, erfolgreich: int, fehler: int) -> str:
+        """Standardisiert Ergebnisstatus als Erfolg, Teil-Erfolg oder Fehler."""
+        if gesamt <= 0 or erfolgreich == 0:
+            return "Fehler"
+        if fehler > 0:
+            return "Teil-Erfolg"
+        return "Erfolg"
+
+    def _setze_laufstatus(self, aktiv: bool, *, gesamt: int = 0) -> None:
+        """Schaltet Buttons/Progressbar während Hintergrundläufen konsistent um."""
+        self._lauf_aktiv = aktiv
+        self._lauf_gesamt = max(0, gesamt)
+        self._lauf_verarbeitet = 0
+        self._laufzeiten_pro_host.clear()
+
+        if aktiv:
+            if gesamt > 0:
+                self.progressbar_lauf.stop()
+                self.progressbar_lauf.configure(mode="determinate", maximum=gesamt)
+                self._fortschritt_var.set(0)
+                self._fortschritt_status_var.set(f"Verarbeitet 0/{gesamt}")
+            else:
+                self.progressbar_lauf.configure(mode="indeterminate")
+                self.progressbar_lauf.start(10)
+                self._fortschritt_status_var.set("Verarbeitet 0/?")
+            self._eta_var.set("Restzeit ca. --:--")
+        else:
+            self.progressbar_lauf.stop()
+            self._fortschritt_var.set(0)
+            self._fortschritt_status_var.set("Verarbeitet 0/0")
+            self._eta_var.set("Restzeit ca. --:--")
+
+        self.btn_abbrechen.configure(state="normal" if aktiv else "disabled")
+        self._aktualisiere_button_zustaende()
+
+    def _abbruch_anfordern(self) -> None:
+        """Signalisiert dem aktiven Hintergrundlauf einen sauberen Abbruch."""
+        if self._abbruch_event is not None:
+            self._abbruch_event.set()
+            self.shell.setze_status("Abbruch angefordert … aktueller Host wird noch abgeschlossen.")
+
+    def _aktualisiere_lauffortschritt(self, verarbeitet: int, dauer: float) -> None:
+        """Pflegt Fortschritt und ETA auf Basis gleitender Host-Laufzeit."""
+        self._lauf_verarbeitet = max(0, verarbeitet)
+        self._laufzeiten_pro_host.append(max(0.0, dauer))
+
+        if self._lauf_gesamt > 0:
+            self._fortschritt_var.set(min(self._lauf_verarbeitet, self._lauf_gesamt))
+            self._fortschritt_status_var.set(f"Verarbeitet {self._lauf_verarbeitet}/{self._lauf_gesamt}")
+            rest = max(0, self._lauf_gesamt - self._lauf_verarbeitet)
+        else:
+            self._fortschritt_status_var.set(f"Verarbeitet {self._lauf_verarbeitet}/?")
+            rest = 0
+
+        if rest > 0 and self._laufzeiten_pro_host:
+            fenster = self._laufzeiten_pro_host[-5:]
+            durchschnitt = sum(fenster) / len(fenster)
+            eta = int(rest * durchschnitt)
+            self._eta_var.set(f"Restzeit ca. {eta // 60:02d}:{eta % 60:02d}")
+        elif self._lauf_verarbeitet > 0 and rest == 0:
+            self._eta_var.set("Restzeit ca. 00:00")
+        else:
+            self._eta_var.set("Restzeit ca. --:--")
+
+    def _starte_hintergrundlauf(
+        self,
+        *,
+        gesamt: int,
+        worker,
+        bei_erfolg,
+        bei_fehler,
+    ) -> None:
+        """Startet Discovery/Analyse in separatem Thread und pollt Ergebnisse."""
+        if self._worker_thread and self._worker_thread.is_alive():
+            self.shell.zeige_warnung("Lauf aktiv", "Es läuft bereits ein Vorgang.", "Bitte warten oder den Lauf abbrechen.")
+            return
+
+        ereignisse: queue.Queue[tuple[str, object]] = queue.Queue()
+        self._abbruch_event = threading.Event()
+        self._setze_laufstatus(True, gesamt=gesamt)
+
+        def _thread_worker() -> None:
+            try:
+                worker(ereignisse, self._abbruch_event or threading.Event())
+            except Exception as exc:  # noqa: BLE001
+                ereignisse.put(("fehler", exc))
+
+        self._worker_thread = threading.Thread(target=_thread_worker, daemon=True)
+        self._worker_thread.start()
+
+        def _poll() -> None:
+            beendet = False
+            while True:
+                try:
+                    typ, daten = ereignisse.get_nowait()
+                except queue.Empty:
+                    break
+                if typ == "fortschritt":
+                    payload = daten if isinstance(daten, dict) else {}
+                    self._aktualisiere_lauffortschritt(int(payload.get("verarbeitet", 0) or 0), float(payload.get("dauer", 0.0) or 0.0))
+                elif typ == "abgeschlossen":
+                    self._setze_laufstatus(False)
+                    bei_erfolg(daten)
+                    beendet = True
+                elif typ == "fehler":
+                    self._setze_laufstatus(False)
+                    bei_fehler(daten if isinstance(daten, Exception) else RuntimeError(str(daten)))
+                    beendet = True
+            if not beendet:
+                self.master.after(120, _poll)
+
+        self.master.after(120, _poll)
+
     def _aktualisiere_button_zustaende(self, _event: tk.Event[tk.Misc] | None = None) -> None:
         """Aktiviert oder deaktiviert Aktionen abhängig vom aktuellen GUI-Zustand."""
         servername = self.entry_servername.get().strip()
         hat_server = bool(servername)
+        if self._lauf_aktiv:
+            self.btn_hinzufuegen.configure(state="disabled")
+            self.btn_analyse.configure(state="disabled")
+            self.btn_loeschen.configure(state="disabled")
+            self.btn_discovery.configure(state="disabled")
+            self.btn_discovery_namen.configure(state="disabled")
+            return
+
         self.btn_hinzufuegen.configure(state="normal" if hat_server else "disabled")
 
         hat_zeilen = bool(self._zeilen_nach_id)
         hat_auswahl = bool(self.tree.selection())
         self.btn_analyse.configure(state="normal" if hat_zeilen else "disabled")
         self.btn_loeschen.configure(state="normal" if hat_auswahl else "disabled")
+        self.btn_discovery.configure(state="normal")
+        self.btn_discovery_namen.configure(state="normal")
 
     def _lade_serverliste_aus_status(self) -> None:
         """Stellt gespeicherte Serverlisten beim Start der GUI wieder her."""
@@ -1075,6 +1230,7 @@ class MehrserverAnalyseGUI:
         return ranges, seeds, self._discovery_ad_seeds_var.get()
 
     def discovery_starten(self) -> None:
+        """Startet die Netzwerkerkennung im Hintergrund inkl. Fortschritt und ETA."""
         if not self.shell.bestaetige_aktion("Netzwerkerkennung bestätigen", "Die Netzwerkerkennung wird gestartet."):
             return
 
@@ -1091,33 +1247,74 @@ class MehrserverAnalyseGUI:
         self._letzter_discovery_modus.set("range")
         self._letzte_discovery_range.set(", ".join(segment.als_text() for segment in ranges))
         self.shell.setze_status("Netzwerkerkennung läuft")
-        self.master.update_idletasks()
+        gesamt = sum(max(0, segment.ende - segment.start + 1) for segment in ranges)
 
-        try:
+        def worker(ereignisse: queue.Queue[tuple[str, object]], abbruch_event: threading.Event) -> None:
             konfiguration = DiscoveryKonfiguration(nutze_reverse_dns=True, nutze_ad_ldap=nutze_ad_seeds)
-            range_treffer = entdecke_server_mehrere_ranges(ranges=ranges, konfiguration=konfiguration)
+            range_treffer: list[DiscoveryErgebnis] = []
+            verarbeitet = 0
+            fehler = 0
+            for segment in ranges:
+                for host in range(segment.start, segment.ende + 1):
+                    if abbruch_event.is_set():
+                        ereignisse.put(("abgeschlossen", {"abgebrochen": True, "range_treffer": range_treffer, "verarbeitet": verarbeitet, "fehler": fehler}))
+                        return
+                    startzeit = time.perf_counter()
+                    try:
+                        range_treffer.extend(
+                            entdecke_server_ergebnisse(
+                                basis=segment.basis,
+                                start=host,
+                                ende=host,
+                                konfiguration=konfiguration,
+                            )
+                        )
+                    except Exception:
+                        fehler += 1
+                        logger.exception("Discovery fehlgeschlagen für %s.%s", segment.basis, host)
+                    verarbeitet += 1
+                    ereignisse.put(("fortschritt", {"verarbeitet": verarbeitet, "dauer": time.perf_counter() - startzeit}))
+
             seed_treffer = entdecke_server_via_seeds(seeds=seeds, konfiguration=konfiguration) if (seeds or nutze_ad_seeds) else []
+            ereignisse.put(("abgeschlossen", {"abgebrochen": False, "range_treffer": range_treffer, "seed_treffer": seed_treffer, "verarbeitet": verarbeitet, "fehler": fehler}))
+
+        def erfolg(daten: object) -> None:
+            payload = daten if isinstance(daten, dict) else {}
+            range_treffer = payload.get("range_treffer", []) if isinstance(payload.get("range_treffer", []), list) else []
+            seed_treffer = payload.get("seed_treffer", []) if isinstance(payload.get("seed_treffer", []), list) else []
+            verarbeitet = int(payload.get("verarbeitet", 0) or 0)
+            fehler = int(payload.get("fehler", 0) or 0)
+            abgebrochen = bool(payload.get("abgebrochen", False))
+
             treffer = {f"{item.hostname}|{item.ip_adresse}": item for item in [*range_treffer, *seed_treffer]}
             kombinierte_treffer = list(treffer.values())
-        except Exception as exc:  # noqa: BLE001 - robuste GUI-Fehlerbehandlung.
+
+            segment_status = []
+            for segment in ranges:
+                ziel_hosts = max(1, segment.ende - segment.start + 1)
+                segment_treffer = sum(1 for item in range_treffer if item.ip_adresse.startswith(f"{segment.basis}."))
+                quote = (segment_treffer / ziel_hosts) * 100
+                segment_status.append(f"{segment.als_text()}: {segment_treffer}/{ziel_hosts} ({quote:.0f}%)")
+            if segment_status:
+                self.shell.logge_meldung("Trefferquote pro Segment: " + " | ".join(segment_status))
+
+            self._uebernehme_discovery_treffer(kombinierte_treffer, erfolgstitel="Netzwerkerkennung abgeschlossen")
+            erfolgreich = max(0, verarbeitet - fehler)
+            status = self._klassifiziere_ablaufstatus(gesamt=verarbeitet, erfolgreich=erfolgreich, fehler=fehler)
+            if abgebrochen:
+                status = "Teil-Erfolg"
+            self.shell.setze_status(f"Netzwerkerkennung beendet: {status}")
+            self.shell.logge_meldung(f"Netzwerkerkennung Status: {status} | Verarbeitet {verarbeitet}/{gesamt} | Fehlerläufe: {fehler}")
+            self._aktualisiere_button_zustaende()
+
+        def fehler(exc: Exception) -> None:
             logger.exception("Netzwerkerkennung fehlgeschlagen")
             self.shell.zeige_fehler("Fehler bei der Netzwerkerkennung", f"Die Netzwerkerkennung konnte nicht ausgeführt werden: {exc}", "Prüfen Sie Netzwerkbereich und Berechtigungen.")
-            self.shell.setze_status("Netzwerkerkennung fehlgeschlagen")
-            return
+            self.shell.setze_status("Netzwerkerkennung beendet: Fehler")
+            self._aktualisiere_button_zustaende()
 
-        segment_status = []
-        for segment in ranges:
-            ziel_hosts = max(1, segment.ende - segment.start + 1)
-            segment_treffer = sum(1 for item in range_treffer if item.ip_adresse.startswith(f"{segment.basis}."))
-            quote = (segment_treffer / ziel_hosts) * 100
-            segment_status.append(f"{segment.als_text()}: {segment_treffer}/{ziel_hosts} ({quote:.0f}%)")
+        self._starte_hintergrundlauf(gesamt=gesamt, worker=worker, bei_erfolg=erfolg, bei_fehler=fehler)
 
-        if segment_status:
-            self.shell.logge_meldung("Trefferquote pro Segment: " + " | ".join(segment_status))
-
-        self._uebernehme_discovery_treffer(kombinierte_treffer, erfolgstitel="Netzwerkerkennung abgeschlossen")
-        self.shell.setze_status("Netzwerkerkennung abgeschlossen")
-        self._aktualisiere_button_zustaende()
 
     def _lese_discovery_namen_aus_textfeld(self) -> list[str]:
         """Liest die Namenliste robust aus dem Mehrzeilenfeld und entfernt Leerzeilen."""
@@ -1225,6 +1422,7 @@ class MehrserverAnalyseGUI:
             self.tree.set(item_id, _SPALTE_STATUS, status)
 
     def analyse_starten(self) -> None:
+        """Startet die Analyse im Hintergrund und zeigt standardisierte Endstatus an."""
         zeilen = list(self._zeilen_nach_id.values())
         ziele = _baue_serverziele(zeilen)
         if not ziele:
@@ -1235,55 +1433,90 @@ class MehrserverAnalyseGUI:
         if not bestaetigt:
             return
 
+        lauf_id = erstelle_lauf_id()
+        setze_lauf_id(lauf_id)
+        self.shell.setze_lauf_id(lauf_id)
         self._setze_server_status("Analyse läuft")
         self.shell.setze_status("Analyse läuft")
-        self.master.update_idletasks()
 
-        try:
-            lauf_id = erstelle_lauf_id()
-            setze_lauf_id(lauf_id)
-            self.shell.setze_lauf_id(lauf_id)
-            ergebnisse = analysiere_mehrere_server(ziele, lauf_id=lauf_id)
-        except Exception as exc:  # noqa: BLE001 - GUI soll Fehler anzeigen statt abzubrechen.
+        def worker(ereignisse: queue.Queue[tuple[str, object]], abbruch_event: threading.Event) -> None:
+            ergebnisse: list[AnalyseErgebnis] = []
+            verarbeitet = 0
+            fehler = 0
+            for ziel in ziele:
+                if abbruch_event.is_set():
+                    ereignisse.put(("abgeschlossen", {"abgebrochen": True, "ergebnisse": ergebnisse, "verarbeitet": verarbeitet, "fehler": fehler}))
+                    return
+                startzeit = time.perf_counter()
+                try:
+                    ergebnisse.extend(analysiere_mehrere_server([ziel], lauf_id=lauf_id))
+                except Exception:
+                    fehler += 1
+                    logger.exception("Mehrserveranalyse für %s fehlgeschlagen", ziel.name)
+                verarbeitet += 1
+                ereignisse.put(("fortschritt", {"verarbeitet": verarbeitet, "dauer": time.perf_counter() - startzeit}))
+            ereignisse.put(("abgeschlossen", {"abgebrochen": False, "ergebnisse": ergebnisse, "verarbeitet": verarbeitet, "fehler": fehler}))
+
+        def erfolg(daten: object) -> None:
+            payload = daten if isinstance(daten, dict) else {}
+            ergebnisse = payload.get("ergebnisse", []) if isinstance(payload.get("ergebnisse", []), list) else []
+            verarbeitet = int(payload.get("verarbeitet", 0) or 0)
+            fehler = int(payload.get("fehler", 0) or 0)
+            abgebrochen = bool(payload.get("abgebrochen", False))
+
+            self._letzte_ergebnisse = ergebnisse
+            _integriere_manuelle_anmerkungen(ergebnisse, zeilen)
+            self._server_summary = _baue_server_summary(ergebnisse)
+            status_nach_server = {normalisiere_servernamen(ergebnis.server): "analysiert" for ergebnis in ergebnisse}
+            for item_id, zeile in self._zeilen_nach_id.items():
+                zeile.status = status_nach_server.get(normalisiere_servernamen(zeile.servername), "nicht analysiert")
+                self.tree.set(item_id, _SPALTE_STATUS, zeile.status)
+
+            if ergebnisse:
+                self._zeige_ergebnisse_aufklappbar(ergebnisse)
+
+            report_pfad = self._ausgabe_pfad.get().strip() or "docs/serverbericht.md"
+            try:
+                export_pfad, export_zeitpunkt = _schreibe_analyse_report(ergebnisse, report_pfad)
+                self._letzter_export_pfad = export_pfad
+                self._letzter_exportzeitpunkt = export_zeitpunkt
+                self._letzte_export_lauf_id = lauf_id
+                self._report_verweis_var.set(
+                    _baue_report_verweistext(self._letzter_export_pfad, self._letzter_exportzeitpunkt, self._letzte_export_lauf_id)
+                )
+                self.shell.logge_meldung(f"Analysebericht erstellt: {export_pfad}")
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Analysebericht konnte nicht geschrieben werden")
+                self.shell.zeige_warnung(
+                    "Exportwarnung",
+                    f"Analyse war erfolgreich, aber der Bericht konnte nicht geschrieben werden: {exc}",
+                    "Prüfen Sie den Ausgabepfad und Dateiberechtigungen.",
+                )
+
+            erfolgreich = max(0, verarbeitet - fehler)
+            status = self._klassifiziere_ablaufstatus(gesamt=verarbeitet, erfolgreich=erfolgreich, fehler=fehler)
+            if abgebrochen:
+                status = "Teil-Erfolg"
+            if status == "Fehler":
+                self._setze_server_status("fehlerhaft")
+            self.shell.setze_status(f"Analyse beendet: {status}")
+            self.shell.logge_meldung(f"Analyse Status: {status} | Verarbeitet {verarbeitet}/{len(ziele)} | Fehlerläufe: {fehler} | Lauf-ID: {lauf_id}")
+            self.speichern()
+            if status == "Erfolg":
+                self.shell.zeige_erfolg("Analyse abgeschlossen", "Die Mehrserveranalyse wurde erfolgreich abgeschlossen.", "Öffnen Sie die Ergebnisdetails oder starten Sie den nächsten Lauf.")
+            elif status == "Teil-Erfolg":
+                self.shell.zeige_warnung("Analyse mit Teil-Erfolg", "Ein Teil der Server konnte analysiert werden.", "Prüfen Sie die Fehlerläufe und starten Sie die Analyse bei Bedarf erneut.")
+            else:
+                self.shell.zeige_fehler("Analyse fehlgeschlagen", "Kein Server konnte erfolgreich analysiert werden.", "Prüfen Sie Konnektivität, Rechte und Logs.")
+
+        def fehler(exc: Exception) -> None:
             logger.exception("Mehrserveranalyse fehlgeschlagen")
             self.shell.zeige_fehler("Analysefehler", f"Mehrserveranalyse fehlgeschlagen: {exc}", "Prüfen Sie die Logs und wiederholen Sie die Analyse.")
             self._setze_server_status("fehlerhaft")
-            self.shell.setze_status("Analyse fehlgeschlagen")
-            return
+            self.shell.setze_status("Analyse beendet: Fehler")
 
-        self._letzte_ergebnisse = ergebnisse
-        _integriere_manuelle_anmerkungen(ergebnisse, zeilen)
-        # Unmittelbar nach erfolgreicher Analyse den strukturierten Snapshot aktualisieren.
-        self._server_summary = _baue_server_summary(ergebnisse)
-        status_nach_server = {normalisiere_servernamen(ergebnis.server): "analysiert" for ergebnis in ergebnisse}
-        for item_id, zeile in self._zeilen_nach_id.items():
-            zeile.status = status_nach_server.get(normalisiere_servernamen(zeile.servername), "unbekannt")
-            self.tree.set(item_id, _SPALTE_STATUS, zeile.status)
+        self._starte_hintergrundlauf(gesamt=len(ziele), worker=worker, bei_erfolg=erfolg, bei_fehler=fehler)
 
-        self._zeige_ergebnisse_aufklappbar(ergebnisse)
-
-        report_pfad = self._ausgabe_pfad.get().strip() or "docs/serverbericht.md"
-        try:
-            export_pfad, export_zeitpunkt = _schreibe_analyse_report(ergebnisse, report_pfad)
-            self._letzter_export_pfad = export_pfad
-            self._letzter_exportzeitpunkt = export_zeitpunkt
-            self._letzte_export_lauf_id = lauf_id
-            self._report_verweis_var.set(
-                _baue_report_verweistext(self._letzter_export_pfad, self._letzter_exportzeitpunkt, self._letzte_export_lauf_id)
-            )
-            self.shell.logge_meldung(f"Analysebericht erstellt: {export_pfad}")
-        except Exception as exc:  # noqa: BLE001 - Analyseergebnis bleibt nutzbar, auch wenn Export fehlschlägt.
-            logger.exception("Analysebericht konnte nicht geschrieben werden")
-            self.shell.zeige_warnung(
-                "Exportwarnung",
-                f"Analyse war erfolgreich, aber der Bericht konnte nicht geschrieben werden: {exc}",
-                "Prüfen Sie den Ausgabepfad und Dateiberechtigungen.",
-            )
-
-        self.shell.setze_status("Analyse abgeschlossen")
-        self.shell.logge_meldung(f"Analyse abgeschlossen. Lauf-ID: {self.shell.lauf_id_var.get()}")
-        self.speichern()
-        self.shell.zeige_erfolg("Analyse abgeschlossen", "Die Mehrserveranalyse wurde erfolgreich abgeschlossen.", "Öffnen Sie die Ergebnisdetails oder starten Sie den nächsten Lauf.")
 
     def _baue_kerninfos(self) -> list[str]:
         """Erzeugt kompakte Übersichtsinfos für die Übersichtsseite im Launcher."""
