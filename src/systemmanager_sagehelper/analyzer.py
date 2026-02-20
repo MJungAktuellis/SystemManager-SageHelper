@@ -8,6 +8,7 @@ import platform
 import re
 import socket
 import subprocess
+from ipaddress import ip_address
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -974,6 +975,16 @@ def _normalisiere_hostname(hostname: str) -> str:
     bereinigt = hostname.strip().lower().rstrip(".")
     if not bereinigt:
         return ""
+
+    # IP-Adressen (IPv4/IPv6) werden als voller Wert beibehalten,
+    # damit unterschiedliche Hosts im selben Netzsegment nicht kollabieren.
+    try:
+        ip_address(bereinigt)
+    except ValueError:
+        pass
+    else:
+        return bereinigt
+
     return bereinigt.split(".", maxsplit=1)[0]
 
 
@@ -1013,7 +1024,7 @@ def _dedupliziere_discovery_ergebnisse(ergebnisse: Iterable[DiscoveryErgebnis]) 
     for item in sorted(ergebnisse, key=lambda eintrag: (eintrag.hostname.lower(), -eintrag.vertrauensgrad)):
         # Deduplizierung erfolgt über normalisierten Hostnamen + IP,
         # um FQDN-/Kurzname-Varianten robust zusammenzuführen.
-        schluessel = (_normalisiere_hostname(item.hostname), item.ip_adresse)
+        schluessel = (_normalisiere_hostname(item.hostname), _normalisiere_hostname(item.ip_adresse))
         if schluessel in dedupliziert:
             bestehend = dedupliziert[schluessel]
             bestehend.erkannte_dienste = _normalisiere_liste_ohne_duplikate(bestehend.erkannte_dienste + item.erkannte_dienste)
