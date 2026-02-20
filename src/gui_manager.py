@@ -913,6 +913,11 @@ class OnboardingController:
         if not self.analyse_ergebnisse:
             return
 
+        # Harte Grenzen halten die Reportausgabe stabil und verhindern sehr große Freitexte,
+        # die spätere Markdown-Generierung oder Persistenz ungewollt aufblähen könnten.
+        max_anmerkung_zeichen = 2000
+        max_anmerkung_zeilen = 30
+
         # Dialoggröße anhand der Bildschirmauflösung bestimmen und defensiv begrenzen,
         # damit der Dialog sowohl auf kleinen als auch großen Auflösungen gut nutzbar bleibt.
         bildschirm_breite = self._window.winfo_screenwidth() if self._window else 1280
@@ -974,8 +979,15 @@ class OnboardingController:
             justify="left",
         ).pack(anchor="w", pady=(0, 6))
 
-        tabellen_rahmen = ttk.Frame(inhalt)
-        tabellen_rahmen.pack(fill="both", expand=True, pady=(0, 8))
+        # PanedWindow erlaubt dem Benutzer, die Höhe zwischen Tabelle und Texteditor
+        # flexibel anzupassen (Sash per Maus verschiebbar).
+        haupt_pane = ttk.Panedwindow(inhalt, orient="vertical")
+        haupt_pane.pack(fill="both", expand=True, pady=(0, 8))
+
+        tabellen_rahmen = ttk.Frame(haupt_pane)
+        editor_rahmen = ttk.Frame(haupt_pane)
+        haupt_pane.add(tabellen_rahmen, weight=4)
+        haupt_pane.add(editor_rahmen, weight=2)
 
         tree = ttk.Treeview(
             tabellen_rahmen,
@@ -1016,17 +1028,58 @@ class OnboardingController:
             anmerkung = (zeile.manuelle_anmerkung if zeile else ergebnis.manuelle_anmerkung).strip()
             tree.insert("", "end", iid=norm_name, values=(ergebnis.server, rollen, offene_ports, status, anmerkung))
 
-        anmerkung_var = tk.StringVar(value="")
-        ttk.Label(inhalt, text="Anmerkungen/Besonderheiten:").pack(anchor="w")
-        eintrag = ttk.Entry(inhalt, textvariable=anmerkung_var, width=120)
-        eintrag.pack(fill="x", pady=(0, 8))
+        ttk.Label(editor_rahmen, text="Anmerkungen/Besonderheiten:").pack(anchor="w")
+
+        text_container = ttk.Frame(editor_rahmen)
+        text_container.pack(fill="both", expand=True, pady=(0, 4))
+        anmerkung_text = tk.Text(text_container, wrap="word", height=7, undo=True)
+        anmerkung_scrollbar = ttk.Scrollbar(text_container, orient="vertical", command=anmerkung_text.yview)
+        anmerkung_text.configure(yscrollcommand=anmerkung_scrollbar.set)
+        anmerkung_text.pack(side="left", fill="both", expand=True)
+        anmerkung_scrollbar.pack(side="right", fill="y")
+
+        hinweis_var = tk.StringVar(
+            value=(
+                f"Hinweis: max. {max_anmerkung_zeilen} Zeilen und "
+                f"{max_anmerkung_zeichen} Zeichen."
+            )
+        )
+        ttk.Label(editor_rahmen, textvariable=hinweis_var).pack(anchor="w", pady=(0, 4))
+
+        def _normalisiere_anmerkung(text: str) -> tuple[str, bool]:
+            """Normalisiert Whitespace und begrenzt die Eingabe für stabile Reports."""
+            bereinigt = text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", "    ")
+            bereinigt = "\n".join(zeile.rstrip() for zeile in bereinigt.split("\n"))
+            bereinigt = re.sub("\n{3,}", "\n\n", bereinigt).strip()
+
+            zeilen = bereinigt.split("\n") if bereinigt else []
+            gekuerzt = False
+            if len(zeilen) > max_anmerkung_zeilen:
+                zeilen = zeilen[:max_anmerkung_zeilen]
+                bereinigt = "\n".join(zeilen)
+                gekuerzt = True
+
+            if len(bereinigt) > max_anmerkung_zeichen:
+                bereinigt = bereinigt[:max_anmerkung_zeichen].rstrip()
+                gekuerzt = True
+
+            return bereinigt, gekuerzt
 
         def auswahl_uebernehmen(_event: tk.Event[tk.Misc] | None = None) -> None:
             auswahl = tree.selection()
             if not auswahl:
-                anmerkung_var.set("")
+                anmerkung_text.delete("1.0", "end")
+                hinweis_var.set(
+                    f"Hinweis: max. {max_anmerkung_zeilen} Zeilen und {max_anmerkung_zeichen} Zeichen."
+                )
                 return
-            anmerkung_var.set(str(tree.set(auswahl[0], "anmerkung") or ""))
+
+            anmerkung_text.delete("1.0", "end")
+            anmerkung_text.insert("1.0", str(tree.set(auswahl[0], "anmerkung") or ""))
+            hinweis_var.set(
+                f"Server ausgewählt: {tree.set(auswahl[0], 'server')} "
+                f"(max. {max_anmerkung_zeilen} Zeilen / {max_anmerkung_zeichen} Zeichen)"
+            )
 
         def anmerkung_speichern() -> None:
             auswahl = tree.selection()
@@ -1035,8 +1088,11 @@ class OnboardingController:
                 return
 
             item_id = auswahl[0]
-            neue_anmerkung = anmerkung_var.get().strip()
+            rohe_anmerkung = anmerkung_text.get("1.0", "end-1c")
+            neue_anmerkung, wurde_gekuerzt = _normalisiere_anmerkung(rohe_anmerkung)
             tree.set(item_id, "anmerkung", neue_anmerkung)
+            anmerkung_text.delete("1.0", "end")
+            anmerkung_text.insert("1.0", neue_anmerkung)
 
             for zeile in self.server_zeilen:
                 if normalisiere_servernamen(zeile.servername) == item_id:
@@ -1057,13 +1113,19 @@ class OnboardingController:
                     ergebnis.hinweise.append(neue_anmerkung)
                 break
 
-            self._setze_status("Anmerkung gespeichert und in den Analysezustand übernommen.")
+            if wurde_gekuerzt:
+                self._setze_status(
+                    "Anmerkung gespeichert. Text wurde für stabile Reports automatisch normalisiert/gekürzt."
+                )
+            else:
+                self._setze_status("Anmerkung gespeichert und in den Analysezustand übernommen.")
 
         tree.bind("<<TreeviewSelect>>", auswahl_uebernehmen)
 
         button_rahmen = ttk.Frame(inhalt)
         button_rahmen.pack(fill="x", pady=(0, 4))
         ttk.Button(button_rahmen, text="Anmerkung übernehmen", command=anmerkung_speichern).pack(side="left")
+        ttk.Sizegrip(button_rahmen).pack(side="right", padx=(6, 0))
 
         def _dialog_schliessen() -> None:
             # Letzte Dialoggröße persistieren, damit der Benutzer bei erneutem Öffnen
