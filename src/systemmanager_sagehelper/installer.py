@@ -601,6 +601,57 @@ def richte_tool_dateien_und_launcher_ein(repo_root: Path) -> str:
         encoding="utf-8",
     )
 
+    admin_gui_launcher = script_ordner / "start_systemmanager_gui_admin.ps1"
+    # Der Admin-Launcher erzwingt bei Bedarf eine UAC-Elevation und startet erst danach die GUI.
+    admin_gui_launcher.write_text(
+        "param(\n"
+        "    [Parameter(ValueFromRemainingArguments = $true)]\n"
+        "    [string[]]$WeitergabeArgumente\n"
+        ")\n\n"
+        "$ErrorActionPreference = 'Stop'\n"
+        "$scriptVerzeichnis = Split-Path -Parent $MyInvocation.MyCommand.Path\n"
+        "$appRoot = (Resolve-Path (Join-Path $scriptVerzeichnis '..')).Path\n"
+        "$guiLauncher = Join-Path $scriptVerzeichnis 'start_systemmanager_gui.bat'\n\n"
+        "function Test-IstAdministrator {\n"
+        "    $identitaet = [Security.Principal.WindowsIdentity]::GetCurrent()\n"
+        "    $rolle = New-Object Security.Principal.WindowsPrincipal($identitaet)\n"
+        "    return $rolle.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)\n"
+        "}\n\n"
+        "if (-not (Test-Path -Path $guiLauncher)) {\n"
+        "    Write-Error 'Der GUI-Launcher start_systemmanager_gui.bat wurde nicht gefunden.'\n"
+        "    exit 1\n"
+        "}\n\n"
+        "if (-not (Test-IstAdministrator)) {\n"
+        "    $argumente = @(\n"
+        "        '-NoProfile',\n"
+        "        '-ExecutionPolicy', 'Bypass',\n"
+        "        '-File', ('\"{0}\"' -f $PSCommandPath)\n"
+        "    ) + $WeitergabeArgumente\n"
+        "\n"
+        "    try {\n"
+        "        Start-Process -FilePath 'powershell.exe' -ArgumentList $argumente -Verb RunAs -WorkingDirectory $appRoot | Out-Null\n"
+        "        Write-Host 'UAC-Abfrage bestätigt. Die erhöhte Instanz startet nun die GUI.'\n"
+        "        exit 0\n"
+        "    }\n"
+        "    catch [System.ComponentModel.Win32Exception] {\n"
+        "        if ($_.Exception.NativeErrorCode -eq 1223) {\n"
+        "            Write-Warning 'Die UAC-Abfrage wurde abgebrochen. Bitte erneut starten und bestätigen.'\n"
+        "            exit 1223\n"
+        "        }\n"
+        "\n"
+        "        Write-Error ('Elevation konnte nicht gestartet werden: {0}' -f $_.Exception.Message)\n"
+        "        exit 1\n"
+        "    }\n"
+        "}\n\n"
+        "Set-Location -Path $appRoot\n"
+        "& $guiLauncher @WeitergabeArgumente\n"
+        "if ($null -eq $LASTEXITCODE) {\n"
+        "    exit 0\n"
+        "}\n"
+        "exit $LASTEXITCODE\n",
+        encoding="utf-8",
+    )
+
     cli_launcher = script_ordner / "start_systemmanager_cli.bat"
     cli_launcher.write_text(
         '@echo off\r\n'
@@ -647,7 +698,7 @@ def richte_tool_dateien_und_launcher_ein(repo_root: Path) -> str:
     )
     shell_launcher.chmod(0o755)
 
-    return "Launcher-Dateien (GUI/CLI + Kompatibilität) wurden unter scripts/ eingerichtet."
+    return "Launcher-Dateien (GUI/CLI/Admin + Kompatibilität) wurden unter scripts/ eingerichtet."
 
 def _escape_powershell_literal(text: str) -> str:
     """Escaped einen String für die sichere Verwendung in PowerShell-Literalen."""
@@ -659,6 +710,7 @@ def erstelle_windows_desktop_verknuepfung(
     ziel_pfad: Path,
     verknuepfungs_name: str = "SystemManager-SageHelper",
     arbeitsverzeichnis: Path | None = None,
+    erzwinge_admin_start: bool = True,
 ) -> Path:
     """Erstellt eine Desktop-Verknüpfung unter Windows via PowerShell/COM.
 
@@ -681,12 +733,24 @@ def erstelle_windows_desktop_verknuepfung(
     workdir = arbeitsverzeichnis or ziel_pfad.parent
     workdir_str = _escape_powershell_literal(str(workdir))
 
+    shortcut_target = ziel_str
+    shortcut_argumente = ""
+    if erzwinge_admin_start:
+        if ziel_pfad.suffix.lower() != ".ps1":
+            raise InstallationsFehler(
+                "Für erzwungenen Admin-Start muss die Verknüpfung auf ein PowerShell-Skript (.ps1) zeigen."
+            )
+        powershell_exe = Path(os.environ.get("WINDIR", r"C:\\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+        shortcut_target = _escape_powershell_literal(str(powershell_exe))
+        shortcut_argumente = _escape_powershell_literal(f'-NoProfile -ExecutionPolicy Bypass -File "{ziel_pfad}"')
+
     # COM über WScript.Shell ist auf allen unterstützten Windows-Versionen stabil verfügbar.
     ps_script = (
         "$ws = New-Object -ComObject WScript.Shell;"
         f"$shortcut = $ws.CreateShortcut('{shortcut_str}');"
-        f"$shortcut.TargetPath = '{ziel_str}';"
+        f"$shortcut.TargetPath = '{shortcut_target}';"
         f"$shortcut.WorkingDirectory = '{workdir_str}';"
+        f"$shortcut.Arguments = '{shortcut_argumente}';"
         "$shortcut.Save();"
     )
 
@@ -717,12 +781,13 @@ def erstelle_windows_desktop_verknuepfung(
 
 
 def erstelle_desktop_verknuepfung_fuer_python_installation(repo_root: Path) -> Path:
-    """Erstellt eine Verknüpfung für den direkten Python-Installationspfad."""
-    launcher = repo_root / "scripts" / "start_systemmanager_gui.bat"
+    """Erstellt eine Desktop-Verknüpfung auf den dedizierten Admin-GUI-Launcher."""
+    launcher = repo_root / "scripts" / "start_systemmanager_gui_admin.ps1"
     return erstelle_windows_desktop_verknuepfung(
         ziel_pfad=launcher,
         verknuepfungs_name="SystemManager-SageHelper",
         arbeitsverzeichnis=repo_root,
+        erzwinge_admin_start=True,
     )
 
 
@@ -936,6 +1001,7 @@ def erstelle_standard_komponenten(repo_root: Path) -> dict[str, InstallationsKom
             install_fn=lambda: richte_tool_dateien_und_launcher_ein(repo_root),
             verify_fn=lambda: (
                 (repo_root / "scripts" / "start_systemmanager_gui.bat").exists()
+                and (repo_root / "scripts" / "start_systemmanager_gui_admin.ps1").exists()
                 and (repo_root / "scripts" / "start_systemmanager_cli.bat").exists()
                 and (repo_root / "scripts" / "start_systemmanager.bat").exists()
                 and (repo_root / "scripts" / "start_systemmanager.sh").exists(),

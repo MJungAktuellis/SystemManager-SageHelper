@@ -236,18 +236,18 @@ def main() -> None:
             auswahl = ermittle_interaktive_auswahl(komponenten)
         ergebnisse = fuehre_installationsplan_aus(komponenten, auswahl)
 
-        desktop_verknuepfung_status = "Desktop-Verknüpfung: Deaktiviert"
+        desktop_verknuepfung_status = "Admin-Start-Desktop-Verknüpfung: Deaktiviert"
         desktop_verknuepfung_pfad: Path | None = None
         if cli_args.desktop_icon:
             try:
                 desktop_verknuepfung_pfad = erstelle_desktop_verknuepfung_fuer_python_installation(ziel_root)
-                desktop_verknuepfung_status = f"Desktop-Verknüpfung: Erfolgreich erstellt ({desktop_verknuepfung_pfad})"
-                LOGGER.info("Desktop-Verknüpfung erfolgreich erstellt: %s", desktop_verknuepfung_pfad)
+                desktop_verknuepfung_status = f"Admin-Start-Desktop-Verknüpfung: Erfolgreich erstellt ({desktop_verknuepfung_pfad})"
+                LOGGER.info("Admin-Start-Desktop-Verknüpfung erfolgreich erstellt: %s", desktop_verknuepfung_pfad)
             except InstallationsFehler as exc:
-                desktop_verknuepfung_status = f"Desktop-Verknüpfung: Fehler ({exc})"
-                LOGGER.warning("Desktop-Verknüpfung konnte nicht erstellt werden: %s", exc)
+                desktop_verknuepfung_status = f"Admin-Start-Desktop-Verknüpfung: Fehler ({exc})"
+                LOGGER.warning("Admin-Start-Desktop-Verknüpfung konnte nicht erstellt werden: %s", exc)
         else:
-            LOGGER.info("Desktop-Verknüpfung wurde per CLI-Option deaktiviert.")
+            LOGGER.info("Admin-Start-Desktop-Verknüpfung wurde per CLI-Option deaktiviert.")
 
         report_datei = schreibe_installationsreport(
             ziel_root,
@@ -287,11 +287,11 @@ def main() -> None:
     _safe_print(f"[INFO] Installationsmarker: {marker_datei}")
     if cli_args.desktop_icon:
         if desktop_verknuepfung_pfad:
-            _safe_print(f"[INFO] Desktop-Verknüpfung: {desktop_verknuepfung_pfad}")
+            _safe_print(f"[INFO] Admin-Start-Desktop-Verknüpfung: {desktop_verknuepfung_pfad}")
         else:
-            _safe_print("[WARN] Desktop-Verknüpfung konnte nicht erstellt werden. Details siehe Installationsreport.")
+            _safe_print("[WARN] Admin-Start-Desktop-Verknüpfung konnte nicht erstellt werden. Details siehe Installationsreport.")
     else:
-        _safe_print("[INFO] Desktop-Verknüpfung wurde deaktiviert.")
+        _safe_print("[INFO] Admin-Start-Desktop-Verknüpfung wurde deaktiviert.")
     _safe_print("Startbeispiel (aus Zielverzeichnis):")
     _safe_print("  python -m systemmanager_sagehelper scan --server localhost --rollen APP --out report.md")
 

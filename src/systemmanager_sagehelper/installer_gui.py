@@ -560,7 +560,7 @@ class InstallerWizardGUI:
             if self._ist_wartungsmodus:
                 self.window.after(0, self._log_erfolg, "Integritätsprüfung abgeschlossen.")
                 self.window.after(0, self._log_erfolg, "Versions-/Komponentencheck abgeschlossen.")
-            desktop_verknuepfung_status = "Desktop-Verknüpfung: Deaktiviert"
+            desktop_verknuepfung_status = "Admin-Start-Desktop-Verknüpfung: Deaktiviert"
 
             if self.option_marker_var.get():
                 self.marker_datei = schreibe_installations_marker(repo_root=ziel_root)
@@ -591,16 +591,16 @@ class InstallerWizardGUI:
             if installer_optionen.desktop_icon and not self._ist_wartungsmodus:
                 try:
                     self.desktop_icon_pfad = erstelle_desktop_verknuepfung_fuer_python_installation(ziel_root)
-                    desktop_verknuepfung_status = f"Desktop-Verknüpfung: Erfolgreich erstellt ({self.desktop_icon_pfad})"
-                    LOGGER.info("Desktop-Verknüpfung erfolgreich erstellt: %s", self.desktop_icon_pfad)
+                    desktop_verknuepfung_status = f"Admin-Start-Desktop-Verknüpfung: Erfolgreich erstellt ({self.desktop_icon_pfad})"
+                    LOGGER.info("Admin-Start-Desktop-Verknüpfung erfolgreich erstellt: %s", self.desktop_icon_pfad)
                     self.window.after(0, self._log_erfolg, "Desktop-Verknüpfung wurde erstellt.")
                 except InstallationsFehler as exc:
                     self.desktop_icon_fehler = str(exc)
-                    desktop_verknuepfung_status = f"Desktop-Verknüpfung: Fehler ({self.desktop_icon_fehler})"
-                    LOGGER.warning("Desktop-Verknüpfung nicht erstellt: %s", self.desktop_icon_fehler)
+                    desktop_verknuepfung_status = f"Admin-Start-Desktop-Verknüpfung: Fehler ({self.desktop_icon_fehler})"
+                    LOGGER.warning("Admin-Start-Desktop-Verknüpfung nicht erstellt: %s", self.desktop_icon_fehler)
                     self.window.after(0, self._log_warnung, "Desktop-Verknüpfung konnte nicht erstellt werden.")
             else:
-                LOGGER.info("Desktop-Verknüpfung wurde im GUI-Wizard deaktiviert.")
+                LOGGER.info("Admin-Start-Desktop-Verknüpfung wurde im GUI-Wizard deaktiviert.")
 
             if self.option_report_var.get():
                 self.report_datei = schreibe_installationsreport(
