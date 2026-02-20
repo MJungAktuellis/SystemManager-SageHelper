@@ -306,6 +306,93 @@ class TestAnalyzer(unittest.TestCase):
         self.assertIn("forward_dns_nicht_aufloesbar", treffer.fehlerursachen)
         self.assertEqual("srv-ohne-dns", treffer.hostname)
 
+    @patch("systemmanager_sagehelper.analyzer.KombinierterRemoteProvider")
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value="srv-teil.domain.local")
+    @patch("systemmanager_sagehelper.analyzer._resolve_forward_dns", return_value="srv-teil.domain.local")
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.6.10"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=True)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=False)
+    def test_discovery_icmp_blockiert_tcp_teilsignal_bleibt_hart_erreichbar(
+        self,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _forward_mock,
+        _reverse_mock,
+        provider_cls,
+    ) -> None:
+        provider = Mock()
+        provider.ist_verfuegbar.return_value = False
+        provider_cls.return_value = provider
+
+        treffer = _entdecke_einzelnen_host("srv-teil", DiscoveryKonfiguration(max_worker=1))
+
+        self.assertIsNotNone(treffer)
+        assert treffer is not None
+        self.assertTrue(treffer.erreichbar)
+        self.assertIn("aufnahme_harter_check_tcp", treffer.aufnahmegrund)
+
+    @patch("systemmanager_sagehelper.analyzer.KombinierterRemoteProvider")
+    @patch("systemmanager_sagehelper.analyzer._ad_ldap_hinweis", return_value="Domäne erkannt: domain.local")
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value="srv-soft.domain.local")
+    @patch("systemmanager_sagehelper.analyzer._resolve_forward_dns", return_value="srv-soft.domain.local")
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=["10.0.6.20"])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=False)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[object()])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=False)
+    def test_discovery_nur_weiche_signale_werden_bei_schwelle_aufgenommen(
+        self,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _forward_mock,
+        _reverse_mock,
+        _ad_mock,
+        provider_cls,
+    ) -> None:
+        provider = Mock()
+        provider.ist_verfuegbar.return_value = False
+        provider_cls.return_value = provider
+
+        treffer = _entdecke_einzelnen_host(
+            "srv-soft",
+            DiscoveryKonfiguration(max_worker=1, nutze_ad_ldap=True, min_vertrauensgrad=0.3),
+        )
+
+        self.assertIsNotNone(treffer)
+        assert treffer is not None
+        self.assertFalse(treffer.erreichbar)
+        self.assertIn("aufnahme_ueber_weiche_signale", treffer.aufnahmegrund)
+        self.assertIn("nicht_hart_erreichbar_aber_vertrauensschwelle_erreicht", treffer.fehlerursachen)
+
+    @patch("systemmanager_sagehelper.analyzer.KombinierterRemoteProvider")
+    @patch("systemmanager_sagehelper.analyzer._resolve_reverse_dns", return_value=None)
+    @patch("systemmanager_sagehelper.analyzer._resolve_forward_dns", return_value=None)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_ip_adressen", return_value=[])
+    @patch("systemmanager_sagehelper.analyzer.pruefe_tcp_port", return_value=False)
+    @patch("systemmanager_sagehelper.analyzer._ermittle_socket_kandidaten", return_value=[])
+    @patch("systemmanager_sagehelper.analyzer._ping_host", return_value=False)
+    def test_discovery_nicht_existenter_host_bleibt_verworfen(
+        self,
+        _ping_mock,
+        _sock_mock,
+        _port_mock,
+        _dns_mock,
+        _forward_mock,
+        _reverse_mock,
+        provider_cls,
+    ) -> None:
+        provider = Mock()
+        provider.ist_verfuegbar.return_value = False
+        provider_cls.return_value = provider
+
+        treffer = _entdecke_einzelnen_host("srv-nicht-da", DiscoveryKonfiguration(max_worker=1))
+
+        self.assertIsNone(treffer)
+
 
 if __name__ == "__main__":
     unittest.main()
