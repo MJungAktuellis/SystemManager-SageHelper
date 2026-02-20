@@ -12,8 +12,11 @@ from tkinter import simpledialog, ttk
 from systemmanager_sagehelper.analyzer import (
     analysiere_mehrere_server,
     DiscoveryKonfiguration,
+    DiscoveryRangeSegment,
     entdecke_server_ergebnisse,
+    entdecke_server_mehrere_ranges,
     entdecke_server_namen,
+    entdecke_server_via_seeds,
 )
 from systemmanager_sagehelper.gui_shell import GuiShell
 from systemmanager_sagehelper.installation_state import pruefe_installationszustand, verarbeite_installations_guard
@@ -640,9 +643,9 @@ class MehrserverAnalyseGUI:
         self._letzter_discovery_modus = tk.StringVar(value=self.modulzustand.get("letzter_discovery_modus", "range"))
         self._letzte_discovery_namen = tk.StringVar(value=self.modulzustand.get("letzte_discovery_namen", ""))
         letzte_discovery_eingabe = self.modulzustand.get("letzte_discovery_eingabe", {})
-        self._discovery_basis_var = tk.StringVar(value=str(letzte_discovery_eingabe.get("basis", "")))
-        self._discovery_start_var = tk.StringVar(value=str(letzte_discovery_eingabe.get("start", "")))
-        self._discovery_ende_var = tk.StringVar(value=str(letzte_discovery_eingabe.get("ende", "")))
+        self._discovery_range_text_var = tk.StringVar(value=str(letzte_discovery_eingabe.get("ranges", "")))
+        self._discovery_seed_text_var = tk.StringVar(value=str(letzte_discovery_eingabe.get("seeds", "")))
+        self._discovery_ad_seeds_var = tk.BooleanVar(value=bool(letzte_discovery_eingabe.get("nutze_ad_seeds", True)))
         self._discovery_validierung_hinweis_var = tk.StringVar(value="")
         self._ausgabe_pfad = tk.StringVar(
             value=self.modulzustand.get("ausgabepfade", {}).get("analyse_report", "docs/serverbericht.md")
@@ -691,26 +694,27 @@ class MehrserverAnalyseGUI:
         )
         self.btn_hinzufuegen.grid(row=0, column=5, padx=8)
 
-        ttk.Label(form_frame, text="IPv4-Basis (z. B. 192.168.178):").grid(row=1, column=0, sticky="w", padx=8, pady=(2, 4))
-        self.entry_discovery_basis = ttk.Entry(form_frame, textvariable=self._discovery_basis_var, width=24)
-        self.entry_discovery_basis.grid(row=1, column=1, padx=6, sticky="w")
+        ttk.Label(form_frame, text="Discovery-Ranges (eine Zeile pro Segment):").grid(row=1, column=0, sticky="nw", padx=8, pady=(2, 4))
+        self.text_discovery_ranges = tk.Text(form_frame, width=45, height=4, wrap="none")
+        self.text_discovery_ranges.grid(row=1, column=1, columnspan=3, padx=6, pady=(2, 4), sticky="we")
+        self.text_discovery_ranges.insert("1.0", self._discovery_range_text_var.get())
 
-        ttk.Label(form_frame, text="Start-Host (0–255):").grid(row=1, column=2, sticky="w", padx=8)
-        self.entry_discovery_start = ttk.Entry(form_frame, textvariable=self._discovery_start_var, width=12)
-        self.entry_discovery_start.grid(row=1, column=3, padx=6, sticky="w")
+        ttk.Label(form_frame, text="Seed-Liste (optional, eine Zeile pro Host):").grid(row=1, column=4, sticky="nw", padx=8, pady=(2, 4))
+        self.text_discovery_seeds = tk.Text(form_frame, width=34, height=4, wrap="none")
+        self.text_discovery_seeds.grid(row=1, column=5, padx=6, pady=(2, 4), sticky="we")
+        self.text_discovery_seeds.insert("1.0", self._discovery_seed_text_var.get())
 
-        ttk.Label(form_frame, text="End-Host (0–255):").grid(row=1, column=4, sticky="w", padx=8)
-        self.entry_discovery_ende = ttk.Entry(form_frame, textvariable=self._discovery_ende_var, width=12)
-        self.entry_discovery_ende.grid(row=1, column=5, padx=6, sticky="w")
-
-        for feld in (self.entry_discovery_basis, self.entry_discovery_start, self.entry_discovery_ende):
-            feld.bind("<FocusIn>", self._entferne_fehler_markierung)
+        ttk.Checkbutton(
+            form_frame,
+            text="Seed-Ermittlung via DNS/AD aktivieren",
+            variable=self._discovery_ad_seeds_var,
+        ).grid(row=2, column=0, columnspan=3, sticky="w", padx=8, pady=(0, 4))
 
         ttk.Label(
             form_frame,
-            text="Beispiel: IPv4-Basis 192.168.178, Start-Host 1, End-Host 30",
+            text="Beispiel-Ranges: 192.168.178.1-30 oder 10.0.5.40-80 (mehrere Zeilen möglich)",
             foreground="#6B7280",
-        ).grid(row=2, column=0, columnspan=6, sticky="w", padx=8, pady=(0, 4))
+        ).grid(row=2, column=3, columnspan=3, sticky="w", padx=8, pady=(0, 4))
         ttk.Label(form_frame, textvariable=self._discovery_validierung_hinweis_var, foreground="#B91C1C").grid(
             row=3,
             column=0,
@@ -1033,52 +1037,47 @@ class MehrserverAnalyseGUI:
         """Hebt ein Eingabefeld visuell hervor, damit der Anwender die Ursache schnell erkennt."""
         feld.configure(highlightbackground="#DC2626", highlightcolor="#DC2626", highlightthickness=2)
 
-    def _validiere_discovery_eingaben(self) -> tuple[str, int, int] | None:
-        """Validiert Discovery-Parameter und liefert bei Erfolg normalisierte Werte zurück."""
-        self._discovery_validierung_hinweis_var.set("")
-        for feld in (self.entry_discovery_basis, self.entry_discovery_start, self.entry_discovery_ende):
-            feld.configure(highlightthickness=0)
-
-        basis = self._discovery_basis_var.get().strip()
-        start_text = self._discovery_start_var.get().strip()
-        ende_text = self._discovery_ende_var.get().strip()
-
+    def _parse_discovery_range_zeile(self, zeile: str) -> DiscoveryRangeSegment:
+        """Parst eine einzelne Range-Zeile im Format `A.B.C.X-Y`."""
+        text = zeile.strip()
+        hostteil, endteil = text.rsplit("-", maxsplit=1)
+        oktette = hostteil.split(".")
+        if len(oktette) != 4 or not all(teil.isdigit() for teil in oktette):
+            raise ValueError(f"Ungültiges Range-Format: {text}")
+        basis = ".".join(oktette[:3])
         if not _IPV4_BASIS_REGEX.fullmatch(basis):
-            self._markiere_fehlerhaftes_feld(self.entry_discovery_basis)
-            self._discovery_validierung_hinweis_var.set("Ungültige IPv4-Basis. Erwartetes Format: z. B. 192.168.178")
-            return None
+            raise ValueError(f"Ungültige IPv4-Basis in Segment: {text}")
 
-        try:
-            startwert = int(start_text)
-        except ValueError:
-            self._markiere_fehlerhaftes_feld(self.entry_discovery_start)
-            self._discovery_validierung_hinweis_var.set("Start-Host muss eine Zahl zwischen 0 und 255 sein.")
-            return None
-
-        try:
-            endwert = int(ende_text)
-        except ValueError:
-            self._markiere_fehlerhaftes_feld(self.entry_discovery_ende)
-            self._discovery_validierung_hinweis_var.set("End-Host muss eine Zahl zwischen 0 und 255 sein.")
-            return None
-
-        if not 0 <= startwert <= 255:
-            self._markiere_fehlerhaftes_feld(self.entry_discovery_start)
-            self._discovery_validierung_hinweis_var.set("Start-Host liegt außerhalb des gültigen Bereichs (0–255).")
-            return None
-
-        if not 0 <= endwert <= 255:
-            self._markiere_fehlerhaftes_feld(self.entry_discovery_ende)
-            self._discovery_validierung_hinweis_var.set("End-Host liegt außerhalb des gültigen Bereichs (0–255).")
-            return None
-
+        startwert = int(oktette[3])
+        endwert = int(endteil)
+        if not 0 <= startwert <= 255 or not 0 <= endwert <= 255:
+            raise ValueError(f"Hostbereich außerhalb 0-255: {text}")
         if startwert > endwert:
-            self._markiere_fehlerhaftes_feld(self.entry_discovery_start)
-            self._markiere_fehlerhaftes_feld(self.entry_discovery_ende)
-            self._discovery_validierung_hinweis_var.set("Start-Host darf nicht größer als End-Host sein.")
+            raise ValueError(f"Start-Host größer als End-Host: {text}")
+
+        return DiscoveryRangeSegment(basis=basis, start=startwert, ende=endwert)
+
+    def _validiere_discovery_eingaben(self) -> tuple[list[DiscoveryRangeSegment], list[str], bool] | None:
+        """Validiert Discovery-Ranges und optionale Seeds aus den Mehrzeilenfeldern."""
+        self._discovery_validierung_hinweis_var.set("")
+        range_text = self.text_discovery_ranges.get("1.0", "end").strip()
+        seed_text = self.text_discovery_seeds.get("1.0", "end").strip()
+
+        range_zeilen = [zeile.strip() for zeile in range_text.splitlines() if zeile.strip()]
+        if not range_zeilen:
+            self._discovery_validierung_hinweis_var.set("Bitte mindestens ein Discovery-Segment eintragen (z. B. 192.168.178.1-30).")
             return None
 
-        return basis, startwert, endwert
+        try:
+            ranges = [self._parse_discovery_range_zeile(zeile) for zeile in range_zeilen]
+        except ValueError as exc:
+            self._discovery_validierung_hinweis_var.set(str(exc))
+            return None
+
+        seeds = [zeile.strip() for zeile in seed_text.splitlines() if zeile.strip()]
+        self._discovery_range_text_var.set("\n".join(range_zeilen))
+        self._discovery_seed_text_var.set("\n".join(seeds))
+        return ranges, seeds, self._discovery_ad_seeds_var.get()
 
     def discovery_starten(self) -> None:
         if not self.shell.bestaetige_aktion("Netzwerkerkennung bestätigen", "Die Netzwerkerkennung wird gestartet."):
@@ -1093,26 +1092,35 @@ class MehrserverAnalyseGUI:
             )
             return
 
-        basis, startwert, endwert = validierte_eingabe
+        ranges, seeds, nutze_ad_seeds = validierte_eingabe
         self._letzter_discovery_modus.set("range")
-        self._letzte_discovery_range.set(f"{basis}.{startwert}-{endwert}")
+        self._letzte_discovery_range.set(", ".join(segment.als_text() for segment in ranges))
         self.shell.setze_status("Netzwerkerkennung läuft")
         self.master.update_idletasks()
 
         try:
-            treffer = entdecke_server_ergebnisse(
-                basis=basis.strip(),
-                start=startwert,
-                ende=endwert,
-                konfiguration=DiscoveryKonfiguration(nutze_reverse_dns=True, nutze_ad_ldap=True),
-            )
+            konfiguration = DiscoveryKonfiguration(nutze_reverse_dns=True, nutze_ad_ldap=nutze_ad_seeds)
+            range_treffer = entdecke_server_mehrere_ranges(ranges=ranges, konfiguration=konfiguration)
+            seed_treffer = entdecke_server_via_seeds(seeds=seeds, konfiguration=konfiguration) if (seeds or nutze_ad_seeds) else []
+            treffer = {f"{item.hostname}|{item.ip_adresse}": item for item in [*range_treffer, *seed_treffer]}
+            kombinierte_treffer = list(treffer.values())
         except Exception as exc:  # noqa: BLE001 - robuste GUI-Fehlerbehandlung.
             logger.exception("Netzwerkerkennung fehlgeschlagen")
             self.shell.zeige_fehler("Fehler bei der Netzwerkerkennung", f"Die Netzwerkerkennung konnte nicht ausgeführt werden: {exc}", "Prüfen Sie Netzwerkbereich und Berechtigungen.")
             self.shell.setze_status("Netzwerkerkennung fehlgeschlagen")
             return
 
-        self._uebernehme_discovery_treffer(treffer, erfolgstitel="Netzwerkerkennung abgeschlossen")
+        segment_status = []
+        for segment in ranges:
+            ziel_hosts = max(1, segment.ende - segment.start + 1)
+            segment_treffer = sum(1 for item in range_treffer if item.ip_adresse.startswith(f"{segment.basis}."))
+            quote = (segment_treffer / ziel_hosts) * 100
+            segment_status.append(f"{segment.als_text()}: {segment_treffer}/{ziel_hosts} ({quote:.0f}%)")
+
+        if segment_status:
+            self.shell.logge_meldung("Trefferquote pro Segment: " + " | ".join(segment_status))
+
+        self._uebernehme_discovery_treffer(kombinierte_treffer, erfolgstitel="Netzwerkerkennung abgeschlossen")
         self.shell.setze_status("Netzwerkerkennung abgeschlossen")
         self._aktualisiere_button_zustaende()
 
@@ -1143,7 +1151,10 @@ class MehrserverAnalyseGUI:
         try:
             treffer = entdecke_server_namen(
                 hosts=hosts,
-                konfiguration=DiscoveryKonfiguration(nutze_reverse_dns=True, nutze_ad_ldap=True),
+                konfiguration=DiscoveryKonfiguration(
+                    nutze_reverse_dns=True,
+                    nutze_ad_ldap=self._discovery_ad_seeds_var.get(),
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - robuste GUI-Fehlerbehandlung.
             logger.exception("Servernamenprüfung fehlgeschlagen")
@@ -1316,9 +1327,15 @@ class MehrserverAnalyseGUI:
         aufgeloeste_range = (discovery_range or self._letzte_discovery_range.get() or "").strip()
         aufgeloester_modus = (discovery_modus or self._letzter_discovery_modus.get() or "range").strip() or "range"
         aufgeloeste_eingabe = {
-            "basis": (discovery_eingabe or {}).get("basis", self._discovery_basis_var.get()).strip(),
-            "start": (discovery_eingabe or {}).get("start", self._discovery_start_var.get()).strip(),
-            "ende": (discovery_eingabe or {}).get("ende", self._discovery_ende_var.get()).strip(),
+            "ranges": (discovery_eingabe or {}).get(
+                "ranges",
+                self.text_discovery_ranges.get("1.0", "end").strip() if hasattr(self, "text_discovery_ranges") else self._discovery_range_text_var.get(),
+            ).strip(),
+            "seeds": (discovery_eingabe or {}).get(
+                "seeds",
+                self.text_discovery_seeds.get("1.0", "end").strip() if hasattr(self, "text_discovery_seeds") else self._discovery_seed_text_var.get(),
+            ).strip(),
+            "nutze_ad_seeds": bool((discovery_eingabe or {}).get("nutze_ad_seeds", self._discovery_ad_seeds_var.get())),
         }
         analyse_report = (ausgabe_pfad or self._ausgabe_pfad.get() or "docs/serverbericht.md").strip() or "docs/serverbericht.md"
         ausgabepfade = {"analyse_report": analyse_report, "log_report": "logs/log_dokumentation.md"}
