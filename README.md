@@ -137,7 +137,7 @@ Teile bei Supportanfragen immer diese reproduzierbaren Artefakte aus `logs/`:
 5. Vor der Installation wird die Projektstruktur **im Quellpfad** geprüft.
 6. Während der Installation werden alle benötigten Dateien (`src`, `scripts`, Ressourcen) in das Ziel kopiert; danach laufen Launcher und Verknüpfungen nur noch aus dem Zielverzeichnis.
 7. Im One-Click-/GUI-Flow ist die Option **Desktop-Verknüpfung** standardmäßig aktiviert und wird im Abschluss inkl. Status ausgewiesen.
-8. Standardmäßig schließt sich das Fenster nach erfolgreicher Installation automatisch (keine unnötig offene Konsole).
+8. Bei Doppelklick-Start wechselt der Launcher automatisch in eine persistente Konsole, damit Statusmeldungen sichtbar bleiben.
 9. Bei Fehlern bitte die Dateien `logs/install_launcher.log`, `logs/install_assistant_ps.log`, `logs/install_engine.log` und `logs/install_report.md` teilen.
 
 #### CMD-Launcher: Konsole/Debug steuern
@@ -148,11 +148,12 @@ Der Launcher `Install-SystemManager-SageHelper.cmd` unterstützt folgende Schalt
 - `--pause`: Erzwingt ein `pause` am Ende, auch bei erfolgreichem Lauf.
 - `--debug`: Aktiviert den Debug-Modus und erzwingt intern automatisch `--pause`.
 - `--nopause`: Unterdrückt das `pause` (außer wenn `--pause` oder `--debug` explizit gesetzt ist).
+- `--no-persist-console`: Deaktiviert den automatischen Wechsel in `cmd /k` bei Doppelklick-Starts.
 
 Standardlogik ohne Schalter:
 
-- **Erfolg (`Exit-Code 0`)**: Konsole schließt automatisch.
-- **Fehler (`Exit-Code != 0`)**: Konsole pausiert, damit Fehlermeldungen sichtbar bleiben.
+- **Doppelklick-Start (`cmd /c`)**: Launcher startet sich in einer persistenten `cmd /k`-Konsole neu und aktiviert `--pause`.
+- **Direkter Aufruf aus bestehender Konsole**: Erfolg (`Exit-Code 0`) schließt nicht automatisch die bestehende Konsole; Fehler (`Exit-Code != 0`) pausieren wie gewohnt.
 
 Beispiel für Supportfälle:
 
