@@ -24,3 +24,24 @@ def test_cmd_launcher_erkennt_doppelklick_und_startet_persistente_konsole() -> N
     assert 'set "SHOULD_PERSIST=1"' in inhalt
     assert 'Doppelklick-Start erkannt: Neustart in persistenter Konsole (cmd /k).' in inhalt
     assert 'start "SystemManager-SageHelper Installer" cmd /k ""%SCRIPT_PATH%" --internal-persist --pause"' in inhalt
+
+
+def test_cmd_launcher_hat_fallback_logstrategie_bei_unbeschreibbarem_projektpfad() -> None:
+    """Prüft, dass bei fehlender Schreibbarkeit auf LOCALAPPDATA-Logs gewechselt wird."""
+    inhalt = CMD_PATH.read_text(encoding="utf-8")
+
+    assert 'set "LOG_WRITE_TEST=%LOG_DIR%\\.__write_test_%RANDOM%%RANDOM%.tmp"' in inhalt
+    assert 'break>"%LOG_WRITE_TEST%" 2>nul' in inhalt
+    assert 'if errorlevel 1 goto activate_log_fallback' in inhalt
+    assert 'set "LOG_DIR=%LOCALAPPDATA%\\SystemManager-SageHelper\\logs"' in inhalt
+    assert 'set "LOG_PATH_FALLBACK_ACTIVE=1"' in inhalt
+
+
+def test_cmd_launcher_zeigt_aktiven_logpfad_und_fallback_warnung_sichtbar_an() -> None:
+    """Stellt sicher, dass der aktive Logpfad und der Warnhinweis sichtbar ausgegeben werden."""
+    inhalt = CMD_PATH.read_text(encoding="utf-8")
+
+    assert 'echo [HINWEIS] Launcher-Logdatei: %LAUNCHER_LOG_REL%' in inhalt
+    assert 'echo [HINWEIS] Vollstaendiger Pfad: %LAUNCHER_LOG%' in inhalt
+    assert 'echo [WARN] Fallback-Logpfad aktiv: %LAUNCHER_LOG%' in inhalt
+    assert 'echo [WARN] Fallback-Logpfad aktiv: %LAUNCHER_LOG%>>"%LAUNCHER_LOG%"' in inhalt

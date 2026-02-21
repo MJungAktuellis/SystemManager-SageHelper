@@ -11,8 +11,9 @@ set "PS_SCRIPT=%SCRIPT_DIR%scripts\install_assistant.ps1"
 set "PY_INSTALL_SCRIPT=%SCRIPT_DIR%scripts\install.py"
 set "USED_FALLBACK=0"
 set "LOG_DIR=%SCRIPT_DIR%logs"
-set "LAUNCHER_LOG=%LOG_DIR%\install_launcher.log"
-set "LAUNCHER_LOG_REL=logs\install_launcher.log"
+set "LOG_PATH_FALLBACK_ACTIVE=0"
+set "LAUNCHER_LOG="
+set "LAUNCHER_LOG_REL="
 
 set "INTERNAL_PERSIST=0"
 set "PERSIST_CONSOLE=0"
@@ -63,11 +64,39 @@ goto parse_args
 
 :after_parse
 
+REM Logverzeichnis vorbereiten und Schreibbarkeit pruefen.
+REM Falls das Projektverzeichnis nicht beschreibbar ist (z. B. wegen UAC),
+REM wird auf einen benutzerbeschreibbaren Pfad unter LOCALAPPDATA umgestellt.
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
+set "LOG_WRITE_TEST=%LOG_DIR%\.__write_test_%RANDOM%%RANDOM%.tmp"
+break>"%LOG_WRITE_TEST%" 2>nul
+if errorlevel 1 goto activate_log_fallback
+if not exist "%LOG_WRITE_TEST%" goto activate_log_fallback
+del /f /q "%LOG_WRITE_TEST%" >nul 2>&1
+if exist "%LOG_WRITE_TEST%" goto activate_log_fallback
+goto prepare_log_target
+
+:activate_log_fallback
+set "LOG_PATH_FALLBACK_ACTIVE=1"
+set "LOG_DIR=%LOCALAPPDATA%\SystemManager-SageHelper\logs"
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
+
+:prepare_log_target
+set "LAUNCHER_LOG=%LOG_DIR%\install_launcher.log"
+if "%LOG_PATH_FALLBACK_ACTIVE%"=="1" (
+    set "LAUNCHER_LOG_REL=%LAUNCHER_LOG%"
+) else (
+    set "LAUNCHER_LOG_REL=logs\install_launcher.log"
+)
+
 REM Frueher, gut sichtbarer Hinweis fuer Supportfaelle.
 echo.
 echo ================================================================
 echo [HINWEIS] Launcher-Logdatei: %LAUNCHER_LOG_REL%
 echo [HINWEIS] Vollstaendiger Pfad: %LAUNCHER_LOG%
+if "%LOG_PATH_FALLBACK_ACTIVE%"=="1" (
+    echo [WARN] Fallback-Logpfad aktiv: %LAUNCHER_LOG%
+)
 echo ================================================================
 echo.
 
@@ -95,9 +124,8 @@ if "%INTERNAL_PERSIST%"=="0" (
     )
 )
 
-if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
-
 echo ===== [%date% %time%] Start Install-SystemManager-SageHelper.cmd =====>>"%LAUNCHER_LOG%"
+if "%LOG_PATH_FALLBACK_ACTIVE%"=="1" echo [WARN] Fallback-Logpfad aktiv: %LAUNCHER_LOG%>>"%LAUNCHER_LOG%"
 
 if not exist "%PS_SCRIPT%" (
     echo [FEHLER] Installationsskript nicht gefunden: %PS_SCRIPT%
