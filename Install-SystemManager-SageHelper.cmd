@@ -14,6 +14,7 @@ set "LOG_DIR=%SCRIPT_DIR%logs"
 set "LOG_PATH_FALLBACK_ACTIVE=0"
 set "LAUNCHER_LOG="
 set "LAUNCHER_LOG_REL="
+set "ASSISTANT_LOG="
 
 set "INTERNAL_PERSIST=0"
 set "PERSIST_CONSOLE=0"
@@ -83,6 +84,7 @@ if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
 
 :prepare_log_target
 set "LAUNCHER_LOG=%LOG_DIR%\install_launcher.log"
+set "ASSISTANT_LOG=%LOG_DIR%\install_assistant_ps.log"
 if "%LOG_PATH_FALLBACK_ACTIVE%"=="1" (
     set "LAUNCHER_LOG_REL=%LAUNCHER_LOG%"
 ) else (
@@ -226,7 +228,9 @@ if "%EXIT_CODE%"=="0" (
     REM Verschachtelte Auswertung fuer CMD: vermeidet else-if-Klammerprobleme.
     if "%EXIT_CODE%"=="42" (
         echo [HINWEIS] Administrator-Start wurde erfolgreich angestossen.
+        echo [HINWEIS] Die erste Instanz endet jetzt planmaessig, weil der Installer im neuen Fenster weiterlaeuft.
         echo [HINWEIS] Bitte im neu geoeffneten Fenster den Installer fortsetzen.
+        echo [HINWEIS] Aktiver Logpfad des erhoehten Prozesses: %ASSISTANT_LOG%
         echo [HINWEIS] Das Schliessen dieses ersten Fensters ist in diesem Fall normal.
     ) else (
         echo [FEHLER] Installation beendet mit Exit-Code %EXIT_CODE%.

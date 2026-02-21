@@ -28,3 +28,13 @@ def test_logpfad_resolve_mit_fallback_und_sichtbarer_ausgabe() -> None:
     assert "$script:PsLog = $resolvedLogPath.PsLog" in inhalt
     assert 'Write-Host "[WARN] Aktiver Logpfad (Fallback): $script:PsLog"' in inhalt
     assert 'Write-Host "[INFO] Aktiver Logpfad: $script:PsLog"' in inhalt
+
+
+def test_elevation_pfad_protokolliert_aktiven_logpfad_und_markerdatei() -> None:
+    """Der Elevation-Pfad soll Logpfad sichtbar ausgeben und eine Session-Markerdatei erzeugen."""
+    inhalt = PS1_PATH.read_text(encoding="utf-8")
+
+    assert 'function New-LauncherSessionMarker' in inhalt
+    assert 'Write-Host "[HINWEIS] Aktiver Logpfad der erhöhten Instanz: $script:PsLog"' in inhalt
+    assert 'Write-PsLog -Category "INFO" -Cause "ELEVATION_GESTARTET" -Message "Aktiver Logpfad der erhöhten Instanz: $script:PsLog"' in inhalt
+    assert '$sessionMarkerPath = New-LauncherSessionMarker -LogDirectory $script:LogDir -ProcessId $elevatedProcess.Id' in inhalt

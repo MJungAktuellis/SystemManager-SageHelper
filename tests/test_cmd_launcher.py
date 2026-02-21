@@ -45,3 +45,12 @@ def test_cmd_launcher_zeigt_aktiven_logpfad_und_fallback_warnung_sichtbar_an() -
     assert 'echo [HINWEIS] Vollstaendiger Pfad: %LAUNCHER_LOG%' in inhalt
     assert 'echo [WARN] Fallback-Logpfad aktiv: %LAUNCHER_LOG%' in inhalt
     assert 'echo [WARN] Fallback-Logpfad aktiv: %LAUNCHER_LOG%>>"%LAUNCHER_LOG%"' in inhalt
+
+
+def test_cmd_launcher_exit_42_hinweistext_enthaelt_neues_fenster_und_logpfad() -> None:
+    """Bei Exit 42 muss der Benutzer klar auf neues Fenster und Logpfad hingewiesen werden."""
+    inhalt = CMD_PATH.read_text(encoding="utf-8")
+
+    assert 'Die erste Instanz endet jetzt planmaessig, weil der Installer im neuen Fenster weiterlaeuft.' in inhalt
+    assert 'Bitte im neu geoeffneten Fenster den Installer fortsetzen.' in inhalt
+    assert 'Aktiver Logpfad des erhoehten Prozesses: %ASSISTANT_LOG%' in inhalt
