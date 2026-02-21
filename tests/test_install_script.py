@@ -97,6 +97,45 @@ class TestInstallScript(unittest.TestCase):
 
         self.assertIn("Installation ?", stdout.getvalue())
 
+
+    def test_starte_gui_modus_liefert_exit_code_0_nur_bei_success(self) -> None:
+        """Der GUI-Modus meldet nur bei erfolgreichem Wizard-Abschluss Exit 0."""
+
+        original_import = builtins.__import__
+
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "systemmanager_sagehelper.installer_gui":
+                return SimpleNamespace(
+                    starte_installer_wizard=lambda **_kwargs: SimpleNamespace(abschluss_status="success")
+                )
+            return original_import(name, *args, **kwargs)
+
+        with patch.object(builtins, "__import__", side_effect=fake_import):
+            exit_code = install_script._starte_gui_modus(Path("."), Path("./ziel"))
+
+        self.assertEqual(0, exit_code)
+
+    def test_starte_gui_modus_liefert_exit_code_1_bei_cancelled(self) -> None:
+        """Ein geschlossenes GUI-Fenster ohne Installation muss Exit 1 liefern."""
+
+        original_import = builtins.__import__
+
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "systemmanager_sagehelper.installer_gui":
+                return SimpleNamespace(
+                    starte_installer_wizard=lambda **_kwargs: SimpleNamespace(abschluss_status="cancelled")
+                )
+            return original_import(name, *args, **kwargs)
+
+        with (
+            patch.object(builtins, "__import__", side_effect=fake_import),
+            patch.object(install_script, "_safe_print") as safe_print_mock,
+        ):
+            exit_code = install_script._starte_gui_modus(Path("."), Path("./ziel"))
+
+        self.assertEqual(1, exit_code)
+        safe_print_mock.assert_called_with("[WARN] GUI-Wizard ohne Erfolg beendet: cancelled")
+
     def test_main_non_interactive_verwendet_standardauswahl(self) -> None:
         """Deckt den Non-Interactive-Ausgabepfad im Hauptablauf mit Mocks ab."""
 

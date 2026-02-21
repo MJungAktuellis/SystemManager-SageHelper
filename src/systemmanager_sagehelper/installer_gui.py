@@ -58,6 +58,7 @@ from systemmanager_sagehelper.texte import (
 LOGGER = logging.getLogger(__name__)
 
 WizardModus = Literal["install", "maintenance"]
+AbschlussStatus = Literal["success", "failed", "cancelled", "not_started"]
 
 
 @dataclass(slots=True)
@@ -141,6 +142,9 @@ class InstallerWizardGUI:
         self.installation_laueft = False
         self.abschluss_was_getan: list[str] = []
         self.abschluss_naechste_schritte: list[str] = []
+        # Der Abschlussstatus wird explizit geführt, damit Aufrufer den GUI-Lauf
+        # robust auswerten können (z. B. Auto-Mode mit CLI-Fallback).
+        self.abschluss_status: AbschlussStatus = "not_started"
 
         self.komponenten = erstelle_standard_komponenten(self.target_root)
         self.komponenten_vars = {
@@ -210,6 +214,9 @@ class InstallerWizardGUI:
                 parent=self.window,
             )
             return
+        # Ein Schließen ohne ausgeführte Installation gilt als expliziter Abbruch.
+        if self.abschluss_status == "not_started":
+            self.abschluss_status = "cancelled"
         self.window.destroy()
 
     def _speichere_optionen(self) -> None:
@@ -709,6 +716,7 @@ class InstallerWizardGUI:
 
     def _installation_erfolgreich_abschliessen(self) -> None:
         self.installation_laueft = False
+        self.abschluss_status = "success"
         if hasattr(self, "progress"):
             self.progress.stop()
         self._baue_abschlussbereiche(installiert_ok=True)
@@ -721,6 +729,7 @@ class InstallerWizardGUI:
 
     def _installation_mit_fehler_abschliessen(self) -> None:
         self.installation_laueft = False
+        self.abschluss_status = "failed"
         if hasattr(self, "progress"):
             self.progress.stop()
         self._baue_abschlussbereiche(installiert_ok=False)
