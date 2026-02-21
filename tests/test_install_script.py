@@ -125,6 +125,49 @@ class TestInstallScript(unittest.TestCase):
         self.assertEqual("cli", report_mock.call_args.kwargs["einstiegspfad"])
         safe_print_mock.assert_any_call("\n[INFO] Non-Interactive-Modus aktiv: Standardauswahl wird verwendet.")
 
+    def test_main_auto_faellt_bei_gui_importfehler_auf_cli_zurueck(self) -> None:
+        """Stellt sicher, dass Auto-Mode bei GUI-Importfehler robust auf CLI wechselt."""
+
+        komponenten = {"kern": SimpleNamespace(default_aktiv=True, name="Kernkomponente")}
+
+        original_import = builtins.__import__
+
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
+            if name == "systemmanager_sagehelper.installer_gui":
+                raise ImportError("GUI-Modul absichtlich nicht verfügbar")
+            return original_import(name, *args, **kwargs)
+
+        with (
+            patch.object(
+                install_script,
+                "parse_cli_args",
+                return_value=SimpleNamespace(
+                    mode="auto",
+                    non_interactive=True,
+                    desktop_icon=False,
+                    source=Path("."),
+                    target=Path("./ziel"),
+                ),
+            ),
+            patch.object(install_script, "validiere_quellpfad", return_value=(True, "ok")),
+            patch.object(install_script, "konfiguriere_logging", return_value="install.log"),
+            patch.object(install_script, "kopiere_installationsquellen"),
+            patch.object(install_script, "erstelle_standard_komponenten", return_value=komponenten),
+            patch.object(install_script, "drucke_voraussetzungsstatus"),
+            patch.object(install_script, "drucke_statusbericht"),
+            patch.object(install_script, "STANDARD_REIHENFOLGE", ["kern"]),
+            patch.object(install_script, "validiere_auswahl_und_abhaengigkeiten"),
+            patch.object(install_script, "fuehre_installationsplan_aus", return_value=[]),
+            patch.object(install_script, "schreibe_installationsreport", return_value="report.md") as report_mock,
+            patch.object(install_script, "schreibe_installations_marker", return_value="installed.marker"),
+            patch.object(install_script, "_safe_print") as safe_print_mock,
+            patch.object(builtins, "__import__", side_effect=fake_import),
+        ):
+            install_script.main()
+
+        self.assertEqual("cli", report_mock.call_args.kwargs["einstiegspfad"])
+        safe_print_mock.assert_any_call("[INFO] Fallback auf CLI-Orchestrierung.")
+
 
 if __name__ == "__main__":
     unittest.main()
