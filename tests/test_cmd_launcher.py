@@ -54,3 +54,15 @@ def test_cmd_launcher_exit_42_hinweistext_enthaelt_neues_fenster_und_logpfad() -
     assert 'Die erste Instanz endet jetzt planmaessig, weil der Installer im neuen Fenster weiterlaeuft.' in inhalt
     assert 'Bitte im neu geoeffneten Fenster den Installer fortsetzen.' in inhalt
     assert 'Aktiver Logpfad des erhoehten Prozesses: %ASSISTANT_LOG%' in inhalt
+
+
+def test_cmd_launcher_reicht_offline_admin_und_proxy_parameter_an_powershell_weiter() -> None:
+    """Neue Launcher-Schalter müssen robust geparst und an PowerShell übergeben werden."""
+    inhalt = CMD_PATH.read_text(encoding="utf-8")
+
+    assert 'if /I "%~1"=="--offline" (' in inhalt
+    assert 'if /I "%~1"=="--no-admin" (' in inhalt
+    assert 'if /I "%~1"=="--proxy" (' in inhalt
+    assert 'set "PS_EXTRA_ARGS=%PS_EXTRA_ARGS% -Offline"' in inhalt
+    assert 'set "PS_EXTRA_ARGS=%PS_EXTRA_ARGS% -SkipAdminCheck"' in inhalt
+    assert 'set "PS_EXTRA_ARGS=%PS_EXTRA_ARGS% -ProxyUrl \\\"%PROXY_URL%\\\""' in inhalt
