@@ -19,7 +19,6 @@ if str(SRC_PATH) not in sys.path:
 
 from systemmanager_sagehelper.gui_state import GUIStateStore, erstelle_installer_modulzustand
 from systemmanager_sagehelper.installation_state import _ermittle_app_version, schreibe_installations_marker
-from systemmanager_sagehelper.installer_gui import starte_installer_wizard
 from systemmanager_sagehelper.installer import (
     STANDARD_INSTALLATIONSZIEL_WINDOWS,
     ErgebnisStatus,
@@ -182,9 +181,30 @@ def _baue_report_optionen(cli_args: argparse.Namespace) -> dict[str, str]:
 def _starte_gui_modus(source_root: Path, target_root: Path) -> int:
     """Startet den GUI-Wizard und liefert einen Exit-Code zurück."""
     try:
+        # Der GUI-Import erfolgt absichtlich verzögert, damit der CLI-Modus auch ohne
+        # verfügbare GUI-Abhängigkeiten zuverlässig genutzt werden kann.
+        from systemmanager_sagehelper.installer_gui import starte_installer_wizard
+    except (ImportError, ModuleNotFoundError) as fehler:
+        LOGGER.warning("GUI-Modul konnte nicht geladen werden: %s", fehler)
+        _safe_print(f"[WARN] GUI-Modul nicht verfügbar: {fehler}")
+        return 1
+
+    try:
         starte_installer_wizard(source_root=source_root, target_root=target_root)
         return 0
     except Exception as fehler:
+        # tkinter wird nur bei Bedarf geladen, um headless oder minimalen Umgebungen
+        # keinen zusätzlichen Importdruck aufzuerlegen.
+        try:
+            import tkinter
+        except (ImportError, ModuleNotFoundError):
+            tkinter = None  # type: ignore[assignment]
+
+        if tkinter is not None and isinstance(fehler, tkinter.TclError):
+            LOGGER.warning("GUI-Laufzeitfehler (tkinter): %s", fehler)
+            _safe_print(f"[WARN] GUI-Laufzeitfehler: {fehler}")
+            return 1
+
         LOGGER.exception("GUI-Installer fehlgeschlagen.")
         _safe_print(f"[WARN] GUI-Installer fehlgeschlagen: {fehler}")
         return 1
