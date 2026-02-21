@@ -127,6 +127,19 @@ if "%EXIT_CODE%"=="9009" (
     echo [WARN] PowerShell-Start schlug fehl (Exit 9009). Wechsle auf Python-Direktstart.>>"%LAUNCHER_LOG%"
     goto run_python_fallback
 )
+if not "%EXIT_CODE%"=="0" (
+    REM Bei Fehlern im PowerShell-Launcher auf Python-Direktstart ausweichen,
+    REM damit der One-Click-Installer auch bei gesperrter/defekter PowerShell startet.
+    REM Ausnahmen:
+    REM  - 42   = Elevation wurde erfolgreich in neues Fenster delegiert.
+    REM  - 1223 = UAC-Abfrage wurde vom Benutzer abgebrochen.
+    REM  - 16001= Elevation konnte nicht gestartet werden (gezielter Fehlerhinweis).
+    if not "%EXIT_CODE%"=="42" if not "%EXIT_CODE%"=="1223" if not "%EXIT_CODE%"=="16001" (
+        echo [WARN] PowerShell-Launcher meldete Exit-Code %EXIT_CODE%. Versuche Python-Direktstart.
+        echo [WARN] PowerShell-Launcher meldete Exit-Code %EXIT_CODE%. Versuche Python-Direktstart.>>"%LAUNCHER_LOG%"
+        goto run_python_fallback
+    )
+)
 goto after_launcher
 
 :run_python_fallback
