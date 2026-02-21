@@ -19,6 +19,7 @@ set "PERSIST_CONSOLE=0"
 set "FORCE_PAUSE=0"
 set "NO_PAUSE=0"
 set "DEBUG_MODE=0"
+set "AUTO_PERSIST=1"
 
 REM Parameter robust einlesen, damit Reihenfolge der Schalter flexibel bleibt.
 :parse_args
@@ -30,6 +31,13 @@ if /I "%~1"=="--internal-persist" (
 )
 if /I "%~1"=="--persist-console" (
     set "PERSIST_CONSOLE=1"
+    set "AUTO_PERSIST=0"
+    shift
+    goto parse_args
+)
+if /I "%~1"=="--no-persist-console" (
+    set "PERSIST_CONSOLE=0"
+    set "AUTO_PERSIST=0"
     shift
     goto parse_args
 )
@@ -67,11 +75,16 @@ if "%DEBUG_MODE%"=="1" (
     echo [INFO] Debug-Modus aktiv: --pause wurde automatisch aktiviert.
 )
 
-REM Optionales persistentes CMD-Fenster nur auf ausdruecklichen Wunsch aktivieren.
-REM Die /c-Erkennung verhindert Rekursion, wenn bereits in einer dauerhaften Konsole gestartet.
-if "%INTERNAL_PERSIST%"=="0" if "%PERSIST_CONSOLE%"=="1" (
-    echo %CMDCMDLINE% | findstr /I /C:"/c" >nul
-    if not errorlevel 1 (
+REM Bei Doppelklick-Starts (cmd /c) automatisch in persistente Konsole wechseln,
+REM damit Statusmeldungen und Fehler sichtbar bleiben. Kann mit --no-persist-console deaktiviert werden.
+if "%INTERNAL_PERSIST%"=="0" (
+    set "SHOULD_PERSIST=%PERSIST_CONSOLE%"
+    if "%AUTO_PERSIST%"=="1" if "%SHOULD_PERSIST%"=="0" (
+        echo %CMDCMDLINE% | findstr /I /C:"/c" >nul
+        if not errorlevel 1 set "SHOULD_PERSIST=1"
+    )
+
+    if "%SHOULD_PERSIST%"=="1" (
         REM In CMD werden Anfuehrungszeichen mit doppelten Quotes maskiert, nicht mit Backslashes.
         start "SystemManager-SageHelper Installer" cmd /k ""%SCRIPT_PATH%" --internal-persist --pause"
         exit /b 0
