@@ -75,13 +75,17 @@ if "%DEBUG_MODE%"=="1" (
     echo [INFO] Debug-Modus aktiv: --pause wurde automatisch aktiviert.
 )
 
-REM Bei Doppelklick-Starts (cmd /c) automatisch in persistente Konsole wechseln,
-REM damit Statusmeldungen und Fehler sichtbar bleiben. Kann mit --no-persist-console deaktiviert werden.
+REM Bei Doppelklick-Starts (cmd /c) standardmaessig am Ende pausieren,
+REM damit Statusmeldungen und Fehler sichtbar bleiben.
+REM Ein explizites --persist-console bleibt als Option erhalten.
 if "%INTERNAL_PERSIST%"=="0" (
     set "SHOULD_PERSIST=%PERSIST_CONSOLE%"
     if "%AUTO_PERSIST%"=="1" if "%SHOULD_PERSIST%"=="0" (
         echo %CMDCMDLINE% | findstr /I /C:"/c" >nul
-        if not errorlevel 1 set "SHOULD_PERSIST=1"
+        if not errorlevel 1 (
+            set "FORCE_PAUSE=1"
+            echo [INFO] Doppelklick-Start erkannt: Konsole pausiert am Ende automatisch.
+        )
     )
 
     if "%SHOULD_PERSIST%"=="1" (
