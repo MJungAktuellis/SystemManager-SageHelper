@@ -99,6 +99,15 @@ class InstallationsFehler(RuntimeError):
     """Signalisiert einen bewusst abgebrochenen Installationsschritt."""
 
 
+@dataclass(frozen=True)
+class LoggingInitialisierung:
+    """Ergebniscontainer für die Logging-Initialisierung des Installers."""
+
+    log_datei: Path
+    verwendet_fallback: bool
+    hinweis: str | None = None
+
+
 def ermittle_standard_installationsziel() -> Path:
     """Liefert das bevorzugte Installationsziel für die aktuelle Plattform."""
     if ist_windows_system():
@@ -155,9 +164,48 @@ def ermittle_log_datei(repo_root: Path) -> Path:
     return log_ordner / INSTALLER_ENGINE_LOGDATEI
 
 
-def konfiguriere_logging(repo_root: Path) -> Path:
+def ermittle_fallback_log_datei() -> Path:
+    """Liefert einen benutzerschreibbaren Fallback-Logpfad.
+
+    Unter Windows wird bevorzugt ``%LOCALAPPDATA%`` genutzt. Falls die
+    Umgebungsvariable nicht gesetzt ist, verwenden wir einen robusten
+    Home-Verzeichnis-Fallback.
+    """
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        basis_pfad = Path(local_app_data)
+    else:
+        basis_pfad = Path.home() / ".local" / "share"
+    return basis_pfad / "SystemManager-SageHelper" / "logs" / INSTALLER_ENGINE_LOGDATEI
+
+
+def ermittle_beschreibbare_log_datei(repo_root: Path) -> LoggingInitialisierung:
+    """Ermittelt eine beschreibbare Logdatei mit Fallback auf User-Kontext."""
+    primaere_log_datei = repo_root / "logs" / INSTALLER_ENGINE_LOGDATEI
+    try:
+        primaere_log_datei.parent.mkdir(parents=True, exist_ok=True)
+        with primaere_log_datei.open("a", encoding="utf-8"):
+            pass
+        return LoggingInitialisierung(log_datei=primaere_log_datei, verwendet_fallback=False)
+    except PermissionError:
+        fallback_log_datei = ermittle_fallback_log_datei()
+        fallback_log_datei.parent.mkdir(parents=True, exist_ok=True)
+        with fallback_log_datei.open("a", encoding="utf-8"):
+            pass
+        hinweis = (
+            "Keine Schreibrechte auf das Installationsziel. "
+            f"Installer-Log wird stattdessen unter '{fallback_log_datei}' geschrieben."
+        )
+        return LoggingInitialisierung(log_datei=fallback_log_datei, verwendet_fallback=True, hinweis=hinweis)
+
+
+def konfiguriere_logging(
+    repo_root: Path,
+    logging_initialisierung: LoggingInitialisierung | None = None,
+) -> Path:
     """Konfiguriert Dateilogs für den Installer und gibt den Dateipfad zurück."""
-    log_datei = ermittle_log_datei(repo_root)
+    logging_initialisierung = logging_initialisierung or ermittle_beschreibbare_log_datei(repo_root)
+    log_datei = logging_initialisierung.log_datei
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
 
@@ -174,7 +222,10 @@ def konfiguriere_logging(repo_root: Path) -> Path:
         handler.setFormatter(logging.Formatter(LOG_FORMAT))
         root_logger.addHandler(handler)
 
-    logging.getLogger(__name__).info("Logging initialisiert: %s", log_datei)
+    logger = logging.getLogger(__name__)
+    logger.info("Logging initialisiert: %s", log_datei)
+    if logging_initialisierung.verwendet_fallback and logging_initialisierung.hinweis:
+        logger.warning(logging_initialisierung.hinweis)
     return log_datei
 
 

@@ -136,6 +136,31 @@ class TestInstallScript(unittest.TestCase):
         self.assertEqual(1, exit_code)
         safe_print_mock.assert_called_with("[WARN] GUI-Wizard ohne Erfolg beendet: cancelled")
 
+    def test_main_bricht_bei_permission_error_in_logging_klar_ab(self) -> None:
+        """Logging-Rechtefehler werden explizit gemeldet statt still abzubrechen."""
+
+        with (
+            patch.object(
+                install_script,
+                "parse_cli_args",
+                return_value=SimpleNamespace(
+                    mode="cli",
+                    non_interactive=True,
+                    desktop_icon=False,
+                    source=Path("."),
+                    target=Path("./ziel"),
+                ),
+            ),
+            patch.object(install_script, "validiere_quellpfad", return_value=(True, "ok")),
+            patch.object(install_script, "konfiguriere_logging", side_effect=PermissionError("blocked")),
+            patch.object(install_script, "_safe_print") as safe_print_mock,
+        ):
+            with self.assertRaises(SystemExit) as system_exit:
+                install_script.main()
+
+        self.assertEqual(1, system_exit.exception.code)
+        safe_print_mock.assert_any_call("[ERROR] Logging konnte nicht initialisiert werden (fehlende Schreibrechte).")
+
     def test_main_non_interactive_verwendet_standardauswahl(self) -> None:
         """Deckt den Non-Interactive-Ausgabepfad im Hauptablauf mit Mocks ab."""
 

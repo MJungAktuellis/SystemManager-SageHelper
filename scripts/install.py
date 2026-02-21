@@ -35,6 +35,7 @@ from systemmanager_sagehelper.installer import (
     ermittle_standard_installationsziel,
     kopiere_installationsquellen,
     validiere_quellpfad,
+    ermittle_beschreibbare_log_datei,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -229,7 +230,18 @@ def main() -> None:
         _safe_print(f"[ERROR] Ungültiger Quellpfad: {validierungsnachricht}")
         raise SystemExit(1)
 
-    log_datei = konfiguriere_logging(ziel_root)
+    try:
+        # Logging-Initialisierung läuft bewusst in einem geschützten Block,
+        # damit fehlende Schreibrechte nicht zu einem stillen Abbruch führen.
+        logging_initialisierung = ermittle_beschreibbare_log_datei(ziel_root)
+        log_datei = konfiguriere_logging(ziel_root, logging_initialisierung=logging_initialisierung)
+    except PermissionError as fehler:
+        _safe_print("[ERROR] Logging konnte nicht initialisiert werden (fehlende Schreibrechte).")
+        _safe_print(f"[ERROR] Details: {fehler}")
+        raise SystemExit(1) from fehler
+
+    if logging_initialisierung.verwendet_fallback and logging_initialisierung.hinweis:
+        _safe_print(f"[WARN] {logging_initialisierung.hinweis}")
     _safe_print(f"[INFO] Installationslog: {log_datei}")
     LOGGER.info("Installationslauf gestartet (mode=%s).", cli_args.mode)
 

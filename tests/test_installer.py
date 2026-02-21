@@ -56,6 +56,31 @@ class TestInstaller(unittest.TestCase):
             self.assertEqual("logs", log_datei.parent.name)
             self.assertTrue(log_datei.parent.exists())
 
+    def test_ermittle_beschreibbare_log_datei_nutzt_fallback_bei_permission_error(self) -> None:
+        """Bei fehlenden Rechten muss ein benutzerschreibbarer Fallback genutzt werden."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_root = Path(tmp_dir)
+            fake_localappdata = repo_root / "localappdata"
+
+            original_open = Path.open
+
+            def fake_open(path_obj: Path, *args: object, **kwargs: object):
+                # Simuliert ein nicht beschreibbares Installationsziel.
+                if path_obj == repo_root / "logs" / installer.INSTALLER_ENGINE_LOGDATEI:
+                    raise PermissionError("Zugriff verweigert")
+                return original_open(path_obj, *args, **kwargs)
+
+            with (
+                patch.dict("os.environ", {"LOCALAPPDATA": str(fake_localappdata)}, clear=False),
+                patch("pathlib.Path.open", autospec=True, side_effect=fake_open),
+            ):
+                initialisierung = installer.ermittle_beschreibbare_log_datei(repo_root)
+
+        erwarteter_fallback = fake_localappdata / "SystemManager-SageHelper" / "logs" / installer.INSTALLER_ENGINE_LOGDATEI
+        self.assertTrue(initialisierung.verwendet_fallback)
+        self.assertEqual(erwarteter_fallback, initialisierung.log_datei)
+        self.assertIsNotNone(initialisierung.hinweis)
+
     def test_konfiguriere_logging_verwendet_datei_handler(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             repo_root = Path(tmp_dir)
