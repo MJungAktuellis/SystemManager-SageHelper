@@ -5,14 +5,69 @@ Param()
 # Hinweis zur Kompatibilität: Alte Windows-Codepages stellen Emojis oft fehlerhaft dar.
 # Deshalb verwenden wir bewusst ASCII-Textpräfixe ([OK], [WARN], [FEHLER], Hinweis:).
 
+function Resolve-LauncherLogPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot
+    )
+
+    # Primärer Zielpfad liegt im Repository, damit Logs direkt mit dem Projekt zusammenliegen.
+    $primaryLogDir = Join-Path $RepoRoot "logs"
+
+    # Fallback-Pfad bevorzugt LOCALAPPDATA; falls nicht verfügbar, wird ein Home-basiertes Verzeichnis genutzt.
+    $localAppData = $env:LOCALAPPDATA
+    if ([string]::IsNullOrWhiteSpace($localAppData)) {
+        $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
+    }
+
+    if ([string]::IsNullOrWhiteSpace($localAppData)) {
+        $localAppData = Join-Path $HOME ".systemmanager-sagehelper"
+    }
+
+    $fallbackLogDir = Join-Path $localAppData "SystemManager-SageHelper\logs"
+    $logFileName = "install_assistant_ps.log"
+
+    $candidateTargets = @(
+        @{ Directory = $primaryLogDir; Source = "repo"; UsedFallback = $false },
+        @{ Directory = $fallbackLogDir; Source = "fallback"; UsedFallback = $true }
+    )
+
+    $lastErrorMessage = $null
+    foreach ($candidate in $candidateTargets) {
+        try {
+            if (-not (Test-Path -LiteralPath $candidate.Directory)) {
+                New-Item -ItemType Directory -Path $candidate.Directory -Force -ErrorAction Stop | Out-Null
+            }
+
+            $logPath = Join-Path $candidate.Directory $logFileName
+            [System.IO.File]::AppendAllText($logPath, "")
+
+            return [PSCustomObject]@{
+                LogDir = $candidate.Directory
+                PsLog = $logPath
+                Source = $candidate.Source
+                UsedFallback = $candidate.UsedFallback
+            }
+        }
+        catch {
+            $lastErrorMessage = $_.Exception.Message
+        }
+    }
+
+    throw "Kein beschreibbarer Logpfad verfügbar. Letzter Fehler: $lastErrorMessage"
+}
+
 # Fruehe Initialisierung: Diese Pfade muessen bereits vor der Admin-Pruefung verfuegbar sein,
 # damit auch der Nicht-Admin-/UAC-Pfad sauber protokolliert wird.
 $script:RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
-$script:LogDir = Join-Path $script:RepoRoot "logs"
-if (-not (Test-Path -LiteralPath $script:LogDir)) {
-    New-Item -ItemType Directory -Path $script:LogDir -Force | Out-Null
+$resolvedLogPath = Resolve-LauncherLogPath -RepoRoot $script:RepoRoot
+$script:LogDir = $resolvedLogPath.LogDir
+$script:PsLog = $resolvedLogPath.PsLog
+if ($resolvedLogPath.UsedFallback) {
+    Write-Host "[WARN] Aktiver Logpfad (Fallback): $script:PsLog"
 }
-$script:PsLog = Join-Path $script:LogDir "install_assistant_ps.log"
+else {
+    Write-Host "[INFO] Aktiver Logpfad: $script:PsLog"
+}
 Add-Content -Path $script:PsLog -Value ("==== [" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] Start scripts/install_assistant.ps1 ====")
 
 # Exit-Code-Konstanten fuer nachvollziehbare Automatisierung und eindeutige Launcher-Meldungen.
