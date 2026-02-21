@@ -190,8 +190,15 @@ def _starte_gui_modus(source_root: Path, target_root: Path) -> int:
         return 1
 
     try:
-        starte_installer_wizard(source_root=source_root, target_root=target_root)
-        return 0
+        wizard = starte_installer_wizard(source_root=source_root, target_root=target_root)
+        if wizard.abschluss_status == "success":
+            return 0
+
+        # Der GUI-Lauf wurde nicht erfolgreich abgeschlossen.
+        # Das signalisiert im Auto-Modus den gewünschten CLI-Fallback.
+        LOGGER.info("GUI-Wizard ohne Erfolg beendet (abschluss_status=%s).", wizard.abschluss_status)
+        _safe_print(f"[WARN] GUI-Wizard ohne Erfolg beendet: {wizard.abschluss_status}")
+        return 1
     except Exception as fehler:
         # tkinter wird nur bei Bedarf geladen, um headless oder minimalen Umgebungen
         # keinen zusätzlichen Importdruck aufzuerlegen.

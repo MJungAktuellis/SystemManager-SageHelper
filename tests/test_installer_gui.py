@@ -23,6 +23,9 @@ class _FakeVar:
 class _FakeWindow:
     """Leichter Fensterersatz ohne echtes Tk-Backend."""
 
+    def __init__(self) -> None:
+        self.destroy_called = False
+
     def transient(self, _master) -> None:
         return
 
@@ -37,6 +40,9 @@ class _FakeWindow:
 
     def protocol(self, _name: str, _callback) -> None:
         return
+
+    def destroy(self) -> None:
+        self.destroy_called = True
 
 
 class _FakeFrame:
@@ -135,3 +141,37 @@ def test_navigation_verwendet_eine_einheitliche_button_logik() -> None:
     wizard._aktualisiere_navigation()
     assert wizard.btn_zurueck.configs["state"] == "disabled"
     assert wizard.btn_weiter.configs["text"] == "Schließen"
+
+
+def test_beenden_ohne_installation_setzt_cancelled_status() -> None:
+    """Ein reines Schließen des Wizards darf nicht als Erfolg gelten."""
+
+    wizard = installer_gui.InstallerWizardGUI.__new__(installer_gui.InstallerWizardGUI)
+    wizard.installation_laueft = False
+    wizard.abschluss_status = "not_started"
+    wizard.window = _FakeWindow()
+    wizard.mode = "install"
+
+    wizard._beenden()
+
+    assert wizard.abschluss_status == "cancelled"
+    assert wizard.window.destroy_called is True
+
+
+def test_abschluss_status_startet_mit_not_started(monkeypatch) -> None:
+    """Der Abschlussstatus wird beim Initialisieren eindeutig vorbelegt."""
+
+    monkeypatch.setattr(installer_gui, "GuiShell", _FakeGuiShell)
+    monkeypatch.setattr(installer_gui.tk, "Toplevel", lambda _master: _FakeWindow())
+    monkeypatch.setattr(installer_gui.tk, "Tk", type("_DummyTk", (), {}))
+    monkeypatch.setattr(installer_gui.tk, "StringVar", _FakeVar)
+    monkeypatch.setattr(installer_gui.tk, "BooleanVar", _FakeVar)
+    monkeypatch.setattr(installer_gui.ttk, "Frame", _FakeFrame)
+    monkeypatch.setattr(installer_gui.ttk, "Button", _FakeButton)
+    monkeypatch.setattr(installer_gui, "erstelle_lauf_id", lambda: "lauf-test")
+    monkeypatch.setattr(installer_gui, "erstelle_standard_komponenten", lambda _root: {})
+    monkeypatch.setattr(installer_gui.InstallerWizardGUI, "_render_schritt", lambda self: None)
+
+    wizard = installer_gui.InstallerWizardGUI(master=object(), source_root=Path("."), target_root=Path("."))
+
+    assert wizard.abschluss_status == "not_started"
