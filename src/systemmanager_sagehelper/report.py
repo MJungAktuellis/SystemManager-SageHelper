@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from .models import AnalyseErgebnis, ServerDetailkarte
+from .models import AnalyseErgebnis, KomponentenVersion, ServerDetailkarte
 from .viewmodel import baue_server_detailkarte
 from .texte import (
     BERICHT_ARTEFAKTE,
@@ -167,6 +167,11 @@ def _render_detailblock(ergebnis: AnalyseErgebnis) -> list[str]:
     def _liste_oder_keine(werte: list[str]) -> str:
         return ", ".join(werte) if werte else "keine"
 
+    def _formatiere_versionseintrag(eintrag: KomponentenVersion) -> str:
+        """Formatiert einen Versionseintrag konsistent für den Markdown-Bericht."""
+        quelle = eintrag.quelle or "Quelle unbekannt"
+        return f"{eintrag.produkt} {eintrag.version} ({quelle})"
+
     zeilen: list[str] = [
         f"## Server: {karte.server}",
         "",
@@ -190,9 +195,9 @@ def _render_detailblock(ergebnis: AnalyseErgebnis) -> list[str]:
         f"- Adressen: {_liste_oder_keine(karte.netzwerkidentitaet.ip_adressen)}",
         "",
         "### Versionen",
-        f"- Sage: {_liste_oder_keine([f'{v.produkt} {v.version} ({v.quelle or "Quelle unbekannt"})' for v in karte.sage_versionen])}",
-        f"- .NET: {_liste_oder_keine([f'{v.produkt} {v.version} ({v.quelle or "Quelle unbekannt"})' for v in karte.dotnet_versionen])}",
-        f"- Management: {_liste_oder_keine([f'{v.produkt} {v.version} ({v.quelle or "Quelle unbekannt"})' for v in karte.management_versionen])}",
+        f"- Sage: {_liste_oder_keine([_formatiere_versionseintrag(v) for v in karte.sage_versionen])}",
+        f"- .NET: {_liste_oder_keine([_formatiere_versionseintrag(v) for v in karte.dotnet_versionen])}",
+        f"- Management: {_liste_oder_keine([_formatiere_versionseintrag(v) for v in karte.management_versionen])}",
         "",
         "### Ports",
     ]
