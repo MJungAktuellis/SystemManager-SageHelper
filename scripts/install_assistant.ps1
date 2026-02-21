@@ -56,6 +56,33 @@ function Resolve-LauncherLogPath {
     throw "Kein beschreibbarer Logpfad verfügbar. Letzter Fehler: $lastErrorMessage"
 }
 
+function New-LauncherSessionMarker {
+    param(
+        [Parameter(Mandatory = $true)][string]$LogDirectory,
+        [Parameter(Mandatory = $true)][int]$ProcessId
+    )
+
+    # Markerdatei für Supportfälle: Belegt eindeutig, wann der erhöhte Prozess gestartet wurde.
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $markerPath = Join-Path $LogDirectory ("launcher_session_" + $timestamp + ".txt")
+    $markerContent = @(
+        "Launcher-Session-Marker"
+        "Erstellt: " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+        "PID: $ProcessId"
+        "Logpfad: $script:PsLog"
+    ) -join [Environment]::NewLine
+
+    try {
+        Set-Content -Path $markerPath -Value $markerContent -Encoding UTF8 -ErrorAction Stop
+        Write-PsLog -Category "INFO" -Cause "ELEVATION_MARKER_ERSTELLT" -Message "Markerdatei erstellt: $markerPath"
+        return $markerPath
+    }
+    catch {
+        Write-PsLog -Category "WARN" -Cause "ELEVATION_MARKER_FEHLGESCHLAGEN" -Message "Markerdatei konnte nicht erstellt werden: $($_.Exception.Message)"
+        return $null
+    }
+}
+
 # Fruehe Initialisierung: Diese Pfade muessen bereits vor der Admin-Pruefung verfuegbar sein,
 # damit auch der Nicht-Admin-/UAC-Pfad sauber protokolliert wird.
 $script:RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
@@ -437,7 +464,15 @@ if (-not (Test-Admin)) {
         }
 
         Write-Host "[HINWEIS] UAC-Dialog wurde gestartet. Bitte bestaetigen Sie den Admin-Start im neuen Fenster."
+        Write-Host "[HINWEIS] Aktiver Logpfad der erhöhten Instanz: $script:PsLog"
         Write-PsLog -Category "INFO" -Cause "ELEVATION_GESTARTET" -ExitCode $ExitCodeElevationTriggered -Message "Elevated-Prozess wurde erfolgreich gestartet (PID $($elevatedProcess.Id))." -Candidate "UAC bestaetigen und im neuen Fenster fortfahren"
+        Write-PsLog -Category "INFO" -Cause "ELEVATION_GESTARTET" -Message "Aktiver Logpfad der erhöhten Instanz: $script:PsLog"
+
+        $sessionMarkerPath = New-LauncherSessionMarker -LogDirectory $script:LogDir -ProcessId $elevatedProcess.Id
+        if ($sessionMarkerPath) {
+            Write-Host "[INFO] Session-Marker erstellt: $sessionMarkerPath"
+        }
+
         Write-PsLog -Category "INFO" -Cause "SCRIPT_EXIT" -ExitCode $ExitCodeElevationTriggered -Message "Aktuelle Instanz beendet sich planmaessig nach erfolgreichem Elevation-Start."
         exit $ExitCodeElevationTriggered
     }
