@@ -22,6 +22,10 @@ set "FORCE_PAUSE=0"
 set "NO_PAUSE=0"
 set "DEBUG_MODE=0"
 set "AUTO_PERSIST=1"
+set "OFFLINE_MODE=0"
+set "SKIP_ADMIN_CHECK=0"
+set "PROXY_URL="
+set "PS_EXTRA_ARGS="
 
 REM Parameter robust einlesen, damit Reihenfolge der Schalter flexibel bleibt.
 :parse_args
@@ -56,6 +60,27 @@ if /I "%~1"=="--debug" (
 )
 if /I "%~1"=="--nopause" (
     set "NO_PAUSE=1"
+    shift
+    goto parse_args
+)
+if /I "%~1"=="--offline" (
+    set "OFFLINE_MODE=1"
+    shift
+    goto parse_args
+)
+if /I "%~1"=="--no-admin" (
+    set "SKIP_ADMIN_CHECK=1"
+    shift
+    goto parse_args
+)
+if /I "%~1"=="--proxy" (
+    if "%~2"=="" (
+        echo [WARN] --proxy erwartet eine URL und wird ignoriert.
+        shift
+        goto parse_args
+    )
+    set "PROXY_URL=%~2"
+    shift
     shift
     goto parse_args
 )
@@ -142,6 +167,9 @@ echo [INFO] Flow: scripts\install_assistant.ps1 -> scripts\install.py -> systemm
 echo [INFO] Optional: CLI direkt via "python scripts\install.py --mode cli"
 echo [INFO] Optional: Non-Interactive via "python scripts\install.py --non-interactive"
 echo [INFO] Nutze PowerShell-Skript: %PS_SCRIPT%
+if "%OFFLINE_MODE%"=="1" echo [INFO] Offline-Modus aktiv (keine Online-Downloads, kein requirements-Download).
+if "%SKIP_ADMIN_CHECK%"=="1" echo [WARN] Admin-Pruefung ist deaktiviert (--no-admin).
+if not "%PROXY_URL%"=="" echo [INFO] Proxy fuer pip/Download gesetzt: %PROXY_URL%
 
 where powershell.exe >nul 2>&1
 if errorlevel 1 (
@@ -150,7 +178,10 @@ if errorlevel 1 (
     goto run_python_fallback
 )
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" >>"%LAUNCHER_LOG%" 2>&1
+if "%OFFLINE_MODE%"=="1" set "PS_EXTRA_ARGS=%PS_EXTRA_ARGS% -Offline"
+if "%SKIP_ADMIN_CHECK%"=="1" set "PS_EXTRA_ARGS=%PS_EXTRA_ARGS% -SkipAdminCheck"
+if not "%PROXY_URL%"=="" set "PS_EXTRA_ARGS=%PS_EXTRA_ARGS% -ProxyUrl \"%PROXY_URL%\""
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" %PS_EXTRA_ARGS% >>"%LAUNCHER_LOG%" 2>&1
 set "EXIT_CODE=%errorlevel%"
 if "%EXIT_CODE%"=="9009" (
     echo [WARN] PowerShell-Start schlug fehl (Exit 9009). Wechsle auf Python-Direktstart.

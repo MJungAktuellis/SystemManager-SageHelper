@@ -1,6 +1,10 @@
 # Installationsassistent – PowerShell dient als kanonischer Launcher für die Python-Orchestrierung.
 [CmdletBinding()]
-Param()
+Param(
+    [switch]$Offline,
+    [switch]$SkipAdminCheck,
+    [string]$ProxyUrl
+)
 
 # Hinweis zur Kompatibilität: Alte Windows-Codepages stellen Emojis oft fehlerhaft dar.
 # Deshalb verwenden wir bewusst ASCII-Textpräfixe ([OK], [WARN], [FEHLER], Hinweis:).
@@ -151,6 +155,136 @@ function Resolve-PythonLauncher {
     }
 
     return $null
+}
+
+function Resolve-PythonExecutablePath {
+    param([Parameter(Mandatory = $true)]$Candidate)
+
+    if ($Candidate.Exe -eq "py") {
+        $discoveryArgs = @($Candidate.Args + @("-c", "import sys; print(sys.executable)"))
+        $resolved = & $Candidate.Exe @discoveryArgs 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($resolved)) {
+            return ($resolved | Select-Object -First 1).Trim()
+        }
+        return $null
+    }
+
+    $cmd = Get-Command $Candidate.Exe -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source) {
+        return $cmd.Source
+    }
+
+    return $null
+}
+
+function Test-PythonVersionSupported {
+    param([Parameter(Mandatory = $true)]$Candidate)
+
+    try {
+        if ($Candidate.Exe -eq "py") {
+            $versionOutput = & $Candidate.Exe @($Candidate.Args + @("-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")) 2>$null
+        }
+        else {
+            $versionOutput = & $Candidate.Exe "-c" "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+        }
+
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($versionOutput)) {
+            Write-PsLog -Category "WARN" -Cause "PYTHON_VERSION_UNBEKANNT" -Candidate $Candidate.Label -Message "Version konnte nicht ermittelt werden."
+            return $false
+        }
+
+        $parsedVersion = [Version](($versionOutput | Select-Object -First 1).Trim() + ".0")
+        if ($parsedVersion -lt [Version]"3.8.0") {
+            Write-Host "[WARN] Python-Version zu alt bei '$($Candidate.Label)': $($parsedVersion.ToString()). Benötigt wird >= 3.8."
+            Write-PsLog -Category "WARN" -Cause "PYTHON_VERSION_ZU_ALT" -Candidate $Candidate.Label -Message "Gefundene Version: $parsedVersion"
+            return $false
+        }
+
+        Write-PsLog -Category "INFO" -Cause "PYTHON_VERSION_OK" -Candidate $Candidate.Label -Message "Version erfüllt Mindestanforderung: $parsedVersion"
+        return $true
+    }
+    catch {
+        Write-PsLog -Category "WARN" -Cause "PYTHON_VERSION_PRUEFUNG_FEHLER" -Candidate $Candidate.Label -Message $_.Exception.Message
+        return $false
+    }
+}
+
+function Initialize-PythonEnvironment {
+    param(
+        [Parameter(Mandatory = $true)]$Candidate,
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [switch]$Offline,
+        [string]$ProxyUrl
+    )
+
+    $pythonExePath = Resolve-PythonExecutablePath -Candidate $Candidate
+    if ([string]::IsNullOrWhiteSpace($pythonExePath) -or -not (Test-Path -LiteralPath $pythonExePath)) {
+        Write-PsLog -Category "WARN" -Cause "PYTHON_PFAD_UNBEKANNT" -Candidate $Candidate.Label -Message "VENV-Initialisierung übersprungen, da Python-Pfad nicht ermittelt werden konnte."
+        return $null
+    }
+
+    $venvDir = Join-Path $RepoRoot ".venv"
+    $venvPython = Join-Path $venvDir "Scripts\python.exe"
+    $requirementsPath = Join-Path $RepoRoot "requirements.txt"
+
+    $rollbackNeeded = $false
+    try {
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            Write-Host "[INFO] Erstelle virtuelle Umgebung (.venv) ..."
+            & $pythonExePath "-m" "venv" $venvDir
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $venvPython)) {
+                throw "Virtuelle Umgebung konnte nicht erstellt werden (ExitCode $LASTEXITCODE)."
+            }
+            $rollbackNeeded = $true
+            Write-PsLog -Category "INFO" -Cause "VENV_ERSTELLT" -Candidate $Candidate.Label -Message "Virtuelle Umgebung erstellt: $venvDir"
+        }
+        else {
+            Write-PsLog -Category "INFO" -Cause "VENV_VORHANDEN" -Candidate $Candidate.Label -Message "Virtuelle Umgebung bereits vorhanden: $venvDir"
+        }
+
+        if (Test-Path -LiteralPath $requirementsPath) {
+            Write-Host "[INFO] Aktualisiere pip/setuptools/wheel in .venv ..."
+            & $venvPython "-m" "pip" "install" "--upgrade" "pip" "setuptools" "wheel"
+            if ($LASTEXITCODE -ne 0) {
+                throw "pip-Upgrade in der virtuellen Umgebung fehlgeschlagen (ExitCode $LASTEXITCODE)."
+            }
+
+            $pipArgs = @("-m", "pip", "install", "-r", $requirementsPath)
+            if ($Offline) {
+                $pipArgs += "--no-index"
+            }
+            if (-not [string]::IsNullOrWhiteSpace($ProxyUrl)) {
+                $pipArgs += @("--proxy", $ProxyUrl)
+            }
+
+            Write-Host "[INFO] Installiere Python-Abhängigkeiten aus requirements.txt ..."
+            & $venvPython @pipArgs
+            if ($LASTEXITCODE -ne 0) {
+                throw "Installation der requirements fehlgeschlagen (ExitCode $LASTEXITCODE)."
+            }
+
+            Write-PsLog -Category "INFO" -Cause "REQUIREMENTS_INSTALLIERT" -Candidate $Candidate.Label -Message "requirements.txt erfolgreich installiert."
+        }
+        else {
+            Write-PsLog -Category "WARN" -Cause "REQUIREMENTS_DATEI_FEHLT" -Candidate $Candidate.Label -Message "requirements.txt nicht gefunden: $requirementsPath"
+        }
+
+        return $venvPython
+    }
+    catch {
+        Write-Host "[FEHLER] Fehler bei der Python-Umgebung: $($_.Exception.Message)"
+        Write-PsLog -Category "ERROR" -Cause "PYTHON_UMGEBUNG_FEHLGESCHLAGEN" -Candidate $Candidate.Label -Message $_.Exception.Message
+        if ($rollbackNeeded -and (Test-Path -LiteralPath $venvDir)) {
+            try {
+                Remove-Item -LiteralPath $venvDir -Recurse -Force -ErrorAction Stop
+                Write-PsLog -Category "INFO" -Cause "ROLLBACK_VENV_ERFOLGREICH" -Candidate $Candidate.Label -Message "Rollback durchgeführt: $venvDir"
+            }
+            catch {
+                Write-PsLog -Category "WARN" -Cause "ROLLBACK_VENV_FEHLGESCHLAGEN" -Candidate $Candidate.Label -Message "Rollback fehlgeschlagen: $($_.Exception.Message)"
+            }
+        }
+        return $null
+    }
 }
 
 function Refresh-ProcessPath {
@@ -435,7 +569,7 @@ function Ensure-PythonAvailable {
     return $null
 }
 
-if (-not (Test-Admin)) {
+if ((-not $SkipAdminCheck) -and (-not (Test-Admin))) {
     Write-Host "[INFO] Skript läuft nicht mit Administratorrechten. Starte neu als Admin..."
     Write-PsLog -Category "WARN" -Cause "ADMINRECHTE_FEHLEN" -Message "Neustart mit Erhoehung wird angefordert." -Candidate "Start-Process -Verb RunAs"
     try {
@@ -496,6 +630,10 @@ if (-not (Test-Admin)) {
         exit $ExitCodeElevationFailed
     }
 }
+elseif ($SkipAdminCheck) {
+    Write-Host "[WARN] Admin-Prüfung wurde per Parameter übersprungen (--no-admin)."
+    Write-PsLog -Category "WARN" -Cause "ADMIN_CHECK_UEBERSPRUNGEN" -Message "Ausführung ohne Admin-Prüfung auf expliziten Benutzerwunsch."
+}
 
 Write-Host "=== SystemManager-SageHelper: Installations-Launcher ==="
 Write-Host "[INFO] Kanonischer Einstieg: scripts/install_assistant.ps1 -> scripts/install.py -> systemmanager_sagehelper.installer"
@@ -522,11 +660,23 @@ if (-not $resolvedLauncher) {
 }
 
 $launched = $false
+$pythonForInstall = $null
 foreach ($candidate in $PythonCandidates) {
     $exe = $candidate.Exe
     $cmd = Get-Command $exe -ErrorAction SilentlyContinue
     if (-not $cmd) {
         continue
+    }
+
+    if (-not (Test-PythonVersionSupported -Candidate $candidate)) {
+        continue
+    }
+
+    $venvPython = Initialize-PythonEnvironment -Candidate $candidate -RepoRoot $RepoRoot -Offline:$Offline -ProxyUrl $ProxyUrl
+    if ($venvPython) {
+        $pythonForInstall = $venvPython
+        Write-PsLog -Category "INFO" -Cause "VENV_PYTHON_VERWENDET" -Candidate $candidate.Label -Message "Nutze Python aus virtueller Umgebung: $venvPython"
+        break
     }
 
     $arguments = @($candidate.Args)
@@ -544,6 +694,20 @@ foreach ($candidate in $PythonCandidates) {
 
     Write-Host "[WARN] Installer mit '$($candidate.Label)' beendet mit ExitCode $exitCode."
     Write-PsLog -Category "ERROR" -Cause "PYTHON_ORCHESTRIERUNG_FEHLGESCHLAGEN" -Candidate $candidate.Label -ExitCode $exitCode -Message "scripts/install.py wurde mit Fehler beendet."
+}
+
+if ($pythonForInstall) {
+    Write-Host "[INFO] Starte Installer-Orchestrierung mit virtueller Umgebung: $pythonForInstall"
+    & $pythonForInstall $InstallScript
+    $exitCode = $LASTEXITCODE
+    Write-PsLog -Category "INFO" -Cause "INSTALL_SCRIPT_EXIT" -Candidate "venv-python" -ExitCode $exitCode -Message "scripts/install.py via virtuelle Umgebung ausgeführt."
+    if ($exitCode -eq 0) {
+        $launched = $true
+    }
+    else {
+        Write-Host "[WARN] Installer via .venv beendet mit ExitCode $exitCode."
+        Write-PsLog -Category "ERROR" -Cause "PYTHON_ORCHESTRIERUNG_FEHLGESCHLAGEN" -Candidate "venv-python" -ExitCode $exitCode -Message "scripts/install.py via virtuelle Umgebung mit Fehler beendet."
+    }
 }
 
 if (-not $launched) {
